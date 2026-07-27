@@ -399,3 +399,86 @@ func TestDNSResolversSetPlanAndApply(t *testing.T) {
 		t.Fatalf("dhcpd_dns_enabled: %+v", body["dhcpd_dns_enabled"])
 	}
 }
+
+// IoT-style nets expose dns_nameservers; list prefers that field when non-empty.
+// set must write/clear dns_nameservers too so list reflects the new servers.
+func TestDNSResolversSetClearsDNSNameserversOnIoT(t *testing.T) {
+	api := &fakeDNSAPI{networks: fixtureNetworks(t)}
+	svc := domain.NewDNSService(api)
+	ctx := context.Background()
+
+	servers := []string{"1.1.1.1", "8.8.8.8"}
+	got, err := svc.ApplySetResolvers(ctx, "IoT", servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NetworkID != "net2" || got.NetworkName != "IoT" {
+		t.Fatalf("applied: %+v", got)
+	}
+	if len(got.DNS) != 2 || got.DNS[0] != "1.1.1.1" || got.DNS[1] != "8.8.8.8" {
+		t.Fatalf("returned dns: %+v", got.DNS)
+	}
+
+	last := api.calls[len(api.calls)-1]
+	if last.method != http.MethodPut {
+		t.Fatalf("method = %q", last.method)
+	}
+	if last.path != "/proxy/network/api/s/default/rest/networkconf/net2" {
+		t.Fatalf("path = %q", last.path)
+	}
+	body, _ := last.body.(map[string]any)
+	if body["dhcpd_dns_1"] != "1.1.1.1" || body["dhcpd_dns_2"] != "8.8.8.8" {
+		t.Fatalf("dhcpd body: %+v", body)
+	}
+	ns, ok := body["dns_nameservers"]
+	if !ok {
+		t.Fatalf("dns_nameservers missing from body: %+v", body)
+	}
+	switch v := ns.(type) {
+	case []string:
+		if len(v) != 2 || v[0] != "1.1.1.1" || v[1] != "8.8.8.8" {
+			t.Fatalf("dns_nameservers: %+v", v)
+		}
+	case []any:
+		if len(v) != 2 || v[0] != "1.1.1.1" || v[1] != "8.8.8.8" {
+			t.Fatalf("dns_nameservers: %+v", v)
+		}
+	default:
+		t.Fatalf("dns_nameservers type %T: %+v", ns, ns)
+	}
+
+	// Simulate controller state after PUT so list agrees with set.
+	for i, n := range api.networks {
+		if strFieldTest(n, "_id") == "net2" {
+			for k, val := range body {
+				n[k] = val
+			}
+			api.networks[i] = n
+		}
+	}
+	listed, err := svc.ListResolvers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var iot domain.DNSResolver
+	for _, r := range listed {
+		if r.NetworkName == "IoT" {
+			iot = r
+			break
+		}
+	}
+	if len(iot.DNS) != 2 || iot.DNS[0] != "1.1.1.1" || iot.DNS[1] != "8.8.8.8" {
+		t.Fatalf("list after set still shows old/stale dns: %+v", iot.DNS)
+	}
+}
+
+func strFieldTest(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}

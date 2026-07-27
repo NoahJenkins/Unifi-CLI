@@ -405,6 +405,8 @@ func resolverSetBody(r DNSResolver, servers []string) map[string]any {
 				body[k] = ""
 			}
 		}
+		// Keep dns_nameservers in sync: list prefers it when non-empty.
+		body["dns_nameservers"] = append([]string(nil), servers...)
 		return body
 	}
 	body["dhcpd_dns_enabled"] = len(servers) > 0
@@ -416,5 +418,7 @@ func resolverSetBody(r DNSResolver, servers []string) map[string]any {
 			body[k] = ""
 		}
 	}
+	// Keep dns_nameservers in sync: list prefers it when non-empty.
+	body["dns_nameservers"] = append([]string(nil), servers...)
 	return body
 }
