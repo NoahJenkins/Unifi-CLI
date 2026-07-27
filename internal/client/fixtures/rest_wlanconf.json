@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "wlan1",
+      "name": "Home",
+      "enabled": true,
+      "security": "wpapsk",
+      "networkconf_id": "net1",
+      "wlan_band": "both",
+      "is_guest": false
+    },
+    {
+      "_id": "wlan2",
+      "name": "IoT",
+      "enabled": true,
+      "security": "wpapsk",
+      "networkconf_id": "net2",
+      "wlan_band": "2g",
+      "is_guest": false
+    },
+    {
+      "_id": "wlan3",
+      "name": "Guest",
+      "enabled": false,
+      "security": "open",
+      "network_id": "net3",
+      "band": "both",
+      "is_guest": true
+    }
+  ]
+}
