@@ -41,6 +41,7 @@ func NewRoot() *cobra.Command {
 		newNetworkCmd(),
 		newWlanCmd(),
 		newPortCmd(),
+		newFirewallCmd(),
 		newDNSCmd(),
 		newSystemCmd(),
 	)
