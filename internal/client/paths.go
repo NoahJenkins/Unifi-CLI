@@ -6,6 +6,8 @@ const (
 	PathStatHealth   = "stat/health"
 	PathStatEvent    = "stat/event"
 	PathStatAlarm    = "stat/alarm"
+	PathCmdDevMgr    = "cmd/devmgr"
+	PathRestDevice   = "rest/device"
 	PathRestNetwork  = "rest/networkconf"
 	PathRestWlan     = "rest/wlanconf"
 	PathRestFirewall = "rest/firewallrule"

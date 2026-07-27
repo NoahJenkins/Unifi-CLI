@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -15,7 +16,16 @@ func newDeviceCmd() *cobra.Command {
 		Use:   "device",
 		Short: "Manage UniFi devices",
 	}
-	cmd.AddCommand(newDeviceListCmd(), newDeviceGetCmd())
+	cmd.AddCommand(
+		newDeviceListCmd(),
+		newDeviceGetCmd(),
+		newDeviceRenameCmd(),
+		newDeviceRestartCmd(),
+		newDeviceLocateCmd(),
+		newDeviceUpgradeCmd(),
+		newDeviceAdoptCmd(),
+		newDeviceForgetCmd(),
+	)
 	return cmd
 }
 
@@ -36,6 +46,76 @@ func newDeviceGetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDeviceGet(args[0])
+		},
+	}
+}
+
+func newDeviceRenameCmd() *cobra.Command {
+	var name string
+	cmd := &cobra.Command{
+		Use:   "rename <id>",
+		Short: "Rename a device",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeviceMutation("rename", args[0], false, name)
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "new device name")
+	_ = cmd.MarkFlagRequired("name")
+	return cmd
+}
+
+func newDeviceRestartCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart <id>",
+		Short: "Restart a device",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeviceMutation("restart", args[0], false, "")
+		},
+	}
+}
+
+func newDeviceLocateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "locate <id>",
+		Short: "Blink locate LEDs on a device",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeviceMutation("locate", args[0], false, "")
+		},
+	}
+}
+
+func newDeviceUpgradeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "upgrade <id>",
+		Short: "Upgrade device firmware",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeviceMutation("upgrade", args[0], false, "")
+		},
+	}
+}
+
+func newDeviceAdoptCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "adopt <id>",
+		Short: "Adopt a pending device",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeviceMutation("adopt", args[0], false, "")
+		},
+	}
+}
+
+func newDeviceForgetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "forget <id>",
+		Short: "Forget (delete) a device — destructive",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeviceMutation("forget", args[0], true, "")
 		},
 	}
 }
@@ -100,5 +180,61 @@ func runDeviceGet(id string) error {
 	fmt.Fprintf(rt.Out, "version: %s\n", d.Version)
 	fmt.Fprintf(rt.Out, "uplink: %s\n", d.Uplink)
 	fmt.Fprintf(rt.Out, "adopted: %s\n", strconv.FormatBool(d.Adopted))
+	return nil
+}
+
+func runDeviceMutation(action, id string, destructive bool, newName string) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("device", action, err)
+	}
+	svc := domain.NewDeviceService(rt.Client)
+	ctx := context.Background()
+
+	code := RunMutation(rt, "device", action, destructive,
+		func() (plan.Plan, any, error) {
+			var p plan.Plan
+			var d domain.Device
+			var err error
+			switch action {
+			case "rename":
+				p, d, err = svc.Rename(ctx, id, newName)
+			case "restart":
+				p, d, err = svc.Restart(ctx, id)
+			case "locate":
+				p, d, err = svc.Locate(ctx, id)
+			case "upgrade":
+				p, d, err = svc.Upgrade(ctx, id)
+			case "adopt":
+				p, d, err = svc.Adopt(ctx, id)
+			case "forget":
+				p, d, err = svc.Forget(ctx, id)
+			default:
+				return plan.Plan{}, nil, fmt.Errorf("unknown action %s", action)
+			}
+			return p, d, err
+		},
+		func() (any, error) {
+			switch action {
+			case "rename":
+				return svc.ApplyRename(ctx, id, newName)
+			case "restart":
+				return svc.ApplyRestart(ctx, id)
+			case "locate":
+				return svc.ApplyLocate(ctx, id)
+			case "upgrade":
+				return svc.ApplyUpgrade(ctx, id)
+			case "adopt":
+				return svc.ApplyAdopt(ctx, id)
+			case "forget":
+				return svc.ApplyForget(ctx, id)
+			default:
+				return nil, fmt.Errorf("unknown action %s", action)
+			}
+		},
+	)
+	if code != 0 {
+		return fmt.Errorf("device %s failed", action)
+	}
 	return nil
 }

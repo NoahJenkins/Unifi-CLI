@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/noahjenkins/unifi-cli/internal/client"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
 )
 
@@ -59,6 +60,110 @@ func (s *DeviceService) Get(ctx context.Context, id string) (Device, error) {
 		return Device{}, err
 	}
 	return resolve.One(items, id)
+}
+
+func (s *DeviceService) Rename(ctx context.Context, id, newName string) (plan.Plan, Device, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return plan.Plan{}, Device{}, err
+	}
+	p := plan.Update("device", d.ID, d.Name,
+		fmt.Sprintf("rename device %s to %s", d.Name, newName),
+		map[string]any{"name": d.Name},
+		map[string]any{"name": newName},
+	)
+	return p, d, nil
+}
+
+func (s *DeviceService) ApplyRename(ctx context.Context, id, newName string) (Device, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return Device{}, err
+	}
+	path := s.api.SitePath(client.PathRestDevice, d.ID)
+	body := map[string]any{"name": newName}
+	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
+		return Device{}, err
+	}
+	d.Name = newName
+	return d, nil
+}
+
+func (s *DeviceService) Restart(ctx context.Context, id string) (plan.Plan, Device, error) {
+	return s.cmdPlan(ctx, id, "restart", "update")
+}
+
+func (s *DeviceService) ApplyRestart(ctx context.Context, id string) (Device, error) {
+	return s.applyDevMgr(ctx, id, "restart")
+}
+
+func (s *DeviceService) Locate(ctx context.Context, id string) (plan.Plan, Device, error) {
+	return s.cmdPlan(ctx, id, "set-locate", "update")
+}
+
+func (s *DeviceService) ApplyLocate(ctx context.Context, id string) (Device, error) {
+	return s.applyDevMgr(ctx, id, "set-locate")
+}
+
+func (s *DeviceService) Upgrade(ctx context.Context, id string) (plan.Plan, Device, error) {
+	return s.cmdPlan(ctx, id, "upgrade", "update")
+}
+
+func (s *DeviceService) ApplyUpgrade(ctx context.Context, id string) (Device, error) {
+	return s.applyDevMgr(ctx, id, "upgrade")
+}
+
+func (s *DeviceService) Adopt(ctx context.Context, id string) (plan.Plan, Device, error) {
+	return s.cmdPlan(ctx, id, "adopt", "update")
+}
+
+func (s *DeviceService) ApplyAdopt(ctx context.Context, id string) (Device, error) {
+	return s.applyDevMgr(ctx, id, "adopt")
+}
+
+func (s *DeviceService) Forget(ctx context.Context, id string) (plan.Plan, Device, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return plan.Plan{}, Device{}, err
+	}
+	p := plan.Delete("device", d.ID, d.Name,
+		fmt.Sprintf("forget device %s", d.Name),
+		map[string]any{"id": d.ID, "mac": d.MAC, "name": d.Name},
+	)
+	return p, d, nil
+}
+
+func (s *DeviceService) ApplyForget(ctx context.Context, id string) (Device, error) {
+	return s.applyDevMgr(ctx, id, "delete-device")
+}
+
+func (s *DeviceService) cmdPlan(ctx context.Context, id, cmd, op string) (plan.Plan, Device, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return plan.Plan{}, Device{}, err
+	}
+	summary := fmt.Sprintf("%s device %s", cmd, d.Name)
+	if op == "delete" {
+		return plan.Delete("device", d.ID, d.Name, summary, map[string]any{"cmd": cmd, "mac": d.MAC}), d, nil
+	}
+	p := plan.Update("device", d.ID, d.Name, summary,
+		map[string]any{"action": "none"},
+		map[string]any{"action": cmd, "mac": d.MAC},
+	)
+	return p, d, nil
+}
+
+func (s *DeviceService) applyDevMgr(ctx context.Context, id, cmd string) (Device, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return Device{}, err
+	}
+	path := s.api.SitePath(client.PathCmdDevMgr)
+	body := map[string]any{"cmd": cmd, "mac": d.MAC}
+	if err := s.api.Do(ctx, http.MethodPost, path, body, nil); err != nil {
+		return Device{}, err
+	}
+	return d, nil
 }
 
 func NormalizeDevice(m map[string]any) Device {
