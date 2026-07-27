@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "dev1",
+      "mac": "aa:bb:cc:dd:ee:01",
+      "name": "Gateway",
+      "type": "ugw",
+      "model": "UDM-SE"
+    },
+    {
+      "_id": "dev2",
+      "mac": "aa:bb:cc:dd:ee:02",
+      "name": "AP-Office",
+      "type": "uap",
+      "model": "U6-LR"
+    }
+  ]
+}
