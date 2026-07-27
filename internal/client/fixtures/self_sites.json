@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "site1",
+      "name": "default",
+      "desc": "Default",
+      "role": "admin",
+      "attr_hidden_id": "default"
+    },
+    {
+      "_id": "site2",
+      "name": "office",
+      "desc": "Office Site",
+      "role": "admin"
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
@@ -128,19 +129,40 @@ func strField(m map[string]any, keys ...string) string {
 		if !ok || v == nil {
 			continue
 		}
-		switch t := v.(type) {
-		case string:
-			if t != "" {
-				return t
-			}
-		default:
-			s := fmt.Sprint(t)
-			if s != "" && s != "<nil>" {
-				return s
-			}
+		if s := anyToString(v); s != "" {
+			return s
 		}
 	}
 	return ""
+}
+
+func anyToString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		if t == float64(int64(t)) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case float32:
+		if float64(t) == float64(int64(t)) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(float64(t), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case jsonNumber:
+		return t.String()
+	default:
+		s := fmt.Sprint(t)
+		if s == "" || s == "<nil>" {
+			return ""
+		}
+		return s
+	}
 }
 
 func boolField(m map[string]any, key string) bool {
@@ -182,4 +204,5 @@ func asInt(v any) (int, bool) {
 // jsonNumber matches encoding/json.Number without importing for the type assert path.
 type jsonNumber interface {
 	Int64() (int64, error)
+	String() string
 }

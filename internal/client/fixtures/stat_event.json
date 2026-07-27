@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "evt1",
+      "time": 1722000000000,
+      "msg": "User[11:22:33:44:55:01] has connected to Home",
+      "key": "EVT_WU_Connected",
+      "subsystem": "wlan"
+    },
+    {
+      "_id": "evt2",
+      "datetime": "2024-07-26T12:00:00Z",
+      "message": "AP disconnected",
+      "key": "EVT_AP_Disconnected",
+      "subsystem": "wlan"
+    }
+  ]
+}

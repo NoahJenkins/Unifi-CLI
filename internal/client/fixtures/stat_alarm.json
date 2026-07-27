@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "alm1",
+      "time": 1722000300000,
+      "msg": "Switch-Core is offline",
+      "key": "EVT_SW_Lost_Contact",
+      "subsystem": "lan",
+      "archived": false
+    }
+  ]
+}

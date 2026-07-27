@@ -29,6 +29,15 @@ func TestHelpShowsAuthAndConfig(t *testing.T) {
 	if !strings.Contains(out, "device") {
 		t.Fatalf("help missing device:\n%s", out)
 	}
+	if !strings.Contains(out, "client") {
+		t.Fatalf("help missing client:\n%s", out)
+	}
+	if !strings.Contains(out, "site") {
+		t.Fatalf("help missing site:\n%s", out)
+	}
+	if !strings.Contains(out, "system") {
+		t.Fatalf("help missing system:\n%s", out)
+	}
 }
 
 func TestDeviceHelp(t *testing.T) {

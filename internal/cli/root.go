@@ -33,7 +33,14 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagRaw, "raw", false, "include raw controller payload in JSON")
 	root.PersistentFlags().StringVar(&flagSite, "site", "", "site override")
 	root.PersistentFlags().StringVar(&flagTimeout, "timeout", "", "per-command timeout")
-	root.AddCommand(newAuthCmd(), newConfigCmd(), newDeviceCmd())
+	root.AddCommand(
+		newAuthCmd(),
+		newConfigCmd(),
+		newDeviceCmd(),
+		newClientCmd(),
+		newSiteCmd(),
+		newSystemCmd(),
+	)
 	return root
 }
 

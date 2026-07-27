@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "sta1",
+      "mac": "11:22:33:44:55:01",
+      "hostname": "laptop.local",
+      "name": "Noah-Laptop",
+      "ip": "192.168.1.50",
+      "essid": "Home",
+      "network": "LAN",
+      "is_wired": false,
+      "blocked": false,
+      "last_seen": 1722000000
+    },
+    {
+      "_id": "sta2",
+      "mac": "11:22:33:44:55:02",
+      "hostname": "printer",
+      "ip": "192.168.1.20",
+      "essid": "",
+      "network": "LAN",
+      "is_wired": true,
+      "blocked": false,
+      "last_seen": "1722000100"
+    },
+    {
+      "_id": "sta3",
+      "mac": "11:22:33:44:55:03",
+      "oui": "Apple",
+      "ip": "192.168.1.99",
+      "essid": "Guest",
+      "network": "GUEST",
+      "is_wired": false,
+      "blocked": true,
+      "last_seen": 1722000200
+    }
+  ]
+}
