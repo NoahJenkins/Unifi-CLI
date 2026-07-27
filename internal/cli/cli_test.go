@@ -26,6 +26,31 @@ func TestHelpShowsAuthAndConfig(t *testing.T) {
 	if !strings.Contains(out, "config") {
 		t.Fatalf("help missing config:\n%s", out)
 	}
+	if !strings.Contains(out, "device") {
+		t.Fatalf("help missing device:\n%s", out)
+	}
+}
+
+func TestDeviceHelp(t *testing.T) {
+	root := cli.NewRoot()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"device", "list", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("device list help: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "List devices") {
+		t.Fatalf("device list help:\n%s", out)
+	}
+	cmd, _, err := root.Find([]string{"device", "get"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name() != "get" {
+		t.Fatalf("got %q", cmd.Name())
+	}
 }
 
 func TestConfigPath(t *testing.T) {

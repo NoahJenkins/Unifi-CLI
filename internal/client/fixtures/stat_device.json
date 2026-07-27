@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "gw1",
+      "mac": "aa:bb:cc:dd:ee:01",
+      "name": "Gateway",
+      "type": "ugw",
+      "model": "UDM-SE",
+      "state": 1,
+      "ip": "192.168.1.1",
+      "version": "3.2.7",
+      "adopted": true
+    },
+    {
+      "_id": "ap1",
+      "mac": "aa:bb:cc:dd:ee:02",
+      "display_name": "AP-Office",
+      "type": "uap",
+      "model": "U6-LR",
+      "state": 1,
+      "last_ip": "192.168.1.10",
+      "sw_version": "6.6.55",
+      "adopted": true,
+      "uplink": {
+        "uplink_mac": "aa:bb:cc:dd:ee:01"
+      }
+    },
+    {
+      "_id": "sw1",
+      "mac": "aa:bb:cc:dd:ee:03",
+      "name": "Switch-Core",
+      "type": "usw",
+      "model": "USW-24-PoE",
+      "state": 0,
+      "ip": "192.168.1.2",
+      "version": "6.5.32",
+      "adopted": true,
+      "uplink": {
+        "uplink_mac": "aa:bb:cc:dd:ee:01"
+      }
+    }
+  ]
+}
