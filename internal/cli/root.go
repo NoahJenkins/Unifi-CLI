@@ -38,6 +38,7 @@ func NewRoot() *cobra.Command {
 		newDeviceCmd(),
 		newClientCmd(),
 		newSiteCmd(),
+		newNetworkCmd(),
 		newSystemCmd(),
 	)
 	return root

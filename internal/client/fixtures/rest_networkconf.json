@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "net1",
+      "name": "LAN",
+      "purpose": "corporate",
+      "vlan_enabled": false,
+      "ip_subnet": "192.168.1.1/24",
+      "dhcpd_enabled": true,
+      "domain_name": "local"
+    },
+    {
+      "_id": "net2",
+      "name": "IoT",
+      "purpose": "corporate",
+      "vlan_enabled": true,
+      "vlan": 20,
+      "ip_subnet": "192.168.20.1/24",
+      "dhcpd_enabled": true,
+      "domain_name": "iot.local"
+    },
+    {
+      "_id": "net3",
+      "name": "Guest",
+      "purpose": "guest",
+      "vlan": 30,
+      "subnet": "192.168.30.1/24",
+      "dhcpd_enabled": false,
+      "domain_name": ""
+    },
+    {
+      "_id": "net4",
+      "name": "WAN",
+      "purpose": "wan",
+      "ip_subnet": "0.0.0.0/0",
+      "dhcpd_enabled": false
+    }
+  ]
+}
