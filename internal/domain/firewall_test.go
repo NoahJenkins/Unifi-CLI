@@ -366,6 +366,47 @@ func TestFirewallReorderByIDs(t *testing.T) {
 	}
 }
 
+func TestFirewallReorderPartialIDsAppendsRest(t *testing.T) {
+	api := &fakeFirewallAPI{rules: fixtureFirewallRules(t)}
+	svc := domain.NewFirewallService(api)
+	ctx := context.Background()
+
+	// Partial --ids: fw2,fw1 → full new order fw2,fw1,fw3 (unspecified keep current order)
+	p, err := svc.Reorder(ctx, domain.FirewallReorder{IDs: []string{"fw2", "fw1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := p.Changes[0].After.(map[string]any)
+	var order []string
+	switch v := after["order"].(type) {
+	case []string:
+		order = v
+	case []any:
+		for _, el := range v {
+			order = append(order, el.(string))
+		}
+	default:
+		t.Fatalf("order type %T: %+v", after["order"], after["order"])
+	}
+	want := []string{"fw2", "fw1", "fw3"}
+	if len(order) != len(want) || order[0] != want[0] || order[1] != want[1] || order[2] != want[2] {
+		t.Fatalf("partial --ids order = %v, want %v", order, want)
+	}
+
+	if err := svc.ApplyReorder(ctx, domain.FirewallReorder{IDs: []string{"fw2", "fw1"}}); err != nil {
+		t.Fatal(err)
+	}
+	puts := 0
+	for _, c := range api.calls {
+		if c.method == http.MethodPut && strings.Contains(c.path, "rest/firewallrule/") {
+			puts++
+		}
+	}
+	if puts != 3 {
+		t.Fatalf("puts = %d, want 3 (full order applied); calls=%+v", puts, api.calls)
+	}
+}
+
 func TestFirewallReorderByIndex(t *testing.T) {
 	api := &fakeFirewallAPI{rules: fixtureFirewallRules(t)}
 	svc := domain.NewFirewallService(api)

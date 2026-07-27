@@ -287,6 +287,12 @@ func (s *FirewallService) resolveReorder(ctx context.Context, ro FirewallReorder
 		if len(order) == 0 {
 			return nil, nil, apperr.New(apperr.ValidationFailed, "--ids requires at least one rule id")
 		}
+		for _, id := range before {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			order = append(order, id)
+		}
 		return order, before, nil
 
 	case ro.SetIndex && ro.ID != "":
