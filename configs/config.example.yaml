@@ -1,0 +1,9 @@
+host: 192.168.1.1
+port: 443
+insecure: true          # local gateway often uses self-signed TLS
+site: default
+username: admin         # optional if api_key set
+# password: set via env preferred
+# api_key: set via env preferred
+safe_mode: true
+timeout: 30s

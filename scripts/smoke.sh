@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Smoke checks for unifi-cli.
+# Default: build + unit tests.
+# Live controller: UNIFI_IT=1 with UNIFI_HOST and credentials set.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+BIN="${UNIFI_BIN:-$ROOT/dist/unifi}"
+
+echo "==> build"
+mkdir -p "$(dirname "$BIN")"
+go build -o "$BIN" ./cmd/unifi
+
+echo "==> unit tests"
+go test ./...
+
+if [[ "${UNIFI_IT:-}" != "1" ]]; then
+  echo "==> skip live IT (set UNIFI_IT=1 to enable)"
+  exit 0
+fi
+
+if [[ -z "${UNIFI_HOST:-}" ]]; then
+  echo "UNIFI_IT=1 requires UNIFI_HOST" >&2
+  exit 1
+fi
+
+if [[ -z "${UNIFI_API_KEY:-}" && ( -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ) ]]; then
+  echo "UNIFI_IT=1 requires UNIFI_API_KEY or UNIFI_USERNAME+UNIFI_PASSWORD" >&2
+  exit 1
+fi
+
+export UNIFI_INSECURE="${UNIFI_INSECURE:-true}"
+
+echo "==> live auth"
+"$BIN" auth login --json
+
+echo "==> live inventory (read-only)"
+"$BIN" device list --json >/dev/null
+"$BIN" client list --json >/dev/null
+"$BIN" network list --json >/dev/null
+"$BIN" wlan list --json >/dev/null
+"$BIN" dns list --json >/dev/null
+"$BIN" firewall list --json >/dev/null
+"$BIN" system health --json >/dev/null
+
+echo "==> smoke OK"
