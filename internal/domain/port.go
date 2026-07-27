@@ -128,11 +128,16 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 		)
 	}
 
-	existing := portOverridesFromDevice(dev)
+	devID := strField(dev, "_id", "id")
+	// Authoritative overrides come from rest/device/{id}; stat/device can be incomplete
+	// and merging only against stat would wipe other ports' overrides on PUT.
+	existing, err := s.loadRestPortOverrides(ctx, devID)
+	if err != nil {
+		return Port{}, err
+	}
 	patch := portInputOverride(portIdx, in)
 	merged := MergePortOverrides(existing, patch)
 
-	devID := strField(dev, "_id", "id")
 	path := s.api.SitePath(client.PathRestDevice, devID)
 	body := map[string]any{"port_overrides": merged}
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
@@ -162,6 +167,19 @@ func (s *PortService) loadDevices(ctx context.Context) ([]map[string]any, error)
 		return nil, err
 	}
 	return raw, nil
+}
+
+// loadRestPortOverrides fetches port_overrides from GET rest/device/{id}.
+func (s *PortService) loadRestPortOverrides(ctx context.Context, devID string) ([]map[string]any, error) {
+	var raw []map[string]any
+	path := s.api.SitePath(client.PathRestDevice, devID)
+	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return portOverridesFromDevice(raw[0]), nil
 }
 
 // ExtractPortsFromDevice builds Port DTOs from port_table, with port_overrides merged on top.

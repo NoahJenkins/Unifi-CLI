@@ -157,9 +157,10 @@ func asTestInt(v any) (int, bool) {
 }
 
 type fakePortAPI struct {
-	devices []map[string]any
-	calls   []portCall
-	err     error
+	devices     []map[string]any
+	restDevices map[string]map[string]any // keyed by device id for GET rest/device/{id}
+	calls       []portCall
+	err         error
 }
 
 type portCall struct {
@@ -174,6 +175,30 @@ func (f *fakePortAPI) Do(ctx context.Context, method, path string, in, out any) 
 		return f.err
 	}
 	if method == http.MethodGet {
+		// GET rest/device/{id} — authoritative config
+		const restPrefix = "/proxy/network/api/s/default/rest/device/"
+		if len(path) > len(restPrefix) && path[:len(restPrefix)] == restPrefix {
+			id := path[len(restPrefix):]
+			dev, ok := f.restDevices[id]
+			if !ok {
+				// fall back to matching stat device if rest not stubbed
+				for _, d := range f.devices {
+					if strID(d) == id {
+						dev = d
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok {
+				return json.Unmarshal([]byte(`[]`), out)
+			}
+			b, err := json.Marshal([]map[string]any{dev})
+			if err != nil {
+				return err
+			}
+			return json.Unmarshal(b, out)
+		}
 		b, err := json.Marshal(f.devices)
 		if err != nil {
 			return err
@@ -184,6 +209,16 @@ func (f *fakePortAPI) Do(ctx context.Context, method, path string, in, out any) 
 		_ = json.Unmarshal([]byte(`[]`), out)
 	}
 	return nil
+}
+
+func strID(m map[string]any) string {
+	if v, ok := m["_id"].(string); ok {
+		return v
+	}
+	if v, ok := m["id"].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (f *fakePortAPI) SitePath(parts ...string) string {
@@ -288,6 +323,18 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 		t.Fatalf("apply result: %+v", got)
 	}
 
+	// apply loads authoritative overrides via GET rest/device/{id} before PUT
+	gotRestGet := false
+	for _, c := range api.calls {
+		if c.method == http.MethodGet && c.path == "/proxy/network/api/s/default/rest/device/sw1" {
+			gotRestGet = true
+			break
+		}
+	}
+	if !gotRestGet {
+		t.Fatalf("expected GET rest/device/sw1 before PUT; calls=%v", callSummary(api.calls))
+	}
+
 	// last call PUT rest/device/sw1 with merged port_overrides
 	last := api.calls[len(api.calls)-1]
 	if last.method != http.MethodPut {
@@ -296,33 +343,137 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 	if last.path != "/proxy/network/api/s/default/rest/device/sw1" {
 		t.Fatalf("path = %q", last.path)
 	}
-	body, _ := last.body.(map[string]any)
-	overrides, ok := body["port_overrides"].([]map[string]any)
-	if !ok {
-		// json round-trip may yield []any
-		raw, ok2 := body["port_overrides"].([]any)
-		if !ok2 {
-			t.Fatalf("body = %+v", body)
-		}
-		overrides = make([]map[string]any, 0, len(raw))
-		for _, r := range raw {
-			overrides = append(overrides, r.(map[string]any))
-		}
-	}
+	overrides := portOverridesFromBody(t, last.body)
 	if len(overrides) != 1 {
-		// sample had one override for port 12; merge keeps it
-		// actually sample has one override - merged should still be 1
+		t.Fatalf("override len = %d, want 1: %+v", len(overrides), overrides)
 	}
-	found := false
+	o := overrides[0]
+	idx, _ := asTestInt(o["port_idx"])
+	if idx != 12 {
+		t.Fatalf("port_idx = %v, want 12", o["port_idx"])
+	}
+	if o["poe_mode"] != "off" {
+		t.Fatalf("poe_mode = %v, want off", o["poe_mode"])
+	}
+	// sibling keys survive poe-only update
+	if o["name"] != "AP-Uplink" {
+		t.Fatalf("name = %v, want AP-Uplink (sibling key must survive)", o["name"])
+	}
+	if o["portconf_id"] != "prof-ap" {
+		t.Fatalf("portconf_id = %v, want prof-ap", o["portconf_id"])
+	}
+}
+
+// TestPortServiceApplyUsesRestDeviceOverrides ensures apply merges against
+// GET rest/device/{id} overrides (authoritative), not incomplete stat/device data.
+func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
+	// stat has incomplete overrides (missing port 5) — would wipe if used alone
+	statSW := sampleSwitchDevice()
+	statSW["port_overrides"] = []any{
+		map[string]any{
+			"port_idx": float64(12),
+			"name":     "AP-Uplink",
+			"poe_mode": "pasv24",
+		},
+	}
+	// rest has full authoritative overrides including sibling port 5
+	restSW := sampleSwitchDevice()
+	restSW["port_overrides"] = []any{
+		map[string]any{
+			"port_idx":  float64(5),
+			"name":      "Cam",
+			"poe_mode":  "auto",
+			"portconf_id": "prof-cam",
+		},
+		map[string]any{
+			"port_idx":    float64(12),
+			"name":        "AP-Uplink",
+			"poe_mode":    "pasv24",
+			"portconf_id": "prof-ap",
+		},
+	}
+
+	api := &fakePortAPI{
+		devices:     []map[string]any{statSW},
+		restDevices: map[string]map[string]any{"sw1": restSW},
+	}
+	svc := domain.NewPortService(api)
+
+	in := domain.PortInput{POE: "off", SetPOE: true}
+	_, err := svc.ApplyUpdate(context.Background(), "Switch-Core", 12, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	last := api.calls[len(api.calls)-1]
+	if last.method != http.MethodPut {
+		t.Fatalf("last method = %q", last.method)
+	}
+	overrides := portOverridesFromBody(t, last.body)
+	if len(overrides) != 2 {
+		t.Fatalf("override len = %d, want 2 (must not wipe port 5): %+v", len(overrides), overrides)
+	}
+
+	byIdx := map[int]map[string]any{}
 	for _, o := range overrides {
-		idx, _ := asTestInt(o["port_idx"])
-		if idx == 12 && o["poe_mode"] == "off" {
-			found = true
+		idx, ok := asTestInt(o["port_idx"])
+		if !ok {
+			t.Fatalf("bad port_idx: %+v", o)
 		}
+		byIdx[idx] = o
 	}
-	if !found {
-		t.Fatalf("overrides missing poe off for 12: %+v", overrides)
+	// sibling port 5 from rest must survive
+	p5, ok := byIdx[5]
+	if !ok {
+		t.Fatalf("port 5 override missing (would wipe if stat used): %+v", overrides)
 	}
+	if p5["name"] != "Cam" || p5["poe_mode"] != "auto" || p5["portconf_id"] != "prof-cam" {
+		t.Fatalf("port 5 corrupted: %+v", p5)
+	}
+	// target port 12 updated, siblings preserved
+	p12, ok := byIdx[12]
+	if !ok {
+		t.Fatalf("port 12 missing: %+v", overrides)
+	}
+	if p12["poe_mode"] != "off" {
+		t.Fatalf("port 12 poe = %v, want off", p12["poe_mode"])
+	}
+	if p12["name"] != "AP-Uplink" || p12["portconf_id"] != "prof-ap" {
+		t.Fatalf("port 12 siblings lost: %+v", p12)
+	}
+}
+
+func portOverridesFromBody(t *testing.T, body any) []map[string]any {
+	t.Helper()
+	m, ok := body.(map[string]any)
+	if !ok {
+		t.Fatalf("body type %T", body)
+	}
+	overrides, ok := m["port_overrides"].([]map[string]any)
+	if ok {
+		return overrides
+	}
+	raw, ok := m["port_overrides"].([]any)
+	if !ok {
+		t.Fatalf("port_overrides type %T in %+v", m["port_overrides"], m)
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, r := range raw {
+		om, ok := r.(map[string]any)
+		if !ok {
+			t.Fatalf("override entry type %T", r)
+		}
+		out = append(out, om)
+	}
+	return out
+}
+
+func callSummary(calls []portCall) []string {
+	out := make([]string, len(calls))
+	for i, c := range calls {
+		out[i] = c.method + " " + c.path
+	}
+	return out
 }
 
 func (f *fakePortAPI) methodPath() string {
