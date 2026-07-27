@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"github.com/noahjenkins/unifi-cli/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -46,8 +45,6 @@ func NewRoot() *cobra.Command {
 
 func Execute() int {
 	root := NewRoot()
-	if err := root.Execute(); err != nil {
-		return render.ExitCode(err)
-	}
-	return 0
+	err := root.Execute()
+	return exitStatus(err)
 }

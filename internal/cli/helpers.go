@@ -9,6 +9,7 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/config"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
+	"github.com/noahjenkins/unifi-cli/internal/render"
 )
 
 func loadRuntime(needClient bool) (*Runtime, error) {
@@ -59,6 +60,34 @@ func emitErr(resource, action string, err error) error {
 	rt := baseRuntime()
 	_ = rt.Emit(resource, action, nil, nil, err)
 	return err
+}
+
+// exitCodeError carries a process exit code after Emit already wrote output.
+// Execute maps it to the numeric code without re-printing.
+type exitCodeError int
+
+func (e exitCodeError) Error() string {
+	return fmt.Sprintf("exit code %d", int(e))
+}
+
+// emittedExit returns nil for success, or an exitCodeError when Emit already
+// displayed the failure (avoids collapsing validation=2 into generic exit 1).
+func emittedExit(code int) error {
+	if code == 0 {
+		return nil
+	}
+	return exitCodeError(code)
+}
+
+// exitStatus maps a cobra RunE error to a process exit code.
+func exitStatus(err error) int {
+	if err == nil {
+		return 0
+	}
+	if c, ok := err.(exitCodeError); ok {
+		return int(c)
+	}
+	return render.ExitCode(err)
 }
 
 // RunMutation builds a plan, and only applies when rt.Applying() (Yes && !DryRun).
