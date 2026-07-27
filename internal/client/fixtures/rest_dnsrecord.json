@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "_id": "dns1",
+      "key": "nas.lan",
+      "value": "192.168.1.50",
+      "enabled": true,
+      "record_type": "A"
+    },
+    {
+      "_id": "dns2",
+      "name": "printer.lan",
+      "ip": "192.168.1.60",
+      "enabled": false
+    },
+    {
+      "_id": "dns3",
+      "host_name": "cam.lan",
+      "content": "192.168.1.70",
+      "enabled": true
+    }
+  ]
+}

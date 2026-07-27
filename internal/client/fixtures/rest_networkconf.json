@@ -10,7 +10,10 @@
       "vlan_enabled": false,
       "ip_subnet": "192.168.1.1/24",
       "dhcpd_enabled": true,
-      "domain_name": "local"
+      "domain_name": "local",
+      "dhcpd_dns_enabled": true,
+      "dhcpd_dns_1": "1.1.1.1",
+      "dhcpd_dns_2": "8.8.8.8"
     },
     {
       "_id": "net2",
@@ -20,7 +23,8 @@
       "vlan": 20,
       "ip_subnet": "192.168.20.1/24",
       "dhcpd_enabled": true,
-      "domain_name": "iot.local"
+      "domain_name": "iot.local",
+      "dns_nameservers": ["9.9.9.9", "149.112.112.112"]
     },
     {
       "_id": "net3",
@@ -36,7 +40,9 @@
       "name": "WAN",
       "purpose": "wan",
       "ip_subnet": "0.0.0.0/0",
-      "dhcpd_enabled": false
+      "dhcpd_enabled": false,
+      "wan_dns1": "1.0.0.1",
+      "wan_dns2": "8.8.4.4"
     }
   ]
 }

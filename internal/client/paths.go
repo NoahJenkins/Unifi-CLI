@@ -10,7 +10,8 @@ const (
 	PathRestDevice   = "rest/device"
 	PathRestNetwork  = "rest/networkconf"
 	PathRestWlan     = "rest/wlanconf"
-	PathRestFirewall = "rest/firewallrule"
-	PathRestUser     = "rest/user"
-	PathSelfSites    = "/proxy/network/api/self/sites"
+	PathRestFirewall  = "rest/firewallrule"
+	PathRestDNSRecord = "rest/dnsrecord"
+	PathRestUser      = "rest/user"
+	PathSelfSites     = "/proxy/network/api/self/sites"
 )
