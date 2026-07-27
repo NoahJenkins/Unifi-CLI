@@ -2,9 +2,11 @@ package domain
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/noahjenkins/unifi-cli/internal/client"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
 )
 
@@ -62,6 +64,77 @@ func (s *ClientService) Get(ctx context.Context, id string) (Client, error) {
 		return Client{}, err
 	}
 	return resolve.One(items, id)
+}
+
+func (s *ClientService) Reconnect(ctx context.Context, id string) (plan.Plan, Client, error) {
+	return s.cmdPlan(ctx, id, "kick-sta", "reconnect")
+}
+
+func (s *ClientService) ApplyReconnect(ctx context.Context, id string) (Client, error) {
+	return s.applyStaMgr(ctx, id, "kick-sta", nil)
+}
+
+func (s *ClientService) Block(ctx context.Context, id string) (plan.Plan, Client, error) {
+	c, err := s.Get(ctx, id)
+	if err != nil {
+		return plan.Plan{}, Client{}, err
+	}
+	p := plan.Update("client", c.ID, c.GetName(),
+		fmt.Sprintf("block client %s", c.GetName()),
+		map[string]any{"blocked": c.Blocked},
+		map[string]any{"blocked": true},
+	)
+	return p, c, nil
+}
+
+func (s *ClientService) ApplyBlock(ctx context.Context, id string) (Client, error) {
+	return s.applyStaMgr(ctx, id, "block-sta", func(c *Client) { c.Blocked = true })
+}
+
+func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Client, error) {
+	c, err := s.Get(ctx, id)
+	if err != nil {
+		return plan.Plan{}, Client{}, err
+	}
+	p := plan.Update("client", c.ID, c.GetName(),
+		fmt.Sprintf("unblock client %s", c.GetName()),
+		map[string]any{"blocked": c.Blocked},
+		map[string]any{"blocked": false},
+	)
+	return p, c, nil
+}
+
+func (s *ClientService) ApplyUnblock(ctx context.Context, id string) (Client, error) {
+	return s.applyStaMgr(ctx, id, "unblock-sta", func(c *Client) { c.Blocked = false })
+}
+
+func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (plan.Plan, Client, error) {
+	c, err := s.Get(ctx, id)
+	if err != nil {
+		return plan.Plan{}, Client{}, err
+	}
+	p := plan.Update("client", c.ID, c.GetName(),
+		fmt.Sprintf("%s client %s", action, c.GetName()),
+		map[string]any{"action": "none"},
+		map[string]any{"action": cmd, "mac": c.MAC},
+	)
+	return p, c, nil
+}
+
+func (s *ClientService) applyStaMgr(ctx context.Context, id, cmd string, mutate func(*Client)) (Client, error) {
+	c, err := s.Get(ctx, id)
+	if err != nil {
+		return Client{}, err
+	}
+	path := s.api.SitePath(client.PathCmdStaMgr)
+	body := map[string]any{"cmd": cmd, "mac": c.MAC}
+	if err := s.api.Do(ctx, http.MethodPost, path, body, nil); err != nil {
+		return Client{}, err
+	}
+	if mutate != nil {
+		mutate(&c)
+	}
+	return c, nil
 }
 
 func NormalizeClient(m map[string]any) Client {

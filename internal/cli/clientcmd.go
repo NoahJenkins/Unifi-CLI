@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -15,7 +16,13 @@ func newClientCmd() *cobra.Command {
 		Use:   "client",
 		Short: "Manage UniFi clients",
 	}
-	cmd.AddCommand(newClientListCmd(), newClientGetCmd())
+	cmd.AddCommand(
+		newClientListCmd(),
+		newClientGetCmd(),
+		newClientReconnectCmd(),
+		newClientBlockCmd(),
+		newClientUnblockCmd(),
+	)
 	return cmd
 }
 
@@ -109,4 +116,78 @@ func runClientGet(id string) error {
 	fmt.Fprintf(rt.Out, "blocked: %s\n", strconv.FormatBool(c.Blocked))
 	fmt.Fprintf(rt.Out, "last_seen: %s\n", c.LastSeen)
 	return nil
+}
+
+func newClientReconnectCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reconnect <id>",
+		Short: "Reconnect (kick) a client",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClientMutation("reconnect", args[0])
+		},
+	}
+}
+
+func newClientBlockCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "block <id>",
+		Short: "Block a client",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClientMutation("block", args[0])
+		},
+	}
+}
+
+func newClientUnblockCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unblock <id>",
+		Short: "Unblock a client",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClientMutation("unblock", args[0])
+		},
+	}
+}
+
+func runClientMutation(action, id string) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("client", action, err)
+	}
+	svc := domain.NewClientService(rt.Client)
+	ctx := context.Background()
+
+	code := RunMutation(rt, "client", action, false,
+		func() (plan.Plan, any, error) {
+			var p plan.Plan
+			var c domain.Client
+			var err error
+			switch action {
+			case "reconnect":
+				p, c, err = svc.Reconnect(ctx, id)
+			case "block":
+				p, c, err = svc.Block(ctx, id)
+			case "unblock":
+				p, c, err = svc.Unblock(ctx, id)
+			default:
+				return plan.Plan{}, nil, fmt.Errorf("unknown action %s", action)
+			}
+			return p, c, err
+		},
+		func() (any, error) {
+			switch action {
+			case "reconnect":
+				return svc.ApplyReconnect(ctx, id)
+			case "block":
+				return svc.ApplyBlock(ctx, id)
+			case "unblock":
+				return svc.ApplyUnblock(ctx, id)
+			default:
+				return nil, fmt.Errorf("unknown action %s", action)
+			}
+		},
+	)
+	return emittedExit(code)
 }
