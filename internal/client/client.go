@@ -10,23 +10,34 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/config"
+	"github.com/noahjenkins/unifi-cli/internal/session"
 )
 
 type Client struct {
-	cfg       config.Config
-	http      *http.Client
-	baseURL   string
-	csrf      string
-	cookieJar http.CookieJar
-	loggedIn  bool
+	cfg               config.Config
+	http              *http.Client
+	baseURL           string
+	csrf              string
+	cookieJar         http.CookieJar
+	sessionStore      session.Store
+	loggedIn          bool
+	authMethod        string
+	allowFileFallback bool
 }
 
 func New(cfg config.Config) (*Client, error) {
+	return NewWithSessionStore(cfg, session.NewStore(session.Options{}))
+}
+
+// NewWithSessionStore creates a controller client that can restore a saved
+// password session. API-key clients deliberately bypass the store entirely.
+func NewWithSessionStore(cfg config.Config, store session.Store) (*Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, apperr.Newf(apperr.Internal, "cookie jar: %v", err)
@@ -41,16 +52,55 @@ func New(cfg config.Config) (*Client, error) {
 			InsecureSkipVerify: cfg.Insecure, //nolint:gosec
 		},
 	}
-	return &Client{
-		cfg:       cfg,
-		baseURL:   cfg.BaseURL(),
-		cookieJar: jar,
+	c := &Client{
+		cfg:          cfg,
+		baseURL:      cfg.BaseURL(),
+		cookieJar:    jar,
+		sessionStore: store,
+		authMethod:   "password",
 		http: &http.Client{
 			Timeout:   timeout,
 			Jar:       jar,
 			Transport: transport,
 		},
-	}, nil
+	}
+	if cfg.APIKey != "" {
+		c.authMethod = "api_key"
+		return c, nil
+	}
+	if store == nil {
+		return c, nil
+	}
+	record, found, err := store.Load(c.baseURL)
+	if err != nil {
+		if errors.Is(err, session.ErrKeyringUnavailable) {
+			return c, nil
+		}
+		return nil, apperr.New(apperr.Internal, "load saved session")
+	}
+	if !found {
+		return c, nil
+	}
+	baseURL, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, apperr.Newf(apperr.Internal, "parse controller URL: %v", err)
+	}
+	c.cookieJar.SetCookies(baseURL, record.HTTPCookies())
+	c.csrf = record.CSRF
+	c.loggedIn = true
+	c.authMethod = "saved_session"
+	return c, nil
+}
+
+// SetAllowFileFallback permits this client to save a new password session to
+// protected local state only if the native keyring is unavailable.
+func (c *Client) SetAllowFileFallback(allow bool) {
+	c.allowFileFallback = allow
+}
+
+// AuthMethod describes the authentication path active for this client.
+func (c *Client) AuthMethod() string {
+	return c.authMethod
 }
 
 func (c *Client) Site() string {
@@ -73,7 +123,22 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	if err := c.ensureAuth(ctx); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, method, path, in, out, true)
+	err := c.doJSON(ctx, method, path, in, out, true)
+	if !apperr.Is(err, apperr.AuthFailed) || c.cfg.APIKey != "" {
+		return err
+	}
+	c.loggedIn = false
+	if c.sessionStore != nil {
+		_ = c.sessionStore.Delete(c.baseURL)
+	}
+	message := "authentication failed"
+	if authErr := apperr.As(err); authErr != nil && authErr.Message != "" {
+		message = authErr.Message
+	}
+	return apperr.WithHint(
+		apperr.New(apperr.AuthFailed, message),
+		"run 'unifi auth login' to create a new saved session",
+	)
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in, out any, _ bool) error {

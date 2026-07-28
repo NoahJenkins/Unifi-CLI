@@ -17,7 +17,42 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/config"
+	"github.com/noahjenkins/unifi-cli/internal/session"
 )
+
+type memorySessionStore struct {
+	sessions  map[string]session.Session
+	loadErr   error
+	saveErr   error
+	deleteErr error
+}
+
+func (s *memorySessionStore) Load(controller string) (session.Session, bool, error) {
+	if s.loadErr != nil {
+		return session.Session{}, false, s.loadErr
+	}
+	record, found := s.sessions[controller]
+	return record, found, nil
+}
+
+func (s *memorySessionStore) Save(record session.Session, _ bool) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	if s.sessions == nil {
+		s.sessions = make(map[string]session.Session)
+	}
+	s.sessions[record.Controller] = record
+	return nil
+}
+
+func (s *memorySessionStore) Delete(controller string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	delete(s.sessions, controller)
+	return nil
+}
 
 func testConfig(t *testing.T, srv *httptest.Server) config.Config {
 	t.Helper()
@@ -68,7 +103,7 @@ func TestLoginWithPassword(t *testing.T) {
 	cfg.Username = "admin"
 	cfg.Password = "secret"
 
-	c, err := client.New(cfg)
+	c, err := client.NewWithSessionStore(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -106,7 +141,7 @@ func TestAPIKeySkipsLoginBody(t *testing.T) {
 	cfg := testConfig(t, srv)
 	cfg.APIKey = "test-api-key"
 
-	c, err := client.New(cfg)
+	c, err := client.NewWithSessionStore(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -143,7 +178,7 @@ func TestDoMaps401ToAuthFailed(t *testing.T) {
 	cfg := testConfig(t, srv)
 	cfg.APIKey = "bad-key"
 
-	c, err := client.New(cfg)
+	c, err := client.NewWithSessionStore(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -159,7 +194,7 @@ func TestDoMapsConnectionError(t *testing.T) {
 	cfg.APIKey = "key"
 	srv.Close()
 
-	c, err := client.New(cfg)
+	c, err := client.NewWithSessionStore(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -170,11 +205,11 @@ func TestDoMapsConnectionError(t *testing.T) {
 }
 
 func TestSitePath(t *testing.T) {
-	c, err := client.New(config.Config{
+	c, err := client.NewWithSessionStore(config.Config{
 		Host: "127.0.0.1",
 		Port: 443,
 		Site: "default",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -216,7 +251,7 @@ func TestDoSendsCSRFAfterLogin(t *testing.T) {
 	cfg.Username = "admin"
 	cfg.Password = "secret"
 
-	c, err := client.New(cfg)
+	c, err := client.NewWithSessionStore(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -232,12 +267,157 @@ func TestDoSendsCSRFAfterLogin(t *testing.T) {
 }
 
 func TestLoginRequiresCredentials(t *testing.T) {
-	c, err := client.New(config.Config{Host: "127.0.0.1", Port: 443, Site: "default"})
+	c, err := client.NewWithSessionStore(config.Config{Host: "127.0.0.1", Port: 443, Site: "default"}, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	err = c.Login(context.Background())
 	if !apperr.Is(err, apperr.ValidationFailed) {
 		t.Fatalf("err = %v, want validation_failed", err)
+	}
+}
+
+func TestSavedSessionRestoresCookieAndCSRFWithoutLogin(t *testing.T) {
+	var gotCookie, gotCSRF string
+	var loginRequests int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/login" {
+			loginRequests++
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device" {
+			gotCookie = r.Header.Get("Cookie")
+			gotCSRF = r.Header.Get("X-CSRF-Token")
+			_, _ = io.WriteString(w, `{"data":[]}`)
+			return
+		}
+		t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	store := &memorySessionStore{sessions: map[string]session.Session{
+		cfg.BaseURL(): {
+			Controller: cfg.BaseURL(),
+			Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "saved", Path: "/"}},
+			CSRF:       "saved-csrf",
+		},
+	}}
+
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	if c.AuthMethod() != "saved_session" {
+		t.Fatalf("AuthMethod() = %q, want saved_session", c.AuthMethod())
+	}
+	if err := c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if gotCookie != "TOKEN=saved" {
+		t.Fatalf("Cookie = %q, want TOKEN=saved", gotCookie)
+	}
+	if gotCSRF != "saved-csrf" {
+		t.Fatalf("X-CSRF-Token = %q, want saved-csrf", gotCSRF)
+	}
+	if loginRequests != 0 {
+		t.Fatalf("login requests = %d, want 0", loginRequests)
+	}
+}
+
+func TestPasswordLoginSavesCookiesAndCSRF(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "fresh", Path: "/", HttpOnly: true})
+		w.Header().Set("X-CSRF-Token", "fresh-csrf")
+		_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	store := &memorySessionStore{}
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	if err := c.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	record, found := store.sessions[cfg.BaseURL()]
+	if !found {
+		t.Fatal("saved session missing")
+	}
+	if record.Controller != cfg.BaseURL() {
+		t.Fatalf("Controller = %q, want %q", record.Controller, cfg.BaseURL())
+	}
+	if record.CSRF != "fresh-csrf" {
+		t.Fatalf("CSRF = %q, want fresh-csrf", record.CSRF)
+	}
+	if len(record.Cookies) != 1 || record.Cookies[0].Name != "TOKEN" || record.Cookies[0].Value != "fresh" {
+		t.Fatalf("Cookies = %#v, want fresh TOKEN cookie", record.Cookies)
+	}
+}
+
+func TestSavedSession401DeletesSessionAndHintsLogin(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"meta":{"rc":"error","msg":"api.err.LoginRequired"}}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	store := &memorySessionStore{sessions: map[string]session.Session{
+		cfg.BaseURL(): {
+			Controller: cfg.BaseURL(),
+			Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "stale", Path: "/"}},
+		},
+	}}
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil)
+	if !apperr.Is(err, apperr.AuthFailed) {
+		t.Fatalf("err = %v, want auth_failed", err)
+	}
+	if got := apperr.As(err).Hint; got != "run 'unifi auth login' to create a new saved session" {
+		t.Fatalf("hint = %q", got)
+	}
+	if _, found := store.sessions[cfg.BaseURL()]; found {
+		t.Fatal("stale saved session was not deleted")
+	}
+}
+
+func TestAPIKeyDoesNotUseSessionStore(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-API-KEY"); got != "api-key" {
+			t.Fatalf("X-API-KEY = %q, want api-key", got)
+		}
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.APIKey = "api-key"
+	store := &memorySessionStore{loadErr: os.ErrPermission, saveErr: os.ErrPermission, deleteErr: os.ErrPermission}
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	if c.AuthMethod() != "api_key" {
+		t.Fatalf("AuthMethod() = %q, want api_key", c.AuthMethod())
+	}
+	if err := c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil); err != nil {
+		t.Fatalf("Do: %v", err)
 	}
 }
