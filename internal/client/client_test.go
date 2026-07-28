@@ -462,3 +462,29 @@ func TestAPIKeyDoesNotUseSessionStore(t *testing.T) {
 		t.Fatalf("Do: %v", err)
 	}
 }
+
+func TestLogoutLocalSessionDeletesSavedStateWithoutControllerRequest(t *testing.T) {
+	store := &memorySessionStore{sessions: map[string]session.Session{
+		"https://controller.example:8443": {
+			Controller: "https://controller.example:8443",
+			Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "saved", Path: "/"}},
+			CSRF:       "saved-csrf",
+		},
+	}}
+	c, err := client.NewWithSessionStore(config.Config{
+		Host:   "controller.example",
+		Port:   8443,
+		Site:   "default",
+		APIKey: "configured-api-key",
+	}, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+
+	if err := c.LogoutLocalSession(); err != nil {
+		t.Fatalf("LogoutLocalSession: %v", err)
+	}
+	if _, found := store.sessions["https://controller.example:8443"]; found {
+		t.Fatal("saved session was not deleted")
+	}
+}

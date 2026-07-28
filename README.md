@@ -58,14 +58,39 @@ timeout: 30s
 | `UNIFI_CONFIG` | Config file path |
 | `UNIFI_TIMEOUT` | Request timeout (e.g. `30s`) |
 
-**Auth:** if `api_key` / `UNIFI_API_KEY` is set, API key auth is used; otherwise username/password session login.
+**Auth:** if `api_key` / `UNIFI_API_KEY` is set, API key auth is used; otherwise username/password session login. API keys take precedence and are never saved as a session.
 
 ```bash
-unifi auth status --json   # validate credentials (secrets redacted)
-unifi auth login --json    # explicit connectivity + auth check
+unifi auth status --json   # validate credentials or a saved session (secrets redacted)
+unifi auth login --json    # create and save a new authenticated session
+unifi auth logout --json   # remove local saved session state
 unifi config show          # effective config, secrets redacted
 unifi config path          # print default config path
 ```
+
+### Saved sessions
+
+After a password login, the CLI saves only the controller session cookies and
+CSRF token—never the password or API key. It uses the operating system's
+native credential store by default:
+
+- macOS: Keychain
+- Windows: Credential Manager
+- Linux: Secret Service
+
+Linux requires an available Secret Service provider, such as GNOME Keyring or
+KWallet. On a headless Linux machine without one, opt in explicitly to the
+protected file fallback:
+
+```bash
+unifi auth login --file-fallback
+```
+
+The fallback writes session state only (not credentials) in a user-only state
+directory. It is never enabled implicitly. `unifi auth logout` removes locally
+saved state for the configured controller; it does not make a remote logout
+request. Saved sessions can expire and are scoped to one controller, so they
+are not permanent or transferable between machines.
 
 ## Global flags
 
@@ -111,7 +136,7 @@ unifi device forget <id> --force --yes
 
 | Resource | Commands |
 |----------|----------|
-| `auth` | `status`, `login` |
+| `auth` | `status`, `login`, `logout` |
 | `config` | `path`, `show` |
 | `site` | `list`, `get` |
 | `device` | `list`, `get`, `rename`, `restart`, `locate`, `upgrade`, `adopt`, `forget` |

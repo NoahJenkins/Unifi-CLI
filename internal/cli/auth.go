@@ -2,47 +2,77 @@ package cli
 
 import (
 	"context"
+	"net/http"
 
+	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/spf13/cobra"
 )
+
+var loadAuthRuntime = loadRuntime
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Credential validation",
+		Short: "Credential validation and saved-session management",
 	}
-	cmd.AddCommand(newAuthStatusCmd(), newAuthLoginCmd())
+	cmd.AddCommand(newAuthStatusCmd(), newAuthLoginCmd(), newAuthLogoutCmd())
 	return cmd
 }
 
 func newAuthStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Validate credentials and show auth status",
+		Short: "Validate credentials or a saved session and show auth status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuth("status")
+			return runAuth("status", false)
 		},
 	}
 }
 
 func newAuthLoginCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Perform an explicit connectivity and auth check",
+		Short: "Create and save an authenticated session",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuth("login")
+			allowFileFallback, err := cmd.Flags().GetBool("file-fallback")
+			if err != nil {
+				return err
+			}
+			return runAuth("login", allowFileFallback)
+		},
+	}
+	cmd.Flags().Bool("file-fallback", false, "allow protected local session storage when the native keyring is unavailable")
+	return cmd
+}
+
+func newAuthLogoutCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout",
+		Short: "Remove the locally saved session for this controller",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuth("logout", false)
 		},
 	}
 }
 
-func runAuth(action string) error {
-	rt, err := loadRuntime(true)
+func runAuth(action string, allowFileFallback bool) error {
+	rt, err := loadAuthRuntime(true)
 	if err != nil {
 		return emitErr("auth", action, err)
 	}
 
 	ctx := context.Background()
-	err = rt.Client.Login(ctx)
+	switch action {
+	case "login":
+		if allowFileFallback {
+			rt.Client.SetAllowFileFallback(true)
+		}
+		err = rt.Client.Login(ctx)
+	case "status":
+		err = rt.Client.Do(ctx, http.MethodGet, client.PathSelfSites, nil, nil)
+	case "logout":
+		err = rt.Client.LogoutLocalSession()
+	}
 	if err != nil {
 		code := rt.Emit("auth", action, nil, nil, err)
 		if code != 0 {
@@ -51,21 +81,21 @@ func runAuth(action string) error {
 		return nil
 	}
 
-	data := map[string]any{
-		"host":        rt.Cfg.Host,
-		"site":        rt.Client.Site(),
-		"auth_method": authMethod(rt),
+	method := rt.Client.AuthMethod()
+	if action == "logout" {
+		method = "logged_out"
 	}
-	code := rt.Emit("auth", action, data, nil, nil)
+	code := rt.Emit("auth", action, authMetadata(rt.Cfg.Host, rt.Client.Site(), method), nil, nil)
 	if code != 0 {
 		return err
 	}
 	return nil
 }
 
-func authMethod(rt *Runtime) string {
-	if rt.Cfg.APIKey != "" {
-		return "api_key"
+func authMetadata(host, site, method string) map[string]any {
+	return map[string]any{
+		"host":        host,
+		"site":        site,
+		"auth_method": method,
 	}
-	return "password"
 }

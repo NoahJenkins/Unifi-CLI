@@ -103,6 +103,23 @@ func (c *Client) AuthMethod() string {
 	return c.authMethod
 }
 
+// LogoutLocalSession removes any persisted session for this controller without
+// making a controller request. It deliberately operates even when API-key
+// authentication is configured, because logout is an explicit local cleanup.
+func (c *Client) LogoutLocalSession() error {
+	if c.sessionStore == nil {
+		return nil
+	}
+	if err := c.sessionStore.Delete(c.baseURL); err != nil {
+		return apperr.WithCause(
+			apperr.New(apperr.Internal, "cannot remove saved session"),
+			err,
+		)
+	}
+	c.loggedIn = false
+	return nil
+}
+
 func (c *Client) Site() string {
 	return c.cfg.Site
 }
