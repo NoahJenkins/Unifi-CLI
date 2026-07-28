@@ -53,6 +53,8 @@ func (c *Client) saveSession() error {
 		CSRF:       c.csrf,
 		UpdatedAt:  time.Now().UTC(),
 	}
+	record.NormalizeCookieLifetimes()
+	c.sessionCookies = append([]session.RequestCookie(nil), record.Cookies...)
 	if err := c.sessionStore.Save(record, c.allowFileFallback); err != nil {
 		if errors.Is(err, session.ErrKeyringUnavailable) {
 			return apperr.WithHint(

@@ -77,27 +77,31 @@ func CookiesFromHTTP(cookies []*http.Cookie) []RequestCookie {
 	return result
 }
 
+// NormalizeCookieLifetimes turns relative Max-Age values into fixed expiry
+// deadlines based on the time the session was saved. This keeps a persisted
+// cookie from receiving a fresh lifetime whenever a later process restores it.
+func (s *Session) NormalizeCookieLifetimes() {
+	for i := range s.Cookies {
+		if s.Cookies[i].MaxAge > 0 {
+			s.Cookies[i].Expires = s.UpdatedAt.Add(time.Duration(s.Cookies[i].MaxAge) * time.Second)
+			s.Cookies[i].MaxAge = 0
+		}
+	}
+}
+
 // HTTPCookies converts persistent cookies back to cookies accepted by
 // http.CookieJar.SetCookies.
 func (s Session) HTTPCookies() []*http.Cookie {
+	s.NormalizeCookieLifetimes()
 	result := make([]*http.Cookie, 0, len(s.Cookies))
 	for _, cookie := range s.Cookies {
-		expires := cookie.Expires
-		maxAge := cookie.MaxAge
-		// MaxAge is relative to the time it is applied to a cookie jar. Persisted
-		// sessions must retain the original deadline instead of renewing it on
-		// each process start.
-		if maxAge > 0 {
-			expires = s.UpdatedAt.Add(time.Duration(maxAge) * time.Second)
-			maxAge = 0
-		}
 		result = append(result, &http.Cookie{
 			Name:        cookie.Name,
 			Value:       cookie.Value,
 			Path:        cookie.Path,
 			Domain:      cookie.Domain,
-			Expires:     expires,
-			MaxAge:      maxAge,
+			Expires:     cookie.Expires,
+			MaxAge:      cookie.MaxAge,
 			Secure:      cookie.Secure,
 			HttpOnly:    cookie.HTTPOnly,
 			SameSite:    cookie.SameSite,

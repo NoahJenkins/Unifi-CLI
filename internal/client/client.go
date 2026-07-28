@@ -93,6 +93,7 @@ func newWithSessionStore(cfg config.Config, store session.Store, restoreSession 
 	if !found {
 		return c, nil
 	}
+	record.NormalizeCookieLifetimes()
 	baseURL, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, apperr.Newf(apperr.Internal, "parse controller URL: %v", err)

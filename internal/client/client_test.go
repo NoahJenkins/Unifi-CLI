@@ -445,8 +445,8 @@ func TestPasswordLoginPersistsFullResponseCookieForNewClient(t *testing.T) {
 	if saved.Name != "TOKEN" ||
 		saved.Path != "/" ||
 		saved.Domain != "127.0.0.1" ||
-		!saved.Expires.Equal(expires) ||
-		saved.MaxAge != 3600 ||
+		!saved.Expires.Equal(record.UpdatedAt.Add(time.Hour)) ||
+		saved.MaxAge != 0 ||
 		!saved.Secure ||
 		!saved.HTTPOnly ||
 		saved.SameSite != http.SameSiteNoneMode ||
@@ -608,6 +608,51 @@ func TestSuccessfulRequestDoesNotBecomeAuthFailureWhenRotationPersistenceFails(t
 	}
 	if result["id"] != "applied" {
 		t.Fatalf("mutation result = %#v, want applied result", result)
+	}
+}
+
+func TestCSRFOnlySessionUpdateDoesNotRenewPersistedCookieLifetime(t *testing.T) {
+	issuedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	originalExpiry := issuedAt.Add(time.Hour)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/proxy/network/api/s/default/stat/device" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("X-CSRF-Token", "rotated-csrf")
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &memorySessionStore{sessions: map[string]session.Session{
+		cfg.BaseURL(): {
+			Controller: cfg.BaseURL(),
+			UpdatedAt:  issuedAt,
+			Cookies: []session.RequestCookie{{
+				Name:    "TOKEN",
+				Value:   "session-secret",
+				Path:    "/",
+				Secure:  true,
+				MaxAge:  3600,
+				Expires: issuedAt.Add(24 * time.Hour),
+			}},
+			CSRF: "original-csrf",
+		},
+	}}
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	if err := c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil); err != nil {
+		t.Fatalf("CSRF-only update: %v", err)
+	}
+
+	persisted := store.sessions[cfg.BaseURL()].Cookies[0]
+	if persisted.MaxAge != 0 {
+		t.Fatalf("persisted MaxAge = %d, want 0 after converting to original deadline", persisted.MaxAge)
+	}
+	if !persisted.Expires.Equal(originalExpiry) {
+		t.Fatalf("persisted Expires = %s, want original deadline %s", persisted.Expires, originalExpiry)
 	}
 }
 
