@@ -41,6 +41,22 @@ type failAfterFirstSaveStore struct {
 	err   error
 }
 
+type trackingSessionStore struct {
+	memorySessionStore
+	saves   int
+	deletes int
+}
+
+func (s *trackingSessionStore) Save(record session.Session, allowFileFallback bool) error {
+	s.saves++
+	return s.memorySessionStore.Save(record, allowFileFallback)
+}
+
+func (s *trackingSessionStore) Delete(controller string) error {
+	s.deletes++
+	return s.memorySessionStore.Delete(controller)
+}
+
 func (s *failAfterFirstSaveStore) Save(record session.Session, allowFileFallback bool) error {
 	s.saves++
 	if s.saves > 1 {
@@ -96,6 +112,43 @@ func testConfig(t *testing.T, srv *httptest.Server) config.Config {
 		Insecure: true,
 		Site:     "default",
 		Timeout:  5 * time.Second,
+	}
+}
+
+func TestReadOnlyClientDoesNotWriteOrDeleteSavedSession(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet || r.URL.Path != client.PathSelfSites {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if requests == 1 {
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "rotated", Path: "/"})
+			w.Header().Set("X-CSRF-Token", "rotated-csrf")
+			_, _ = io.WriteString(w, `{"data":[]}`)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"message":"expired"}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &trackingSessionStore{memorySessionStore: memorySessionStore{sessions: map[string]session.Session{
+		cfg.BaseURL(): {Controller: cfg.BaseURL(), Cookies: []session.RequestCookie{{Name: "TOKEN", Value: "saved", Path: "/"}}},
+	}}}
+	c, err := client.NewReadOnlyWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewReadOnlyWithSessionStore: %v", err)
+	}
+	if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err != nil {
+		t.Fatalf("successful read: %v", err)
+	}
+	if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err == nil {
+		t.Fatal("expired session read unexpectedly succeeded")
+	}
+	if store.saves != 0 || store.deletes != 0 {
+		t.Fatalf("read-only client mutated session store: saves=%d deletes=%d", store.saves, store.deletes)
 	}
 }
 

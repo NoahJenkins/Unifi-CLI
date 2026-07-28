@@ -5,15 +5,16 @@ import (
 )
 
 var (
-	flagConfig  string
-	flagJSON    bool
-	flagYes     bool
-	flagDryRun  bool
-	flagForce   bool
-	flagQuiet   bool
-	flagRaw     bool
-	flagSite    string
-	flagTimeout string
+	flagConfig         string
+	flagJSON           bool
+	flagYes            bool
+	flagDryRun         bool
+	flagForce          bool
+	flagQuiet          bool
+	flagRaw            bool
+	flagNoSessionWrite bool
+	flagSite           string
+	flagTimeout        string
 )
 
 func NewRoot() *cobra.Command {
@@ -30,6 +31,7 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagForce, "force", false, "override safe_mode blocks")
 	root.PersistentFlags().BoolVar(&flagQuiet, "quiet", false, "suppress audit stderr")
 	root.PersistentFlags().BoolVar(&flagRaw, "raw", false, "include raw controller payload in JSON")
+	root.PersistentFlags().BoolVar(&flagNoSessionWrite, "no-session-write", false, "do not modify saved authentication sessions")
 	root.PersistentFlags().StringVar(&flagSite, "site", "", "site override")
 	root.PersistentFlags().StringVar(&flagTimeout, "timeout", "", "per-command timeout")
 	root.AddCommand(

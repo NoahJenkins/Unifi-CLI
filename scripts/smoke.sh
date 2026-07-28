@@ -33,16 +33,7 @@ fi
 
 export UNIFI_INSECURE="${UNIFI_INSECURE:-true}"
 
-echo "==> live auth"
-"$BIN" auth login --json
-
-echo "==> live inventory (read-only)"
-"$BIN" device list --json >/dev/null
-"$BIN" client list --json >/dev/null
-"$BIN" network list --json >/dev/null
-"$BIN" wlan list --json >/dev/null
-"$BIN" dns list --json >/dev/null
-"$BIN" firewall list --json >/dev/null
-"$BIN" system health --json >/dev/null
+echo "==> live read-only suite"
+go run ./cmd/unifi-live-test --binary "$BIN" --report-dir "$ROOT/dist/test-reports"
 
 echo "==> smoke OK"

@@ -105,6 +105,7 @@ are not permanent or transferable between machines.
 | `--config` | Config path |
 | `--quiet` | Suppress audit stderr |
 | `--raw` | Include upstream UniFi payload under `raw` in JSON |
+| `--no-session-write` | Read using a saved session without refreshing or deleting it |
 
 Identifiers resolve as: internal id → MAC (normalized) → exact name. Ambiguous matches exit with `ambiguous_id`.
 
@@ -200,3 +201,14 @@ UNIFI_IT=1 ./scripts/smoke.sh
 ```
 
 Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary and runs unit tests only.
+
+With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
+checks auth status, local configuration, every implemented list command,
+system health/events/alerts, and a derived `get` for each populated resource
+list. Empty firewall-rule and local-DNS lists are reported as `not_configured`
+rather than failures. It never calls `auth login`, a mutation command, or an
+apply/raw flag.
+
+Each live run writes a redacted report to `dist/test-reports/`. Reports contain
+only command names, statuses, durations, and fixed safe summaries; they do not
+contain controller payloads, identifiers, arguments, credentials, or stderr.

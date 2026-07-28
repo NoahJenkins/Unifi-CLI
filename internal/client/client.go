@@ -37,6 +37,13 @@ func New(cfg config.Config) (*Client, error) {
 	return NewWithSessionStore(cfg, session.NewStore(session.Options{}))
 }
 
+// NewReadOnly restores an existing password session when available but never
+// changes the local session store. It is for read-only command runners that
+// must not refresh or remove user authentication state.
+func NewReadOnly(cfg config.Config) (*Client, error) {
+	return NewReadOnlyWithSessionStore(cfg, session.NewStore(session.Options{}))
+}
+
 // NewForLocalSessionCleanup creates a client that can delete saved state
 // without loading or parsing that state first.
 func NewForLocalSessionCleanup(cfg config.Config) (*Client, error) {
@@ -48,6 +55,23 @@ func NewForLocalSessionCleanup(cfg config.Config) (*Client, error) {
 func NewWithSessionStore(cfg config.Config, store session.Store) (*Client, error) {
 	return newWithSessionStore(cfg, store, true)
 }
+
+// NewReadOnlyWithSessionStore is NewReadOnly with an injectable store for
+// tests. Loads pass through; saves and deletes are intentionally no-ops.
+func NewReadOnlyWithSessionStore(cfg config.Config, store session.Store) (*Client, error) {
+	if store == nil {
+		return newWithSessionStore(cfg, nil, true)
+	}
+	return newWithSessionStore(cfg, readOnlySessionStore{Store: store}, true)
+}
+
+type readOnlySessionStore struct {
+	session.Store
+}
+
+func (readOnlySessionStore) Save(session.Session, bool) error { return nil }
+
+func (readOnlySessionStore) Delete(string) error { return nil }
 
 func newWithSessionStore(cfg config.Config, store session.Store, restoreSession bool) (*Client, error) {
 	jar, err := cookiejar.New(nil)
