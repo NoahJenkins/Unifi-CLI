@@ -101,6 +101,37 @@ func TestSaveLoadRoundTripPreservesRequestCookieFields(t *testing.T) {
 	}
 }
 
+func TestSaveLoadRoundTripPreservesPartitionedCookieAttribute(t *testing.T) {
+	keyring := newMemoryKeyring()
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	want := sampleSession("https://controller.example:443")
+	want.Cookies = CookiesFromHTTP([]*http.Cookie{{
+		Name:        "TOKEN",
+		Value:       "session-secret",
+		Partitioned: true,
+	}})
+	if !want.Cookies[0].Partitioned {
+		t.Fatal("partitioned cookie attribute was not copied from http.Cookie")
+	}
+
+	if err := store.Save(want, false); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, found, err := store.Load(want.Controller)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !found {
+		t.Fatal("Load did not find the saved session")
+	}
+	if !got.Cookies[0].Partitioned {
+		t.Fatal("partitioned cookie attribute was not preserved")
+	}
+	if !got.HTTPCookies()[0].Partitioned {
+		t.Fatal("partitioned cookie attribute was not restored to http.Cookie")
+	}
+}
+
 func TestSessionsAreScopedToNormalizedController(t *testing.T) {
 	keyring := newMemoryKeyring()
 	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})

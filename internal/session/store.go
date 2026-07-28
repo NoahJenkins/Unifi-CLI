@@ -33,15 +33,16 @@ var (
 // cookie to an http.CookieJar. It intentionally excludes response-only and
 // diagnostic fields such as Raw and Unparsed.
 type RequestCookie struct {
-	Name     string        `json:"name"`
-	Value    string        `json:"value"`
-	Path     string        `json:"path,omitempty"`
-	Domain   string        `json:"domain,omitempty"`
-	Expires  time.Time     `json:"expires,omitempty"`
-	MaxAge   int           `json:"max_age,omitempty"`
-	Secure   bool          `json:"secure,omitempty"`
-	HTTPOnly bool          `json:"http_only,omitempty"`
-	SameSite http.SameSite `json:"same_site,omitempty"`
+	Name        string        `json:"name"`
+	Value       string        `json:"value"`
+	Path        string        `json:"path,omitempty"`
+	Domain      string        `json:"domain,omitempty"`
+	Expires     time.Time     `json:"expires,omitempty"`
+	MaxAge      int           `json:"max_age,omitempty"`
+	Secure      bool          `json:"secure,omitempty"`
+	HTTPOnly    bool          `json:"http_only,omitempty"`
+	SameSite    http.SameSite `json:"same_site,omitempty"`
+	Partitioned bool          `json:"partitioned,omitempty"`
 }
 
 // Session is a controller-scoped, serializable authenticated session. It
@@ -61,15 +62,16 @@ func CookiesFromHTTP(cookies []*http.Cookie) []RequestCookie {
 			continue
 		}
 		result = append(result, RequestCookie{
-			Name:     cookie.Name,
-			Value:    cookie.Value,
-			Path:     cookie.Path,
-			Domain:   cookie.Domain,
-			Expires:  cookie.Expires,
-			MaxAge:   cookie.MaxAge,
-			Secure:   cookie.Secure,
-			HTTPOnly: cookie.HttpOnly,
-			SameSite: cookie.SameSite,
+			Name:        cookie.Name,
+			Value:       cookie.Value,
+			Path:        cookie.Path,
+			Domain:      cookie.Domain,
+			Expires:     cookie.Expires,
+			MaxAge:      cookie.MaxAge,
+			Secure:      cookie.Secure,
+			HTTPOnly:    cookie.HttpOnly,
+			SameSite:    cookie.SameSite,
+			Partitioned: cookie.Partitioned,
 		})
 	}
 	return result
@@ -81,15 +83,16 @@ func (s Session) HTTPCookies() []*http.Cookie {
 	result := make([]*http.Cookie, 0, len(s.Cookies))
 	for _, cookie := range s.Cookies {
 		result = append(result, &http.Cookie{
-			Name:     cookie.Name,
-			Value:    cookie.Value,
-			Path:     cookie.Path,
-			Domain:   cookie.Domain,
-			Expires:  cookie.Expires,
-			MaxAge:   cookie.MaxAge,
-			Secure:   cookie.Secure,
-			HttpOnly: cookie.HTTPOnly,
-			SameSite: cookie.SameSite,
+			Name:        cookie.Name,
+			Value:       cookie.Value,
+			Path:        cookie.Path,
+			Domain:      cookie.Domain,
+			Expires:     cookie.Expires,
+			MaxAge:      cookie.MaxAge,
+			Secure:      cookie.Secure,
+			HttpOnly:    cookie.HTTPOnly,
+			SameSite:    cookie.SameSite,
+			Partitioned: cookie.Partitioned,
 		})
 	}
 	return result
