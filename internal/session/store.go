@@ -82,13 +82,22 @@ func CookiesFromHTTP(cookies []*http.Cookie) []RequestCookie {
 func (s Session) HTTPCookies() []*http.Cookie {
 	result := make([]*http.Cookie, 0, len(s.Cookies))
 	for _, cookie := range s.Cookies {
+		expires := cookie.Expires
+		maxAge := cookie.MaxAge
+		// MaxAge is relative to the time it is applied to a cookie jar. Persisted
+		// sessions must retain the original deadline instead of renewing it on
+		// each process start.
+		if maxAge > 0 {
+			expires = s.UpdatedAt.Add(time.Duration(maxAge) * time.Second)
+			maxAge = 0
+		}
 		result = append(result, &http.Cookie{
 			Name:        cookie.Name,
 			Value:       cookie.Value,
 			Path:        cookie.Path,
 			Domain:      cookie.Domain,
-			Expires:     cookie.Expires,
-			MaxAge:      cookie.MaxAge,
+			Expires:     expires,
+			MaxAge:      maxAge,
 			Secure:      cookie.Secure,
 			HttpOnly:    cookie.HTTPOnly,
 			SameSite:    cookie.SameSite,

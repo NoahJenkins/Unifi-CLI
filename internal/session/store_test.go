@@ -132,6 +132,27 @@ func TestSaveLoadRoundTripPreservesPartitionedCookieAttribute(t *testing.T) {
 	}
 }
 
+func TestHTTPCookiesRestoresMaxAgeAsOriginalAbsoluteExpiry(t *testing.T) {
+	issuedAt := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	record := Session{
+		UpdatedAt: issuedAt,
+		Cookies: []RequestCookie{{
+			Name:    "TOKEN",
+			Value:   "session-secret",
+			MaxAge:  60,
+			Expires: issuedAt.Add(24 * time.Hour),
+		}},
+	}
+
+	cookie := record.HTTPCookies()[0]
+	if cookie.MaxAge != 0 {
+		t.Fatalf("MaxAge = %d, want 0 so restore does not renew the lifetime", cookie.MaxAge)
+	}
+	if want := issuedAt.Add(time.Minute); !cookie.Expires.Equal(want) {
+		t.Fatalf("Expires = %s, want original Max-Age deadline %s", cookie.Expires, want)
+	}
+}
+
 func TestSessionsAreScopedToNormalizedController(t *testing.T) {
 	keyring := newMemoryKeyring()
 	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})

@@ -158,9 +158,10 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	if err == nil && c.cfg.APIKey == "" && c.sessionStore != nil &&
 		(c.csrf != previousCSRF || len(c.responseCookies) > 0) {
 		c.mergeResponseCookies(c.responseCookies)
-		if saveErr := c.saveSession(); saveErr != nil {
-			return saveErr
-		}
+		// The controller response has already completed successfully. Failing to
+		// persist a rotated local session must not turn a completed mutation into
+		// an auth failure that callers might retry.
+		_ = c.saveSession()
 	}
 	if !apperr.Is(err, apperr.AuthFailed) || c.cfg.APIKey != "" {
 		return err

@@ -29,6 +29,20 @@ type memorySessionStore struct {
 	deleteErr error
 }
 
+type failAfterFirstSaveStore struct {
+	memorySessionStore
+	saves int
+	err   error
+}
+
+func (s *failAfterFirstSaveStore) Save(record session.Session, allowFileFallback bool) error {
+	s.saves++
+	if s.saves > 1 {
+		return s.err
+	}
+	return s.memorySessionStore.Save(record, allowFileFallback)
+}
+
 func (s *memorySessionStore) Load(controller string) (session.Session, bool, error) {
 	if s.loadErr != nil {
 		return session.Session{}, false, s.loadErr
@@ -546,6 +560,54 @@ func TestAuthenticatedResponsePersistsRotatedSessionForNewClient(t *testing.T) {
 	}
 	if authenticatedRequests != 2 {
 		t.Fatalf("authenticated requests = %d, want 2", authenticatedRequests)
+	}
+}
+
+func TestSuccessfulRequestDoesNotBecomeAuthFailureWhenRotationPersistenceFails(t *testing.T) {
+	const (
+		initialCookie = "initial-session-secret"
+		rotatedCookie = "rotated-session-secret"
+		initialCSRF   = "initial-csrf-secret"
+		rotatedCSRF   = "rotated-csrf-secret"
+	)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: initialCookie, Path: "/", Secure: true})
+			w.Header().Set("X-CSRF-Token", initialCSRF)
+			_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
+		case "/proxy/network/api/s/default/rest/wlanconf":
+			if r.Header.Get("X-CSRF-Token") != initialCSRF {
+				t.Fatal("mutation did not receive the authenticated CSRF token")
+			}
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: rotatedCookie, Path: "/", Secure: true})
+			w.Header().Set("X-CSRF-Token", rotatedCSRF)
+			_, _ = io.WriteString(w, `{"data":{"id":"applied"}}`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	store := &failAfterFirstSaveStore{err: errors.New("keyring write failed")}
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	if err := c.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	var result map[string]string
+	err = c.Do(context.Background(), http.MethodPost, c.SitePath(client.PathRestWlan), map[string]string{"name": "Guest"}, &result)
+	if err != nil {
+		t.Fatalf("successful controller mutation returned an error after persistence failed: %v", err)
+	}
+	if result["id"] != "applied" {
+		t.Fatalf("mutation result = %#v, want applied result", result)
 	}
 }
 
