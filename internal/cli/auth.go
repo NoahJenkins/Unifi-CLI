@@ -8,7 +8,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var loadAuthRuntime = loadRuntime
+var loadAuthRuntime = func(restoreSession bool) (*Runtime, error) {
+	if restoreSession {
+		return loadRuntime(true)
+	}
+	rt, err := loadRuntime(false)
+	if err != nil {
+		return rt, err
+	}
+	rt.Client, err = client.NewForLocalSessionCleanup(rt.Cfg)
+	return rt, err
+}
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -56,7 +66,7 @@ func newAuthLogoutCmd() *cobra.Command {
 }
 
 func runAuth(action string, allowFileFallback bool) error {
-	rt, err := loadAuthRuntime(true)
+	rt, err := loadAuthRuntime(action != "logout")
 	if err != nil {
 		return emitErr("auth", action, err)
 	}

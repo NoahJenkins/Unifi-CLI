@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -44,9 +45,13 @@ type authTestStore struct {
 	sessions          map[string]session.Session
 	allowFileFallback bool
 	deletedController string
+	loadErr           error
 }
 
 func (s *authTestStore) Load(controller string) (session.Session, bool, error) {
+	if s.loadErr != nil {
+		return session.Session{}, false, s.loadErr
+	}
 	record, found := s.sessions[controller]
 	return record, found, nil
 }
@@ -156,6 +161,54 @@ func TestAuthLogoutRemovesLocalStateWithoutContactingController(t *testing.T) {
 		t.Fatal("logout left the saved session behind")
 	}
 	if got := output.String(); !strings.Contains(got, "auth_method: logged_out") || strings.Contains(got, cfg.APIKey) {
+		t.Fatalf("unsafe logout output: %q", got)
+	}
+}
+
+func TestAuthLogoutSkipsCorruptSessionHydration(t *testing.T) {
+	cfg := config.Config{
+		Host:     "controller.example",
+		Port:     8443,
+		Site:     "default",
+		Username: "admin",
+		Password: "password-not-for-output",
+		Timeout:  time.Second,
+	}
+	store := &authTestStore{
+		sessions: map[string]session.Session{
+			cfg.BaseURL(): {Controller: cfg.BaseURL()},
+		},
+		loadErr: errors.New("decode stored session: corrupt"),
+	}
+	cleanupCfg := cfg
+	cleanupCfg.APIKey = "cleanup-constructor-must-not-contact-controller"
+	cleanupClient, err := client.NewWithSessionStore(cleanupCfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore cleanup client: %v", err)
+	}
+	output := new(bytes.Buffer)
+	previous := loadAuthRuntime
+	loadAuthRuntime = func(restoreSession bool) (*Runtime, error) {
+		if restoreSession {
+			return nil, store.loadErr
+		}
+		return &Runtime{
+			Cfg:    cfg,
+			Client: cleanupClient,
+			Site:   cfg.Site,
+			Out:    output,
+			Err:    new(bytes.Buffer),
+		}, nil
+	}
+	t.Cleanup(func() { loadAuthRuntime = previous })
+
+	if err := newAuthLogoutCmd().ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("auth logout: %v", err)
+	}
+	if store.deletedController != cfg.BaseURL() {
+		t.Fatalf("deleted controller = %q, want %q", store.deletedController, cfg.BaseURL())
+	}
+	if got := output.String(); !strings.Contains(got, "auth_method: logged_out") || strings.Contains(got, cfg.Password) {
 		t.Fatalf("unsafe logout output: %q", got)
 	}
 }

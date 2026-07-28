@@ -167,6 +167,43 @@ func TestSavePrefersKeyringAndDoesNotCreateFallbackFile(t *testing.T) {
 	}
 }
 
+func TestSuccessfulKeyringSaveRemovesObsoleteFallback(t *testing.T) {
+	keyring := newMemoryKeyring()
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	session := sampleSession("https://controller.example:443")
+	if err := store.writeFallback(session); err != nil {
+		t.Fatalf("writeFallback: %v", err)
+	}
+
+	if err := store.Save(session, false); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(store.fallbackPath(session.Controller)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("obsolete fallback still exists or stat failed: %v", err)
+	}
+}
+
+func TestSuccessfulKeyringSaveSurfacesSafeFallbackCleanupFailure(t *testing.T) {
+	keyring := newMemoryKeyring()
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	session := sampleSession("https://controller.example:443")
+	fallbackPath := store.fallbackPath(session.Controller)
+	if err := os.MkdirAll(fallbackPath, 0o700); err != nil {
+		t.Fatalf("MkdirAll fallback path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fallbackPath, "blocks-removal"), []byte("not session material"), 0o600); err != nil {
+		t.Fatalf("WriteFile blocker: %v", err)
+	}
+
+	err := store.Save(session, false)
+	if err == nil {
+		t.Fatal("Save succeeded despite obsolete fallback cleanup failure")
+	}
+	if strings.Contains(err.Error(), session.CSRF) || strings.Contains(err.Error(), session.Cookies[0].Value) {
+		t.Fatal("fallback cleanup error exposed session material")
+	}
+}
+
 func TestSaveUsesFallbackOnlyWhenExplicitlyAllowedAndKeyringUnavailable(t *testing.T) {
 	keyring := newMemoryKeyring()
 	keyring.setErr = ErrKeyringUnavailable
@@ -190,6 +227,31 @@ func TestSaveUsesFallbackOnlyWhenExplicitlyAllowedAndKeyringUnavailable(t *testi
 	}
 	if !found || got.CSRF != want.CSRF {
 		t.Fatalf("Load fallback = %#v, found %t", got, found)
+	}
+}
+
+func TestSaveUpdatesExistingExplicitFallbackWhenKeyringRemainsUnavailable(t *testing.T) {
+	keyring := newMemoryKeyring()
+	keyring.setErr = ErrKeyringUnavailable
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	initial := sampleSession("https://controller.example:443")
+	if err := store.Save(initial, true); err != nil {
+		t.Fatalf("Save initial explicit fallback: %v", err)
+	}
+
+	updated := initial
+	updated.CSRF = "rotated-csrf-secret"
+	updated.Cookies[0].Value = "rotated-session-secret"
+	if err := store.Save(updated, false); err != nil {
+		t.Fatalf("Save existing fallback update: %v", err)
+	}
+
+	got, found, err := store.Load(updated.Controller)
+	if err != nil {
+		t.Fatalf("Load updated fallback: %v", err)
+	}
+	if !found || got.CSRF != updated.CSRF || got.Cookies[0].Value != updated.Cookies[0].Value {
+		t.Fatal("existing explicit fallback was not updated")
 	}
 }
 
@@ -238,7 +300,7 @@ func TestDeleteRemovesKeyringAndFallbackAndIgnoresMissingData(t *testing.T) {
 	}
 }
 
-func TestDeleteSucceedsWhenKeyringIsUnavailableAndFallbackIsRemovedOrAbsent(t *testing.T) {
+func TestDeleteSucceedsWhenKeyringIsUnavailableAndFallbackIsRemoved(t *testing.T) {
 	stateHome := t.TempDir()
 	keyring := newMemoryKeyring()
 	keyring.deleteErr = ErrKeyringUnavailable
@@ -254,8 +316,16 @@ func TestDeleteSucceedsWhenKeyringIsUnavailableAndFallbackIsRemovedOrAbsent(t *t
 	if _, err := os.Stat(store.fallbackPath(session.Controller)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fallback file exists or unexpected error: %v", err)
 	}
-	if err := store.Delete(session.Controller); err != nil {
-		t.Fatalf("Delete absent fallback session: %v", err)
+}
+
+func TestDeleteErrorsWhenKeyringIsUnavailableWithoutFallback(t *testing.T) {
+	keyring := newMemoryKeyring()
+	keyring.deleteErr = ErrKeyringUnavailable
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+
+	err := store.Delete("https://controller.example:443")
+	if !errors.Is(err, ErrKeyringUnavailable) {
+		t.Fatalf("Delete error = %v, want ErrKeyringUnavailable", err)
 	}
 }
 

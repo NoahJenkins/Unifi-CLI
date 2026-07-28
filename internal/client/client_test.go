@@ -368,6 +368,187 @@ func TestPasswordLoginSavesCookiesAndCSRF(t *testing.T) {
 	}
 }
 
+func TestPasswordLoginPersistsFullResponseCookieForNewClient(t *testing.T) {
+	var loginRequests int
+	var authenticatedRequests int
+	const (
+		cookieValue = "full-response-cookie-secret"
+		csrfValue   = "full-response-csrf-secret"
+	)
+	expires := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
+			loginRequests++
+			http.SetCookie(w, &http.Cookie{
+				Name:        "TOKEN",
+				Value:       cookieValue,
+				Path:        "/",
+				Domain:      "127.0.0.1",
+				Expires:     expires,
+				MaxAge:      3600,
+				Secure:      true,
+				HttpOnly:    true,
+				SameSite:    http.SameSiteNoneMode,
+				Partitioned: true,
+			})
+			w.Header().Set("X-CSRF-Token", csrfValue)
+			_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device":
+			if cookie, err := r.Cookie("TOKEN"); err != nil || cookie.Value != cookieValue {
+				t.Fatalf("restored request cookie unavailable")
+			}
+			if got := r.Header.Get("X-CSRF-Token"); got != csrfValue {
+				t.Fatalf("restored CSRF token unavailable")
+			}
+			authenticatedRequests++
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	store := &memorySessionStore{}
+
+	first, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore first client: %v", err)
+	}
+	if err := first.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	record, found := store.sessions[cfg.BaseURL()]
+	if !found || len(record.Cookies) != 1 {
+		t.Fatalf("saved cookie count = %d, found %t, want 1", len(record.Cookies), found)
+	}
+	saved := record.Cookies[0]
+	if saved.Name != "TOKEN" ||
+		saved.Path != "/" ||
+		saved.Domain != "127.0.0.1" ||
+		!saved.Expires.Equal(expires) ||
+		saved.MaxAge != 3600 ||
+		!saved.Secure ||
+		!saved.HTTPOnly ||
+		saved.SameSite != http.SameSiteNoneMode ||
+		!saved.Partitioned {
+		t.Fatal("saved cookie attributes were not preserved")
+	}
+
+	second, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore second client: %v", err)
+	}
+	if err := second.Do(context.Background(), http.MethodGet, second.SitePath(client.PathStatDevice), nil, nil); err != nil {
+		t.Fatalf("restored authenticated request: %v", err)
+	}
+	if loginRequests != 1 {
+		t.Fatalf("login requests = %d, want 1", loginRequests)
+	}
+	if authenticatedRequests != 1 {
+		t.Fatalf("authenticated requests = %d, want 1", authenticatedRequests)
+	}
+}
+
+func TestAuthenticatedResponsePersistsRotatedSessionForNewClient(t *testing.T) {
+	var loginRequests int
+	var authenticatedRequests int
+	const (
+		initialCookie = "initial-session-secret"
+		rotatedCookie = "rotated-session-secret"
+		initialCSRF   = "initial-csrf-secret"
+		rotatedCSRF   = "rotated-csrf-secret"
+	)
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
+			loginRequests++
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: initialCookie, Path: "/", Secure: true, HttpOnly: true})
+			w.Header().Set("X-CSRF-Token", initialCSRF)
+			_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device":
+			authenticatedRequests++
+			cookie, err := r.Cookie("TOKEN")
+			if err != nil {
+				t.Fatal("authenticated request did not include TOKEN cookie")
+			}
+			switch authenticatedRequests {
+			case 1:
+				if cookie.Value != initialCookie || r.Header.Get("X-CSRF-Token") != initialCSRF {
+					t.Fatal("first authenticated request did not use initial session")
+				}
+				http.SetCookie(w, &http.Cookie{
+					Name:        "TOKEN",
+					Value:       rotatedCookie,
+					Path:        "/",
+					Secure:      true,
+					HttpOnly:    true,
+					SameSite:    http.SameSiteStrictMode,
+					Partitioned: true,
+				})
+				w.Header().Set("X-CSRF-Token", rotatedCSRF)
+			case 2:
+				if cookie.Value != rotatedCookie || r.Header.Get("X-CSRF-Token") != rotatedCSRF {
+					t.Fatal("new client did not use rotated session")
+				}
+			default:
+				t.Fatalf("authenticated requests = %d, want at most 2", authenticatedRequests)
+			}
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	store := &memorySessionStore{}
+
+	first, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore first client: %v", err)
+	}
+	if err := first.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if err := first.Do(context.Background(), http.MethodGet, first.SitePath(client.PathStatDevice), nil, nil); err != nil {
+		t.Fatalf("rotating authenticated request: %v", err)
+	}
+
+	rotated := store.sessions[cfg.BaseURL()]
+	if rotated.CSRF != rotatedCSRF {
+		t.Fatal("rotated CSRF token was not persisted")
+	}
+	if len(rotated.Cookies) != 1 ||
+		rotated.Cookies[0].Value != rotatedCookie ||
+		rotated.Cookies[0].SameSite != http.SameSiteStrictMode ||
+		!rotated.Cookies[0].Partitioned {
+		t.Fatal("rotated response cookie was not persisted with its attributes")
+	}
+
+	second, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore second client: %v", err)
+	}
+	if err := second.Do(context.Background(), http.MethodGet, second.SitePath(client.PathStatDevice), nil, nil); err != nil {
+		t.Fatalf("restored rotated session request: %v", err)
+	}
+	if loginRequests != 1 {
+		t.Fatalf("login requests = %d, want 1", loginRequests)
+	}
+	if authenticatedRequests != 2 {
+		t.Fatalf("authenticated requests = %d, want 2", authenticatedRequests)
+	}
+}
+
 func TestSavedSession401DeletesSessionAndHintsLogin(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

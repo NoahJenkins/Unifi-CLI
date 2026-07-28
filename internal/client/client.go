@@ -25,6 +25,8 @@ type Client struct {
 	baseURL           string
 	csrf              string
 	cookieJar         http.CookieJar
+	responseCookies   []*http.Cookie
+	sessionCookies    []session.RequestCookie
 	sessionStore      session.Store
 	loggedIn          bool
 	authMethod        string
@@ -35,9 +37,19 @@ func New(cfg config.Config) (*Client, error) {
 	return NewWithSessionStore(cfg, session.NewStore(session.Options{}))
 }
 
+// NewForLocalSessionCleanup creates a client that can delete saved state
+// without loading or parsing that state first.
+func NewForLocalSessionCleanup(cfg config.Config) (*Client, error) {
+	return newWithSessionStore(cfg, session.NewStore(session.Options{}), false)
+}
+
 // NewWithSessionStore creates a controller client that can restore a saved
 // password session. API-key clients deliberately bypass the store entirely.
 func NewWithSessionStore(cfg config.Config, store session.Store) (*Client, error) {
+	return newWithSessionStore(cfg, store, true)
+}
+
+func newWithSessionStore(cfg config.Config, store session.Store, restoreSession bool) (*Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, apperr.Newf(apperr.Internal, "cookie jar: %v", err)
@@ -68,7 +80,7 @@ func NewWithSessionStore(cfg config.Config, store session.Store) (*Client, error
 		c.authMethod = "api_key"
 		return c, nil
 	}
-	if store == nil {
+	if store == nil || !restoreSession {
 		return c, nil
 	}
 	record, found, err := store.Load(c.baseURL)
@@ -87,6 +99,7 @@ func NewWithSessionStore(cfg config.Config, store session.Store) (*Client, error
 	}
 	c.cookieJar.SetCookies(baseURL, record.HTTPCookies())
 	c.csrf = record.CSRF
+	c.sessionCookies = append([]session.RequestCookie(nil), record.Cookies...)
 	c.loggedIn = true
 	c.authMethod = "saved_session"
 	return c, nil
@@ -140,7 +153,15 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	if err := c.ensureAuth(ctx); err != nil {
 		return err
 	}
+	previousCSRF := c.csrf
 	err := c.doJSON(ctx, method, path, in, out, true)
+	if err == nil && c.cfg.APIKey == "" && c.sessionStore != nil &&
+		(c.csrf != previousCSRF || len(c.responseCookies) > 0) {
+		c.mergeResponseCookies(c.responseCookies)
+		if saveErr := c.saveSession(); saveErr != nil {
+			return saveErr
+		}
+	}
 	if !apperr.Is(err, apperr.AuthFailed) || c.cfg.APIKey != "" {
 		return err
 	}
@@ -161,6 +182,24 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return apperr.WithCause(result, cleanupErr)
 	}
 	return result
+}
+
+func (c *Client) mergeResponseCookies(cookies []*http.Cookie) {
+	for _, incoming := range session.CookiesFromHTTP(cookies) {
+		replaced := false
+		for i, existing := range c.sessionCookies {
+			if existing.Name == incoming.Name &&
+				existing.Domain == incoming.Domain &&
+				existing.Path == incoming.Path {
+				c.sessionCookies[i] = incoming
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			c.sessionCookies = append(c.sessionCookies, incoming)
+		}
+	}
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in, out any, _ bool) error {
@@ -197,6 +236,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, in, out any, _
 	if tok := resp.Header.Get("X-CSRF-Token"); tok != "" {
 		c.csrf = tok
 	}
+	c.responseCookies = resp.Cookies()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

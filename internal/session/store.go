@@ -231,19 +231,27 @@ func (s *KeyringStore) Save(session Session, allowFileFallback bool) error {
 		return fmt.Errorf("serialize session: %w", err)
 	}
 	if err := s.keyring.Set(serviceName, controllerAccount(normalized), string(encoded)); err == nil {
+		if cleanupErr := os.Remove(s.fallbackPath(normalized)); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			return fmt.Errorf("remove obsolete fallback session: %w", cleanupErr)
+		}
 		return nil
 	} else if !errors.Is(err, ErrKeyringUnavailable) {
 		return err
 	}
 	if !allowFileFallback {
-		return ErrKeyringUnavailable
+		if _, err := os.Stat(s.fallbackPath(normalized)); errors.Is(err, os.ErrNotExist) {
+			return ErrKeyringUnavailable
+		} else if err != nil {
+			return fmt.Errorf("inspect existing fallback session: %w", err)
+		}
 	}
 	return s.writeFallback(session)
 }
 
 // Delete removes both the keyring record and any fallback file. Missing
-// records are successful. A keyring-unavailable error is also successful after
-// fallback cleanup, so logout works for an explicit headless file fallback.
+// records are successful when the keyring can prove absence. If the keyring is
+// unavailable, deletion succeeds only when an explicit fallback file existed
+// and was removed.
 func (s *KeyringStore) Delete(controller string) error {
 	normalized, err := NormalizeController(controller)
 	if err != nil {
@@ -254,6 +262,7 @@ func (s *KeyringStore) Delete(controller string) error {
 		keyringErr = nil
 	}
 	fileErr := os.Remove(s.fallbackPath(normalized))
+	fallbackRemoved := fileErr == nil
 	if errors.Is(fileErr, os.ErrNotExist) {
 		fileErr = nil
 	}
@@ -261,7 +270,10 @@ func (s *KeyringStore) Delete(controller string) error {
 		return fmt.Errorf("remove fallback session: %w", fileErr)
 	}
 	if errors.Is(keyringErr, ErrKeyringUnavailable) {
-		return nil
+		if fallbackRemoved {
+			return nil
+		}
+		return keyringErr
 	}
 	if keyringErr != nil {
 		return keyringErr
