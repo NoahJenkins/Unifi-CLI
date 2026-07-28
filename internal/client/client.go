@@ -128,17 +128,22 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return err
 	}
 	c.loggedIn = false
+	var cleanupErr error
 	if c.sessionStore != nil {
-		_ = c.sessionStore.Delete(c.baseURL)
+		cleanupErr = c.sessionStore.Delete(c.baseURL)
 	}
 	message := "authentication failed"
 	if authErr := apperr.As(err); authErr != nil && authErr.Message != "" {
 		message = authErr.Message
 	}
-	return apperr.WithHint(
+	result := apperr.WithHint(
 		apperr.New(apperr.AuthFailed, message),
 		"run 'unifi auth login' to create a new saved session",
 	)
+	if cleanupErr != nil {
+		return apperr.WithCause(result, cleanupErr)
+	}
+	return result
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in, out any, _ bool) error {

@@ -21,6 +21,7 @@ type Error struct {
 	Code    Code
 	Message string
 	Hint    string
+	cause   error
 }
 
 func (e *Error) Error() string {
@@ -41,6 +42,19 @@ func Newf(code Code, format string, args ...any) *Error {
 func WithHint(err *Error, hint string) *Error {
 	err.Hint = hint
 	return err
+}
+
+// WithCause preserves underlying error context without rendering it in
+// user-facing error text. This is useful when a lower layer can include
+// sensitive local details.
+func WithCause(err *Error, cause error) *Error {
+	err.cause = cause
+	return err
+}
+
+// Unwrap makes the preserved cause available to programmatic callers.
+func (e *Error) Unwrap() error {
+	return e.cause
 }
 
 func Is(err error, code Code) bool {

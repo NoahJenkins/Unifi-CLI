@@ -3,6 +3,7 @@ package client_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -395,6 +397,45 @@ func TestSavedSession401DeletesSessionAndHintsLogin(t *testing.T) {
 	}
 	if _, found := store.sessions[cfg.BaseURL()]; found {
 		t.Fatal("stale saved session was not deleted")
+	}
+}
+
+func TestSavedSession401PreservesSafeCleanupFailure(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"meta":{"rc":"error","msg":"api.err.LoginRequired"}}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	cfg.Username = "admin"
+	cfg.Password = "secret"
+	cleanupErr := errors.New("delete failed for session token=secret")
+	store := &memorySessionStore{
+		sessions: map[string]session.Session{
+			cfg.BaseURL(): {
+				Controller: cfg.BaseURL(),
+				Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "stale", Path: "/"}},
+			},
+		},
+		deleteErr: cleanupErr,
+	}
+	c, err := client.NewWithSessionStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil)
+	if !apperr.Is(err, apperr.AuthFailed) {
+		t.Fatalf("err = %v, want auth_failed", err)
+	}
+	if got := apperr.As(err).Hint; got != "run 'unifi auth login' to create a new saved session" {
+		t.Fatalf("hint = %q", got)
+	}
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("cleanup error context was not preserved: %v", err)
+	}
+	if strings.Contains(err.Error(), "token=secret") {
+		t.Fatalf("error exposed cleanup details: %v", err)
 	}
 }
 
