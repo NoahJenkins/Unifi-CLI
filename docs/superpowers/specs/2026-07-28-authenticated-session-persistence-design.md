@@ -1,7 +1,7 @@
 # Cross-Platform Session Persistence Design
 
-**Date:** 2026-07-28  
-**Status:** Approved for implementation  
+**Date:** 2026-07-28
+**Status:** Approved for implementation
 
 ## Goal
 
