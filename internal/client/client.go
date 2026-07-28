@@ -93,7 +93,12 @@ func newWithSessionStore(cfg config.Config, store session.Store, restoreSession 
 	if !found {
 		return c, nil
 	}
-	record.NormalizeCookieLifetimes()
+	if record.NormalizeCookieLifetimes() {
+		// Legacy records stored relative Max-Age values. Persist the normalized
+		// deadline without making a working restored session fail if its store is
+		// temporarily unavailable.
+		_ = store.Save(record, false)
+	}
 	baseURL, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, apperr.Newf(apperr.Internal, "parse controller URL: %v", err)

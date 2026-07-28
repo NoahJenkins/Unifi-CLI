@@ -29,6 +29,12 @@ type memorySessionStore struct {
 	deleteErr error
 }
 
+func cloneSession(record session.Session) session.Session {
+	copy := record
+	copy.Cookies = append([]session.RequestCookie(nil), record.Cookies...)
+	return copy
+}
+
 type failAfterFirstSaveStore struct {
 	memorySessionStore
 	saves int
@@ -48,7 +54,7 @@ func (s *memorySessionStore) Load(controller string) (session.Session, bool, err
 		return session.Session{}, false, s.loadErr
 	}
 	record, found := s.sessions[controller]
-	return record, found, nil
+	return cloneSession(record), found, nil
 }
 
 func (s *memorySessionStore) Save(record session.Session, _ bool) error {
@@ -58,7 +64,7 @@ func (s *memorySessionStore) Save(record session.Session, _ bool) error {
 	if s.sessions == nil {
 		s.sessions = make(map[string]session.Session)
 	}
-	s.sessions[record.Controller] = record
+	s.sessions[record.Controller] = cloneSession(record)
 	return nil
 }
 
@@ -650,6 +656,38 @@ func TestCSRFOnlySessionUpdateDoesNotRenewPersistedCookieLifetime(t *testing.T) 
 	persisted := store.sessions[cfg.BaseURL()].Cookies[0]
 	if persisted.MaxAge != 0 {
 		t.Fatalf("persisted MaxAge = %d, want 0 after converting to original deadline", persisted.MaxAge)
+	}
+	if !persisted.Expires.Equal(originalExpiry) {
+		t.Fatalf("persisted Expires = %s, want original deadline %s", persisted.Expires, originalExpiry)
+	}
+}
+
+func TestRestoringLegacyMaxAgeMigratesStoredCookieWithoutRenewingDeadline(t *testing.T) {
+	issuedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	originalExpiry := issuedAt.Add(time.Hour)
+	cfg := config.Config{Host: "controller.example", Port: 443, Site: "default"}
+	store := &memorySessionStore{sessions: map[string]session.Session{
+		cfg.BaseURL(): {
+			Controller: cfg.BaseURL(),
+			UpdatedAt:  issuedAt,
+			Cookies: []session.RequestCookie{{
+				Name:    "TOKEN",
+				Value:   "session-secret",
+				Path:    "/",
+				Secure:  true,
+				MaxAge:  3600,
+				Expires: issuedAt.Add(24 * time.Hour),
+			}},
+		},
+	}}
+
+	if _, err := client.NewWithSessionStore(cfg, store); err != nil {
+		t.Fatalf("NewWithSessionStore: %v", err)
+	}
+
+	persisted := store.sessions[cfg.BaseURL()].Cookies[0]
+	if persisted.MaxAge != 0 {
+		t.Fatalf("persisted MaxAge = %d, want 0 after restore migration", persisted.MaxAge)
 	}
 	if !persisted.Expires.Equal(originalExpiry) {
 		t.Fatalf("persisted Expires = %s, want original deadline %s", persisted.Expires, originalExpiry)
