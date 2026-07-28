@@ -238,6 +238,27 @@ func TestDeleteRemovesKeyringAndFallbackAndIgnoresMissingData(t *testing.T) {
 	}
 }
 
+func TestDeleteSucceedsWhenKeyringIsUnavailableAndFallbackIsRemovedOrAbsent(t *testing.T) {
+	stateHome := t.TempDir()
+	keyring := newMemoryKeyring()
+	keyring.deleteErr = ErrKeyringUnavailable
+	store := NewStore(Options{Keyring: keyring, StateHome: stateHome, GOOS: "linux"})
+	session := sampleSession("https://controller.example:443")
+	if err := store.writeFallback(session); err != nil {
+		t.Fatalf("writeFallback: %v", err)
+	}
+
+	if err := store.Delete(session.Controller); err != nil {
+		t.Fatalf("Delete fallback session: %v", err)
+	}
+	if _, err := os.Stat(store.fallbackPath(session.Controller)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fallback file exists or unexpected error: %v", err)
+	}
+	if err := store.Delete(session.Controller); err != nil {
+		t.Fatalf("Delete absent fallback session: %v", err)
+	}
+}
+
 func TestFallbackUsesUserOnlyDirectoryAndFilePermissions(t *testing.T) {
 	keyring := newMemoryKeyring()
 	keyring.setErr = ErrKeyringUnavailable

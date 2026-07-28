@@ -242,8 +242,8 @@ func (s *KeyringStore) Save(session Session, allowFileFallback bool) error {
 }
 
 // Delete removes both the keyring record and any fallback file. Missing
-// records are successful, but an unavailable keyring is reported after the
-// fallback cleanup has been attempted.
+// records are successful. A keyring-unavailable error is also successful after
+// fallback cleanup, so logout works for an explicit headless file fallback.
 func (s *KeyringStore) Delete(controller string) error {
 	normalized, err := NormalizeController(controller)
 	if err != nil {
@@ -259,6 +259,9 @@ func (s *KeyringStore) Delete(controller string) error {
 	}
 	if fileErr != nil {
 		return fmt.Errorf("remove fallback session: %w", fileErr)
+	}
+	if errors.Is(keyringErr, ErrKeyringUnavailable) {
+		return nil
 	}
 	if keyringErr != nil {
 		return keyringErr
