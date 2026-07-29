@@ -79,10 +79,10 @@ func TestConfigPath(t *testing.T) {
 	}
 }
 
-func TestConfigShowRedactsSecrets(t *testing.T) {
+func TestConfigShowRejectsLegacyCredentialsWithoutLeakingValues(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := []byte("host: 10.0.0.1\nusername: admin\npassword: s3cret\napi_key: key123\n")
+	content := []byte("host: 10.0.0.1\nusername: legacy-username\npassword: legacy-password\napi_key: legacy-api-key\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -112,18 +112,17 @@ func TestConfigShowRedactsSecrets(t *testing.T) {
 	_, _ = buf.ReadFrom(r)
 	_ = r.Close()
 
-	if execErr != nil {
-		t.Fatalf("config show: %v", execErr)
+	if execErr == nil {
+		t.Fatal("config show accepted legacy credentials")
 	}
 	out := buf.String()
-	if strings.Contains(out, "s3cret") || strings.Contains(out, "key123") {
-		t.Fatalf("secrets leaked:\n%s", out)
+	for _, secret := range []string{"legacy-username", "legacy-password", "legacy-api-key"} {
+		if strings.Contains(execErr.Error(), secret) || strings.Contains(out, secret) {
+			t.Fatalf("legacy credential leaked: %q", secret)
+		}
 	}
-	if !strings.Contains(out, "***") {
-		t.Fatalf("expected redacted secrets:\n%s", out)
-	}
-	if !strings.Contains(out, "10.0.0.1") {
-		t.Fatalf("expected host in output:\n%s", out)
+	if !strings.Contains(execErr.Error(), "no longer supported") || !strings.Contains(execErr.Error(), "unifi login") {
+		t.Fatalf("config show error did not provide safe migration guidance: %v", execErr)
 	}
 }
 
