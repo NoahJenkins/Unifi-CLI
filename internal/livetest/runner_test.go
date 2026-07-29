@@ -43,7 +43,7 @@ func validExecutor(t *testing.T) *fakeExecutor {
 		if command.Shape == livetest.ArrayData {
 			data = "[]"
 		}
-		responses[command.Name+" --json --no-session-write"] = fakeResponse{
+		responses[command.Name+" --json"] = fakeResponse{
 			stdout: `{"ok":true,"resource":"` + command.Resource + `","action":"` + command.Action + `","data":` + data + `,"meta":{}}`,
 		}
 	}
@@ -107,14 +107,14 @@ func TestValidateRejectsInvalidListEnvelopes(t *testing.T) {
 
 func TestRunnerRunsDerivedGetForPopulatedDeviceList(t *testing.T) {
 	fake := validExecutor(t)
-	fake.responses["device list --json --no-session-write"] = fakeResponse{stdout: `{"ok":true,"resource":"device","action":"list","data":[{"id":"dev-1"}],"meta":{"count":1}}`}
-	fake.responses["device get dev-1 --json --no-session-write"] = fakeResponse{stdout: `{"ok":true,"resource":"device","action":"get","data":{"id":"dev-1"},"meta":{}}`}
+	fake.responses["device list --json"] = fakeResponse{stdout: `{"ok":true,"resource":"device","action":"list","data":[{"id":"dev-1"}],"meta":{"count":1}}`}
+	fake.responses["device get dev-1 --json"] = fakeResponse{stdout: `{"ok":true,"resource":"device","action":"get","data":{"id":"dev-1"},"meta":{}}`}
 
 	report, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(fake.calls, "device get dev-1 --json --no-session-write") {
+	if !slices.Contains(fake.calls, "device get dev-1 --json") {
 		t.Fatalf("calls = %v", fake.calls)
 	}
 	if got := resultFor(t, report, "device get").Status; got != livetest.Pass {
@@ -124,21 +124,21 @@ func TestRunnerRunsDerivedGetForPopulatedDeviceList(t *testing.T) {
 
 func TestRunnerDerivesPortGetArguments(t *testing.T) {
 	fake := validExecutor(t)
-	fake.responses["port list --json --no-session-write"] = fakeResponse{stdout: `{"ok":true,"resource":"port","action":"list","data":[{"device_id":"dev-1","port_idx":1}],"meta":{"count":1}}`}
-	fake.responses["port get dev-1 1 --json --no-session-write"] = fakeResponse{stdout: `{"ok":true,"resource":"port","action":"get","data":{"device_id":"dev-1","port_idx":1},"meta":{}}`}
+	fake.responses["port list --json"] = fakeResponse{stdout: `{"ok":true,"resource":"port","action":"list","data":[{"device_id":"dev-1","port_idx":1}],"meta":{"count":1}}`}
+	fake.responses["port get dev-1 1 --json"] = fakeResponse{stdout: `{"ok":true,"resource":"port","action":"get","data":{"device_id":"dev-1","port_idx":1},"meta":{}}`}
 
 	_, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(fake.calls, "port get dev-1 1 --json --no-session-write") {
+	if !slices.Contains(fake.calls, "port get dev-1 1 --json") {
 		t.Fatalf("calls = %v", fake.calls)
 	}
 }
 
 func TestRunnerMarksEmptyOptionalListNotConfigured(t *testing.T) {
 	fake := validExecutor(t)
-	fake.responses["firewall list --json --no-session-write"] = fakeResponse{stdout: `{"ok":true,"resource":"firewall","action":"list","data":[],"meta":{"count":0}}`}
+	fake.responses["firewall list --json"] = fakeResponse{stdout: `{"ok":true,"resource":"firewall","action":"list","data":[],"meta":{"count":0}}`}
 
 	report, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
 	if err != nil {
@@ -147,14 +147,14 @@ func TestRunnerMarksEmptyOptionalListNotConfigured(t *testing.T) {
 	if got := resultFor(t, report, "firewall list").Status; got != livetest.NotConfigured {
 		t.Fatalf("status = %s", got)
 	}
-	if slices.Contains(fake.calls, "firewall get rule-1 --json --no-session-write") {
+	if slices.Contains(fake.calls, "firewall get rule-1 --json") {
 		t.Fatalf("unexpected get: %v", fake.calls)
 	}
 }
 
 func TestRunnerRecordsFailureAndContinuesToLaterChecks(t *testing.T) {
 	fake := validExecutor(t)
-	fake.responses["wlan list --json --no-session-write"] = fakeResponse{stdout: "not json"}
+	fake.responses["wlan list --json"] = fakeResponse{stdout: "not json"}
 
 	report, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
 	if err == nil {
@@ -170,7 +170,7 @@ func TestRunnerRecordsFailureAndContinuesToLaterChecks(t *testing.T) {
 
 func TestRunnerFailsWhenPopulatedListCannotDeriveGetArgument(t *testing.T) {
 	fake := validExecutor(t)
-	fake.responses["device list --json --no-session-write"] = fakeResponse{stdout: `{"ok":true,"resource":"device","action":"list","data":[{}],"meta":{"count":1}}`}
+	fake.responses["device list --json"] = fakeResponse{stdout: `{"ok":true,"resource":"device","action":"list","data":[{}],"meta":{"count":1}}`}
 
 	report, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
 	if err == nil {
@@ -183,7 +183,7 @@ func TestRunnerFailsWhenPopulatedListCannotDeriveGetArgument(t *testing.T) {
 
 func TestRunnerDoesNotExposeProcessStderrInFailureSummary(t *testing.T) {
 	fake := validExecutor(t)
-	fake.responses["client list --json --no-session-write"] = fakeResponse{stderr: "api_key=s3cret", exit: 7, err: errors.New("exit status 7")}
+	fake.responses["client list --json"] = fakeResponse{stderr: "api_key=s3cret", exit: 7, err: errors.New("exit status 7")}
 
 	report, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
 	if err == nil {

@@ -45,7 +45,7 @@ func newConfigShowCmd() *cobra.Command {
 			if err != nil {
 				return emitErr("config", "show", err)
 			}
-			data := redactedConfig(rt)
+			data := publicConfig(rt)
 			code := rt.Emit("config", "show", data, nil, nil)
 			if code != 0 {
 				return fmt.Errorf("exit %d", code)
@@ -55,7 +55,7 @@ func newConfigShowCmd() *cobra.Command {
 	}
 }
 
-func redactedConfig(rt *Runtime) map[string]any {
+func publicConfig(rt *Runtime) map[string]any {
 	cfg := rt.Cfg
 	return map[string]any{
 		"host":      cfg.Host,

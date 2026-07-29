@@ -70,7 +70,7 @@ func printData(w io.Writer, data any) {
 			keys = append(keys, k)
 		}
 		// stable-ish order for common fields first
-		order := []string{"host", "site", "auth_method", "path", "username", "port", "insecure", "safe_mode", "timeout"}
+		order := []string{"host", "site", "auth_method", "path", "port", "insecure", "safe_mode", "timeout"}
 		seen := map[string]bool{}
 		for _, k := range order {
 			if val, ok := v[k]; ok {

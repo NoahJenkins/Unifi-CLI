@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke checks for unifi-cli.
 # Default: build + unit tests.
-# Live controller: UNIFI_IT=1 with UNIFI_HOST and credentials set.
+# Live controller: UNIFI_IT=1 with UNIFI_HOST and UNIFI_API_KEY set.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,8 +26,8 @@ if [[ -z "${UNIFI_HOST:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${UNIFI_API_KEY:-}" && ( -z "${UNIFI_USERNAME:-}" || -z "${UNIFI_PASSWORD:-}" ) ]]; then
-  echo "UNIFI_IT=1 requires UNIFI_API_KEY or UNIFI_USERNAME+UNIFI_PASSWORD" >&2
+if [[ -z "${UNIFI_API_KEY:-}" ]]; then
+  echo "UNIFI_IT=1 requires UNIFI_API_KEY" >&2
   exit 1
 fi
 

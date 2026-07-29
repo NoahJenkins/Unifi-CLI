@@ -238,7 +238,7 @@ func (r Runner) runCommand(ctx context.Context, now func() time.Time, executor E
 		result.Summary = "invalid command configuration"
 		return result, nil, false
 	}
-	args := append(append([]string{}, command.Args...), "--json", "--no-session-write")
+	args := append(append([]string{}, command.Args...), "--json")
 	stdout, _, exitCode, err := executor.Run(ctx, r.Binary, args...)
 	if err != nil || exitCode != 0 {
 		result.Summary = exitSummary(exitCode, err)

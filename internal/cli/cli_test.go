@@ -10,7 +10,7 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/cli"
 )
 
-func TestHelpShowsAuthAndConfig(t *testing.T) {
+func TestRootHelpShowsPublicCommandsOnly(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
@@ -22,6 +22,9 @@ func TestHelpShowsAuthAndConfig(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "auth") {
 		t.Fatalf("help missing auth:\n%s", out)
+	}
+	if !strings.Contains(out, "login") || !strings.Contains(out, "logout") {
+		t.Fatalf("help missing top-level auth commands:\n%s", out)
 	}
 	if !strings.Contains(out, "config") {
 		t.Fatalf("help missing config:\n%s", out)
@@ -37,6 +40,9 @@ func TestHelpShowsAuthAndConfig(t *testing.T) {
 	}
 	if !strings.Contains(out, "system") {
 		t.Fatalf("help missing system:\n%s", out)
+	}
+	if strings.Contains(out, "--no-session-write") {
+		t.Fatalf("help retained obsolete session flag:\n%s", out)
 	}
 }
 
@@ -126,6 +132,51 @@ func TestConfigShowRejectsLegacyCredentialsWithoutLeakingValues(t *testing.T) {
 	}
 }
 
+func TestConfigShowPrintsOnlyNonSecretFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("host: 10.0.0.1\nport: 8443\ninsecure: true\nsite: default\nsafe_mode: true\ntimeout: 45s\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("UNIFI_HOST", "")
+	t.Setenv("UNIFI_PASSWORD", "")
+	t.Setenv("UNIFI_API_KEY", "")
+	t.Setenv("UNIFI_USERNAME", "")
+	t.Setenv("UNIFI_CONFIG", "")
+
+	root := cli.NewRoot()
+	oldOut := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	root.SetArgs([]string{"--config", path, "config", "show"})
+	execErr := root.Execute()
+	_ = w.Close()
+	os.Stdout = oldOut
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	_ = r.Close()
+	if execErr != nil {
+		t.Fatalf("config show: %v", execErr)
+	}
+
+	out := buf.String()
+	for _, required := range []string{"host:", "port:", "insecure:", "site:", "safe_mode:", "timeout:"} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("config show missing %q:\n%s", required, out)
+		}
+	}
+	for _, forbidden := range []string{"username", "password", "api_key", "--no-session-write"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("obsolete auth surface %q in output:\n%s", forbidden, out)
+		}
+	}
+}
+
 func TestAuthHelpOnlyShowsReadOnlyStatus(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)
@@ -144,18 +195,21 @@ func TestAuthHelpOnlyShowsReadOnlyStatus(t *testing.T) {
 	}
 }
 
-func TestRootHelpShowsTopLevelLoginAndLogout(t *testing.T) {
+func TestLoginHelpShowsOnlyFileFallbackAuthOption(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
 	root.SetErr(buf)
-	root.SetArgs([]string{"--help"})
+	root.SetArgs([]string{"login", "--help"})
 	if err := root.Execute(); err != nil {
-		t.Fatalf("root help: %v", err)
+		t.Fatalf("login help: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "login") || !strings.Contains(out, "logout") {
-		t.Fatalf("root help missing top-level auth commands:\n%s", out)
+	if !strings.Contains(out, "--file-fallback") {
+		t.Fatalf("login help missing file fallback:\n%s", out)
+	}
+	if strings.Contains(out, "--api-key") {
+		t.Fatalf("login help retained API-key flag:\n%s", out)
 	}
 }
 

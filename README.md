@@ -14,7 +14,7 @@ go build -o unifi ./cmd/unifi
 go install github.com/noahjenkins/unifi-cli/cmd/unifi@latest
 ```
 
-Requires Go 1.22+.
+Requires Go 1.26.5.
 
 ## Configuration
 
@@ -26,7 +26,7 @@ Copy the example:
 ```bash
 mkdir -p ~/.config/unifi-cli
 cp configs/config.example.yaml ~/.config/unifi-cli/config.yaml
-# edit host / credentials
+# edit the controller connection settings
 ```
 
 Example (`configs/config.example.yaml`):
@@ -36,9 +36,6 @@ host: 192.168.1.1
 port: 443
 insecure: true          # local gateway often uses self-signed TLS
 site: default
-username: admin         # optional if api_key set
-# password: set via env preferred
-# api_key: set via env preferred
 safe_mode: true
 timeout: 30s
 ```
@@ -50,47 +47,48 @@ timeout: 30s
 | `UNIFI_HOST` | Controller host |
 | `UNIFI_PORT` | Port (default 443) |
 | `UNIFI_SITE` | Site name/id |
-| `UNIFI_USERNAME` | Local user |
-| `UNIFI_PASSWORD` | Local password |
-| `UNIFI_API_KEY` | API key (preferred when present) |
+| `UNIFI_API_KEY` | Process-only API-key override for CI and scripts |
 | `UNIFI_INSECURE` | Skip TLS verify (`true`/`1`) |
 | `UNIFI_SAFE_MODE` | Extra guards on destructive ops |
 | `UNIFI_CONFIG` | Config file path |
 | `UNIFI_TIMEOUT` | Request timeout (e.g. `30s`) |
 
-**Auth:** if `api_key` / `UNIFI_API_KEY` is set, API key auth is used; otherwise username/password session login. API keys take precedence and are never saved as a session.
+The YAML config contains controller connection settings only. To authenticate
+interactively, run `unifi login`; it asks for an API key through a hidden
+prompt, validates it with the controller, and saves it for later CLI runs.
+`UNIFI_API_KEY` overrides that saved key for the current process, making it
+appropriate for CI and scripts without writing the key locally.
 
 ```bash
-unifi auth status --json   # validate credentials or a saved session (secrets redacted)
-unifi auth login --json    # create and save a new authenticated session
-unifi auth logout --json   # remove local saved session state
-unifi config show          # effective config, secrets redacted
+unifi login
+unifi auth status --json
+unifi logout
+unifi config show          # effective non-secret controller configuration
 unifi config path          # print default config path
 ```
 
-### Saved sessions
+### Saved API keys
 
-After a password login, the CLI saves only the controller session cookies and
-CSRF token—never the password or API key. It uses the operating system's
-native credential store by default:
+After a successful login, the CLI saves the API key in the operating system's
+native credential store, so it remains available after restarting the CLI:
 
 - macOS: Keychain
 - Windows: Credential Manager
 - Linux: Secret Service
 
 Linux requires an available Secret Service provider, such as GNOME Keyring or
-KWallet. On a headless Linux machine without one, opt in explicitly to the
-protected file fallback:
+KWallet. On a headless Linux machine without one, explicitly opt in to the
+protected local-state fallback:
 
 ```bash
-unifi auth login --file-fallback
+unifi login --file-fallback
 ```
 
-The fallback writes session state only (not credentials) in a user-only state
-directory. It is never enabled implicitly. `unifi auth logout` removes locally
-saved state for the configured controller; it does not make a remote logout
-request. Saved sessions can expire and are scoped to one controller, so they
-are not permanent or transferable between machines.
+The fallback is never enabled implicitly and writes protected local API-key
+state only. `unifi logout` removes the locally saved key for the configured
+controller; it does not make a remote logout request. Saved keys are scoped to
+one controller and are not transferable between machines. If the controller
+returns `401`, run `unifi login` again with a valid API key.
 
 ## Global flags
 
@@ -105,7 +103,6 @@ are not permanent or transferable between machines.
 | `--config` | Config path |
 | `--quiet` | Suppress audit stderr |
 | `--raw` | Include upstream UniFi payload under `raw` in JSON |
-| `--no-session-write` | Read using a saved session without refreshing or deleting it |
 
 Identifiers resolve as: internal id → MAC (normalized) → exact name. Ambiguous matches exit with `ambiguous_id`.
 
@@ -116,7 +113,7 @@ Identifiers resolve as: internal id → MAC (normalized) → exact name. Ambiguo
 3. **`safe_mode`** (default `true`) blocks highest-impact ops unless `--force --yes`:
    - `device forget`
    - WAN / destructive network delete
-4. Passwords and API keys are never printed (`auth status`, `config show`, plans mask WLAN passwords).
+4. API keys are never printed (`auth status`, `config show`, and plans mask WLAN secrets).
 5. Successful applies emit an audit line on stderr (unless `--quiet`).
 
 ```bash
@@ -137,7 +134,9 @@ unifi device forget <id> --force --yes
 
 | Resource | Commands |
 |----------|----------|
-| `auth` | `status`, `login`, `logout` |
+| `auth` | `status` |
+| `login` | Validate and save an API key |
+| `logout` | Remove the saved API key for the configured controller |
 | `config` | `path`, `show` |
 | `site` | `list`, `get` |
 | `device` | `list`, `get`, `rename`, `restart`, `locate`, `upgrade`, `adopt`, `forget` |
@@ -196,7 +195,7 @@ go build -o dist/unifi ./cmd/unifi
 go test ./...
 
 # optional live smoke against a real controller
-export UNIFI_HOST=... UNIFI_USERNAME=... UNIFI_PASSWORD=... UNIFI_INSECURE=true
+export UNIFI_HOST=... UNIFI_API_KEY=... UNIFI_INSECURE=true
 UNIFI_IT=1 ./scripts/smoke.sh
 ```
 
@@ -206,7 +205,7 @@ With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
 checks auth status, local configuration, every implemented list command,
 system health/events/alerts, and a derived `get` for each populated resource
 list. Empty firewall-rule and local-DNS lists are reported as `not_configured`
-rather than failures. It never calls `auth login`, a mutation command, or an
+rather than failures. It never calls `login`, a mutation command, or an
 apply/raw flag.
 
 Each live run writes a redacted report to `dist/test-reports/`. Reports contain
