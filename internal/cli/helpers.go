@@ -33,12 +33,7 @@ func loadRuntime(needClient bool) (*Runtime, error) {
 	rt.Site = cfg.Site
 
 	if needClient {
-		var c *client.Client
-		if flagNoSessionWrite {
-			c, err = client.NewReadOnly(cfg)
-		} else {
-			c, err = client.New(cfg)
-		}
+		c, err := client.New(cfg)
 		if err != nil {
 			return rt, err
 		}

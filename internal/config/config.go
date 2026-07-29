@@ -15,9 +15,6 @@ type Config struct {
 	Port     int           `yaml:"port"`
 	Insecure bool          `yaml:"insecure"`
 	Site     string        `yaml:"site"`
-	Username string        `yaml:"username"`
-	Password string        `yaml:"password"`
-	APIKey   string        `yaml:"api_key"`
 	SafeMode bool          `yaml:"safe_mode"`
 	Timeout  time.Duration `yaml:"timeout"`
 }

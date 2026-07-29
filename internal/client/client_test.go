@@ -2,95 +2,62 @@ package client_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
+	"github.com/noahjenkins/unifi-cli/internal/authstore"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/config"
-	"github.com/noahjenkins/unifi-cli/internal/session"
 )
 
-type memorySessionStore struct {
-	sessions  map[string]session.Session
-	loadErr   error
-	saveErr   error
-	deleteErr error
+type memoryAPIKeyStore struct {
+	keys               map[string]string
+	loadErr            error
+	deleteErr          error
+	loadCalls          int
+	saveCalls          int
+	deleteCalls        int
+	deletedControllers []string
 }
 
-func cloneSession(record session.Session) session.Session {
-	copy := record
-	copy.Cookies = append([]session.RequestCookie(nil), record.Cookies...)
-	return copy
-}
-
-type failAfterFirstSaveStore struct {
-	memorySessionStore
-	saves int
-	err   error
-}
-
-type trackingSessionStore struct {
-	memorySessionStore
-	saves   int
-	deletes int
-}
-
-func (s *trackingSessionStore) Save(record session.Session, allowFileFallback bool) error {
-	s.saves++
-	return s.memorySessionStore.Save(record, allowFileFallback)
-}
-
-func (s *trackingSessionStore) Delete(controller string) error {
-	s.deletes++
-	return s.memorySessionStore.Delete(controller)
-}
-
-func (s *failAfterFirstSaveStore) Save(record session.Session, allowFileFallback bool) error {
-	s.saves++
-	if s.saves > 1 {
-		return s.err
-	}
-	return s.memorySessionStore.Save(record, allowFileFallback)
-}
-
-func (s *memorySessionStore) Load(controller string) (session.Session, bool, error) {
+func (s *memoryAPIKeyStore) Load(controller string) (string, bool, error) {
+	s.loadCalls++
 	if s.loadErr != nil {
-		return session.Session{}, false, s.loadErr
+		return "", false, s.loadErr
 	}
-	record, found := s.sessions[controller]
-	return cloneSession(record), found, nil
+	apiKey, found := s.keys[controller]
+	return apiKey, found, nil
 }
 
-func (s *memorySessionStore) Save(record session.Session, _ bool) error {
-	if s.saveErr != nil {
-		return s.saveErr
+func (s *memoryAPIKeyStore) Save(controller, apiKey string, _ bool) error {
+	s.saveCalls++
+	if s.keys == nil {
+		s.keys = make(map[string]string)
 	}
-	if s.sessions == nil {
-		s.sessions = make(map[string]session.Session)
-	}
-	s.sessions[record.Controller] = cloneSession(record)
+	s.keys[controller] = apiKey
 	return nil
 }
 
-func (s *memorySessionStore) Delete(controller string) error {
+func (s *memoryAPIKeyStore) Delete(controller string) error {
+	s.deleteCalls++
+	s.deletedControllers = append(s.deletedControllers, controller)
 	if s.deleteErr != nil {
 		return s.deleteErr
 	}
-	delete(s.sessions, controller)
+	delete(s.keys, controller)
 	return nil
 }
+
+var _ authstore.Store = (*memoryAPIKeyStore)(nil)
 
 func testConfig(t *testing.T, srv *httptest.Server) config.Config {
 	t.Helper()
@@ -115,163 +82,215 @@ func testConfig(t *testing.T, srv *httptest.Server) config.Config {
 	}
 }
 
-func TestReadOnlyClientDoesNotWriteOrDeleteSavedSession(t *testing.T) {
+func TestEnvironmentAPIKeyWinsOverSavedKey(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "environment-key")
+	var gotAPIKey string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("X-API-KEY")
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &memoryAPIKeyStore{keys: map[string]string{cfg.BaseURL(): "saved-key"}}
+	c, err := client.NewWithStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithStore: %v", err)
+	}
+	if c.AuthMethod() != "environment_api_key" {
+		t.Fatalf("AuthMethod() = %q, want environment_api_key", c.AuthMethod())
+	}
+	if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if gotAPIKey != "environment-key" {
+		t.Fatalf("X-API-KEY = %q, want environment-key", gotAPIKey)
+	}
+	if store.loadCalls != 0 {
+		t.Fatalf("store Load calls = %d, want 0", store.loadCalls)
+	}
+}
+
+func TestSavedAPIKeyIsLoadedOnceAndSentByFreshClient(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "")
+	var gotAPIKeys []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKeys = append(gotAPIKeys, r.Header.Get("X-API-KEY"))
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &memoryAPIKeyStore{keys: map[string]string{cfg.BaseURL(): "saved-key"}}
+	c, err := client.NewWithStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithStore: %v", err)
+	}
+	if c.AuthMethod() != "saved_api_key" {
+		t.Fatalf("AuthMethod() = %q, want saved_api_key", c.AuthMethod())
+	}
+	for range 2 {
+		if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+	}
+	if store.loadCalls != 1 {
+		t.Fatalf("store Load calls = %d, want 1", store.loadCalls)
+	}
+	if len(gotAPIKeys) != 2 || gotAPIKeys[0] != "saved-key" || gotAPIKeys[1] != "saved-key" {
+		t.Fatalf("X-API-KEY values = %q, want saved-key twice", gotAPIKeys)
+	}
+}
+
+func TestMissingAPIKeyReturnsNotAuthenticatedBeforeRequest(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "")
 	requests := 0
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.Method != http.MethodGet || r.URL.Path != client.PathSelfSites {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-		if requests == 1 {
-			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "rotated", Path: "/"})
-			w.Header().Set("X-CSRF-Token", "rotated-csrf")
-			_, _ = io.WriteString(w, `{"data":[]}`)
-			return
-		}
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, `{"message":"expired"}`)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
 	cfg := testConfig(t, srv)
-	store := &trackingSessionStore{memorySessionStore: memorySessionStore{sessions: map[string]session.Session{
-		cfg.BaseURL(): {Controller: cfg.BaseURL(), Cookies: []session.RequestCookie{{Name: "TOKEN", Value: "saved", Path: "/"}}},
-	}}}
-	c, err := client.NewReadOnlyWithSessionStore(cfg, store)
+	c, err := client.NewWithStore(cfg, &memoryAPIKeyStore{})
 	if err != nil {
-		t.Fatalf("NewReadOnlyWithSessionStore: %v", err)
+		t.Fatalf("NewWithStore: %v", err)
 	}
-	if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err != nil {
-		t.Fatalf("successful read: %v", err)
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	if !apperr.Is(err, apperr.NotAuthenticated) || requests != 0 {
+		t.Fatalf("missing-key behavior: err=%v requests=%d", err, requests)
 	}
-	if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err == nil {
-		t.Fatal("expired session read unexpectedly succeeded")
-	}
-	if store.saves != 0 || store.deletes != 0 {
-		t.Fatalf("read-only client mutated session store: saves=%d deletes=%d", store.saves, store.deletes)
+	if got := apperr.As(err).Hint; got != "run 'unifi login' to save an API key" {
+		t.Fatalf("hint = %q", got)
 	}
 }
 
-func TestLoginWithPassword(t *testing.T) {
-	var gotBody map[string]string
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/auth/login" && r.Method == http.MethodPost {
-			defer r.Body.Close()
-			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-				t.Errorf("decode login body: %v", err)
-			}
-			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "abc"})
-			w.Header().Set("X-CSRF-Token", "csrf123")
-			w.WriteHeader(http.StatusOK)
-			fixture, err := os.ReadFile(filepath.Join("fixtures", "login_ok.json"))
-			if err != nil {
-				t.Fatalf("read fixture: %v", err)
-			}
-			_, _ = w.Write(fixture)
-			return
-		}
-		t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-
-	c, err := client.NewWithSessionStore(cfg, nil)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := c.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-	if gotBody["username"] != "admin" || gotBody["password"] != "secret" {
-		t.Fatalf("login body = %#v", gotBody)
-	}
-}
-
-func TestAPIKeySkipsLoginBody(t *testing.T) {
-	var sawLogin bool
-	var gotAPIKey string
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/auth/login" {
-			sawLogin = true
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device" {
-			gotAPIKey = r.Header.Get("X-API-KEY")
-			w.Header().Set("Content-Type", "application/json")
-			fixture, err := os.ReadFile(filepath.Join("fixtures", "devices.json"))
-			if err != nil {
-				t.Fatalf("read fixture: %v", err)
-			}
-			_, _ = w.Write(fixture)
-			return
-		}
-		t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.APIKey = "test-api-key"
-
-	c, err := client.NewWithSessionStore(cfg, nil)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := c.Login(context.Background()); err != nil {
-		t.Fatalf("Login with API key: %v", err)
-	}
-	if sawLogin {
-		t.Fatal("Login should not POST when API key is set")
-	}
-
-	var devices []map[string]any
-	path := c.SitePath(client.PathStatDevice)
-	if err := c.Do(context.Background(), http.MethodGet, path, nil, &devices); err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if gotAPIKey != "test-api-key" {
-		t.Fatalf("X-API-KEY = %q", gotAPIKey)
-	}
-	if len(devices) != 2 {
-		t.Fatalf("decoded devices len = %d", len(devices))
-	}
-	if devices[0]["name"] != "Gateway" {
-		t.Fatalf("first device name = %v", devices[0]["name"])
-	}
-}
-
-func TestDoMaps401ToAuthFailed(t *testing.T) {
+func TestSavedAPIKey401DeletesOnlyThatControllerAndHintsLogin(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "")
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, `{"meta":{"rc":"error","msg":"api.err.LoginRequired"}}`)
+		_, _ = io.WriteString(w, `{"message":"expired API key"}`)
 	}))
 	defer srv.Close()
 
 	cfg := testConfig(t, srv)
-	cfg.APIKey = "bad-key"
-
-	c, err := client.NewWithSessionStore(cfg, nil)
+	otherController := "https://other-controller.example:443"
+	store := &memoryAPIKeyStore{keys: map[string]string{
+		cfg.BaseURL():   "expired-key",
+		otherController: "other-key",
+	}}
+	c, err := client.NewWithStore(cfg, store)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewWithStore: %v", err)
 	}
-	err = c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil)
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
 	if !apperr.Is(err, apperr.AuthFailed) {
 		t.Fatalf("err = %v, want auth_failed", err)
+	}
+	if got := apperr.As(err).Hint; got != "run 'unifi login' to save an API key" {
+		t.Fatalf("hint = %q", got)
+	}
+	if store.deleteCalls != 1 || len(store.deletedControllers) != 1 || store.deletedControllers[0] != cfg.BaseURL() {
+		t.Fatalf("deleted controllers = %q, want only %q", store.deletedControllers, cfg.BaseURL())
+	}
+	if _, found := store.keys[cfg.BaseURL()]; found {
+		t.Fatal("expired controller API key was not deleted")
+	}
+	if got := store.keys[otherController]; got != "other-key" {
+		t.Fatalf("other controller API key = %q, want other-key", got)
+	}
+}
+
+func TestSavedAPIKey401PreservesSafeDeleteFailureCause(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	deleteErr := errors.New("keyring path contains secret=do-not-render")
+	store := &memoryAPIKeyStore{
+		keys:      map[string]string{cfg.BaseURL(): "expired-key"},
+		deleteErr: deleteErr,
+	}
+	c, err := client.NewWithStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithStore: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	if !apperr.Is(err, apperr.AuthFailed) {
+		t.Fatalf("err = %v, want auth_failed", err)
+	}
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("delete failure was not preserved as cause: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret=do-not-render") {
+		t.Fatalf("delete failure rendered sensitive detail: %v", err)
+	}
+}
+
+func TestEnvironmentAPIKey401LeavesStoreUntouched(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "environment-key")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &memoryAPIKeyStore{keys: map[string]string{cfg.BaseURL(): "saved-key"}}
+	c, err := client.NewWithStore(cfg, store)
+	if err != nil {
+		t.Fatalf("NewWithStore: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	if !apperr.Is(err, apperr.AuthFailed) {
+		t.Fatalf("err = %v, want auth_failed", err)
+	}
+	if store.loadCalls != 0 || store.deleteCalls != 0 {
+		t.Fatalf("environment key accessed store: loads=%d deletes=%d", store.loadCalls, store.deleteCalls)
+	}
+	if got := store.keys[cfg.BaseURL()]; got != "saved-key" {
+		t.Fatalf("saved API key = %q, want saved-key", got)
+	}
+}
+
+func TestNewWithAPIKeyValidatesEnteredKeyWithoutResolvingEnvironment(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "environment-key")
+	var gotAPIKey, gotPath string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("X-API-KEY")
+		gotPath = r.URL.Path
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "entered-key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	if c.AuthMethod() != "interactive_api_key" {
+		t.Fatalf("AuthMethod() = %q, want interactive_api_key", c.AuthMethod())
+	}
+	if err := c.Validate(context.Background()); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if gotAPIKey != "entered-key" {
+		t.Fatalf("X-API-KEY = %q, want entered-key", gotAPIKey)
+	}
+	if gotPath != client.PathSelfSites {
+		t.Fatalf("request path = %q, want %q", gotPath, client.PathSelfSites)
 	}
 }
 
 func TestDoMapsConnectionError(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	cfg := testConfig(t, srv)
-	cfg.APIKey = "key"
 	srv.Close()
 
-	c, err := client.NewWithSessionStore(cfg, nil)
+	c, err := client.NewWithAPIKey(cfg, "key", "interactive_api_key")
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewWithAPIKey: %v", err)
 	}
 	err = c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil)
 	if !apperr.Is(err, apperr.ControllerUnreachable) {
@@ -280,13 +299,13 @@ func TestDoMapsConnectionError(t *testing.T) {
 }
 
 func TestSitePath(t *testing.T) {
-	c, err := client.NewWithSessionStore(config.Config{
+	c, err := client.NewWithAPIKey(config.Config{
 		Host: "127.0.0.1",
 		Port: 443,
 		Site: "default",
-	}, nil)
+	}, "key", "interactive_api_key")
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewWithAPIKey: %v", err)
 	}
 	if c.Site() != "default" {
 		t.Fatalf("Site() = %q", c.Site())
@@ -300,570 +319,5 @@ func TestSitePath(t *testing.T) {
 	want = "/proxy/network/api/s/default/rest/networkconf/abc"
 	if got != want {
 		t.Fatalf("SitePath multi = %q, want %q", got, want)
-	}
-}
-
-func TestDoSendsCSRFAfterLogin(t *testing.T) {
-	var gotCSRF string
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/auth/login" && r.Method == http.MethodPost:
-			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "sess"})
-			w.Header().Set("X-CSRF-Token", "csrf-from-login")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"unique_id":"u1"}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/proxy/network/api/s/default/rest/wlanconf":
-			gotCSRF = r.Header.Get("X-CSRF-Token")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"meta":{"rc":"ok"},"data":[]}`))
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-
-	c, err := client.NewWithSessionStore(cfg, nil)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := c.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-	if err := c.Do(context.Background(), http.MethodPost, c.SitePath(client.PathRestWlan), map[string]string{"name": "Guest"}, nil); err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if gotCSRF != "csrf-from-login" {
-		t.Fatalf("X-CSRF-Token = %q", gotCSRF)
-	}
-}
-
-func TestLoginRequiresCredentials(t *testing.T) {
-	c, err := client.NewWithSessionStore(config.Config{Host: "127.0.0.1", Port: 443, Site: "default"}, nil)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	err = c.Login(context.Background())
-	if !apperr.Is(err, apperr.ValidationFailed) {
-		t.Fatalf("err = %v, want validation_failed", err)
-	}
-}
-
-func TestSavedSessionRestoresCookieAndCSRFWithoutLogin(t *testing.T) {
-	var gotCookie, gotCSRF string
-	var loginRequests int
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/auth/login" {
-			loginRequests++
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device" {
-			gotCookie = r.Header.Get("Cookie")
-			gotCSRF = r.Header.Get("X-CSRF-Token")
-			_, _ = io.WriteString(w, `{"data":[]}`)
-			return
-		}
-		t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	store := &memorySessionStore{sessions: map[string]session.Session{
-		cfg.BaseURL(): {
-			Controller: cfg.BaseURL(),
-			Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "saved", Path: "/"}},
-			CSRF:       "saved-csrf",
-		},
-	}}
-
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	if c.AuthMethod() != "saved_session" {
-		t.Fatalf("AuthMethod() = %q, want saved_session", c.AuthMethod())
-	}
-	if err := c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil); err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	if gotCookie != "TOKEN=saved" {
-		t.Fatalf("Cookie = %q, want TOKEN=saved", gotCookie)
-	}
-	if gotCSRF != "saved-csrf" {
-		t.Fatalf("X-CSRF-Token = %q, want saved-csrf", gotCSRF)
-	}
-	if loginRequests != 0 {
-		t.Fatalf("login requests = %d, want 0", loginRequests)
-	}
-}
-
-func TestPasswordLoginSavesCookiesAndCSRF(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/auth/login" || r.Method != http.MethodPost {
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-		http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "fresh", Path: "/", HttpOnly: true})
-		w.Header().Set("X-CSRF-Token", "fresh-csrf")
-		_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	store := &memorySessionStore{}
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	if err := c.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	record, found := store.sessions[cfg.BaseURL()]
-	if !found {
-		t.Fatal("saved session missing")
-	}
-	if record.Controller != cfg.BaseURL() {
-		t.Fatalf("Controller = %q, want %q", record.Controller, cfg.BaseURL())
-	}
-	if record.CSRF != "fresh-csrf" {
-		t.Fatalf("CSRF = %q, want fresh-csrf", record.CSRF)
-	}
-	if len(record.Cookies) != 1 || record.Cookies[0].Name != "TOKEN" || record.Cookies[0].Value != "fresh" {
-		t.Fatalf("Cookies = %#v, want fresh TOKEN cookie", record.Cookies)
-	}
-}
-
-func TestPasswordLoginPersistsFullResponseCookieForNewClient(t *testing.T) {
-	var loginRequests int
-	var authenticatedRequests int
-	const (
-		cookieValue = "full-response-cookie-secret"
-		csrfValue   = "full-response-csrf-secret"
-	)
-	expires := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
-
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
-			loginRequests++
-			http.SetCookie(w, &http.Cookie{
-				Name:        "TOKEN",
-				Value:       cookieValue,
-				Path:        "/",
-				Domain:      "127.0.0.1",
-				Expires:     expires,
-				MaxAge:      3600,
-				Secure:      true,
-				HttpOnly:    true,
-				SameSite:    http.SameSiteNoneMode,
-				Partitioned: true,
-			})
-			w.Header().Set("X-CSRF-Token", csrfValue)
-			_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device":
-			if cookie, err := r.Cookie("TOKEN"); err != nil || cookie.Value != cookieValue {
-				t.Fatalf("restored request cookie unavailable")
-			}
-			if got := r.Header.Get("X-CSRF-Token"); got != csrfValue {
-				t.Fatalf("restored CSRF token unavailable")
-			}
-			authenticatedRequests++
-			_, _ = io.WriteString(w, `{"data":[]}`)
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	store := &memorySessionStore{}
-
-	first, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore first client: %v", err)
-	}
-	if err := first.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	record, found := store.sessions[cfg.BaseURL()]
-	if !found || len(record.Cookies) != 1 {
-		t.Fatalf("saved cookie count = %d, found %t, want 1", len(record.Cookies), found)
-	}
-	saved := record.Cookies[0]
-	if saved.Name != "TOKEN" ||
-		saved.Path != "/" ||
-		saved.Domain != "127.0.0.1" ||
-		!saved.Expires.Equal(record.UpdatedAt.Add(time.Hour)) ||
-		saved.MaxAge != 0 ||
-		!saved.Secure ||
-		!saved.HTTPOnly ||
-		saved.SameSite != http.SameSiteNoneMode ||
-		!saved.Partitioned {
-		t.Fatal("saved cookie attributes were not preserved")
-	}
-
-	second, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore second client: %v", err)
-	}
-	if err := second.Do(context.Background(), http.MethodGet, second.SitePath(client.PathStatDevice), nil, nil); err != nil {
-		t.Fatalf("restored authenticated request: %v", err)
-	}
-	if loginRequests != 1 {
-		t.Fatalf("login requests = %d, want 1", loginRequests)
-	}
-	if authenticatedRequests != 1 {
-		t.Fatalf("authenticated requests = %d, want 1", authenticatedRequests)
-	}
-}
-
-func TestAuthenticatedResponsePersistsRotatedSessionForNewClient(t *testing.T) {
-	var loginRequests int
-	var authenticatedRequests int
-	const (
-		initialCookie = "initial-session-secret"
-		rotatedCookie = "rotated-session-secret"
-		initialCSRF   = "initial-csrf-secret"
-		rotatedCSRF   = "rotated-csrf-secret"
-	)
-
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
-			loginRequests++
-			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: initialCookie, Path: "/", Secure: true, HttpOnly: true})
-			w.Header().Set("X-CSRF-Token", initialCSRF)
-			_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/stat/device":
-			authenticatedRequests++
-			cookie, err := r.Cookie("TOKEN")
-			if err != nil {
-				t.Fatal("authenticated request did not include TOKEN cookie")
-			}
-			switch authenticatedRequests {
-			case 1:
-				if cookie.Value != initialCookie || r.Header.Get("X-CSRF-Token") != initialCSRF {
-					t.Fatal("first authenticated request did not use initial session")
-				}
-				http.SetCookie(w, &http.Cookie{
-					Name:        "TOKEN",
-					Value:       rotatedCookie,
-					Path:        "/",
-					Secure:      true,
-					HttpOnly:    true,
-					SameSite:    http.SameSiteStrictMode,
-					Partitioned: true,
-				})
-				w.Header().Set("X-CSRF-Token", rotatedCSRF)
-			case 2:
-				if cookie.Value != rotatedCookie || r.Header.Get("X-CSRF-Token") != rotatedCSRF {
-					t.Fatal("new client did not use rotated session")
-				}
-			default:
-				t.Fatalf("authenticated requests = %d, want at most 2", authenticatedRequests)
-			}
-			_, _ = io.WriteString(w, `{"data":[]}`)
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	store := &memorySessionStore{}
-
-	first, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore first client: %v", err)
-	}
-	if err := first.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-	if err := first.Do(context.Background(), http.MethodGet, first.SitePath(client.PathStatDevice), nil, nil); err != nil {
-		t.Fatalf("rotating authenticated request: %v", err)
-	}
-
-	rotated := store.sessions[cfg.BaseURL()]
-	if rotated.CSRF != rotatedCSRF {
-		t.Fatal("rotated CSRF token was not persisted")
-	}
-	if len(rotated.Cookies) != 1 ||
-		rotated.Cookies[0].Value != rotatedCookie ||
-		rotated.Cookies[0].SameSite != http.SameSiteStrictMode ||
-		!rotated.Cookies[0].Partitioned {
-		t.Fatal("rotated response cookie was not persisted with its attributes")
-	}
-
-	second, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore second client: %v", err)
-	}
-	if err := second.Do(context.Background(), http.MethodGet, second.SitePath(client.PathStatDevice), nil, nil); err != nil {
-		t.Fatalf("restored rotated session request: %v", err)
-	}
-	if loginRequests != 1 {
-		t.Fatalf("login requests = %d, want 1", loginRequests)
-	}
-	if authenticatedRequests != 2 {
-		t.Fatalf("authenticated requests = %d, want 2", authenticatedRequests)
-	}
-}
-
-func TestSuccessfulRequestDoesNotBecomeAuthFailureWhenRotationPersistenceFails(t *testing.T) {
-	const (
-		initialCookie = "initial-session-secret"
-		rotatedCookie = "rotated-session-secret"
-		initialCSRF   = "initial-csrf-secret"
-		rotatedCSRF   = "rotated-csrf-secret"
-	)
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/auth/login":
-			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: initialCookie, Path: "/", Secure: true})
-			w.Header().Set("X-CSRF-Token", initialCSRF)
-			_, _ = io.WriteString(w, `{"meta":{"rc":"ok"}}`)
-		case "/proxy/network/api/s/default/rest/wlanconf":
-			if r.Header.Get("X-CSRF-Token") != initialCSRF {
-				t.Fatal("mutation did not receive the authenticated CSRF token")
-			}
-			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: rotatedCookie, Path: "/", Secure: true})
-			w.Header().Set("X-CSRF-Token", rotatedCSRF)
-			_, _ = io.WriteString(w, `{"data":{"id":"applied"}}`)
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	store := &failAfterFirstSaveStore{err: errors.New("keyring write failed")}
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	if err := c.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	var result map[string]string
-	err = c.Do(context.Background(), http.MethodPost, c.SitePath(client.PathRestWlan), map[string]string{"name": "Guest"}, &result)
-	if err != nil {
-		t.Fatalf("successful controller mutation returned an error after persistence failed: %v", err)
-	}
-	if result["id"] != "applied" {
-		t.Fatalf("mutation result = %#v, want applied result", result)
-	}
-}
-
-func TestCSRFOnlySessionUpdateDoesNotRenewPersistedCookieLifetime(t *testing.T) {
-	issuedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
-	originalExpiry := issuedAt.Add(time.Hour)
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/proxy/network/api/s/default/stat/device" {
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("X-CSRF-Token", "rotated-csrf")
-		_, _ = io.WriteString(w, `{"data":[]}`)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	store := &memorySessionStore{sessions: map[string]session.Session{
-		cfg.BaseURL(): {
-			Controller: cfg.BaseURL(),
-			UpdatedAt:  issuedAt,
-			Cookies: []session.RequestCookie{{
-				Name:    "TOKEN",
-				Value:   "session-secret",
-				Path:    "/",
-				Secure:  true,
-				MaxAge:  3600,
-				Expires: issuedAt.Add(24 * time.Hour),
-			}},
-			CSRF: "original-csrf",
-		},
-	}}
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	if err := c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil); err != nil {
-		t.Fatalf("CSRF-only update: %v", err)
-	}
-
-	persisted := store.sessions[cfg.BaseURL()].Cookies[0]
-	if persisted.MaxAge != 0 {
-		t.Fatalf("persisted MaxAge = %d, want 0 after converting to original deadline", persisted.MaxAge)
-	}
-	if !persisted.Expires.Equal(originalExpiry) {
-		t.Fatalf("persisted Expires = %s, want original deadline %s", persisted.Expires, originalExpiry)
-	}
-}
-
-func TestRestoringLegacyMaxAgeMigratesStoredCookieWithoutRenewingDeadline(t *testing.T) {
-	issuedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
-	originalExpiry := issuedAt.Add(time.Hour)
-	cfg := config.Config{Host: "controller.example", Port: 443, Site: "default"}
-	store := &memorySessionStore{sessions: map[string]session.Session{
-		cfg.BaseURL(): {
-			Controller: cfg.BaseURL(),
-			UpdatedAt:  issuedAt,
-			Cookies: []session.RequestCookie{{
-				Name:    "TOKEN",
-				Value:   "session-secret",
-				Path:    "/",
-				Secure:  true,
-				MaxAge:  3600,
-				Expires: issuedAt.Add(24 * time.Hour),
-			}},
-		},
-	}}
-
-	if _, err := client.NewWithSessionStore(cfg, store); err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-
-	persisted := store.sessions[cfg.BaseURL()].Cookies[0]
-	if persisted.MaxAge != 0 {
-		t.Fatalf("persisted MaxAge = %d, want 0 after restore migration", persisted.MaxAge)
-	}
-	if !persisted.Expires.Equal(originalExpiry) {
-		t.Fatalf("persisted Expires = %s, want original deadline %s", persisted.Expires, originalExpiry)
-	}
-}
-
-func TestSavedSession401DeletesSessionAndHintsLogin(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, `{"meta":{"rc":"error","msg":"api.err.LoginRequired"}}`)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	store := &memorySessionStore{sessions: map[string]session.Session{
-		cfg.BaseURL(): {
-			Controller: cfg.BaseURL(),
-			Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "stale", Path: "/"}},
-		},
-	}}
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	err = c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil)
-	if !apperr.Is(err, apperr.AuthFailed) {
-		t.Fatalf("err = %v, want auth_failed", err)
-	}
-	if got := apperr.As(err).Hint; got != "run 'unifi auth login' to create a new saved session" {
-		t.Fatalf("hint = %q", got)
-	}
-	if _, found := store.sessions[cfg.BaseURL()]; found {
-		t.Fatal("stale saved session was not deleted")
-	}
-}
-
-func TestSavedSession401PreservesSafeCleanupFailure(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, `{"meta":{"rc":"error","msg":"api.err.LoginRequired"}}`)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.Username = "admin"
-	cfg.Password = "secret"
-	cleanupErr := errors.New("delete failed for session token=secret")
-	store := &memorySessionStore{
-		sessions: map[string]session.Session{
-			cfg.BaseURL(): {
-				Controller: cfg.BaseURL(),
-				Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "stale", Path: "/"}},
-			},
-		},
-		deleteErr: cleanupErr,
-	}
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	err = c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil)
-	if !apperr.Is(err, apperr.AuthFailed) {
-		t.Fatalf("err = %v, want auth_failed", err)
-	}
-	if got := apperr.As(err).Hint; got != "run 'unifi auth login' to create a new saved session" {
-		t.Fatalf("hint = %q", got)
-	}
-	if !errors.Is(err, cleanupErr) {
-		t.Fatalf("cleanup error context was not preserved: %v", err)
-	}
-	if strings.Contains(err.Error(), "token=secret") {
-		t.Fatalf("error exposed cleanup details: %v", err)
-	}
-}
-
-func TestAPIKeyDoesNotUseSessionStore(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-API-KEY"); got != "api-key" {
-			t.Fatalf("X-API-KEY = %q, want api-key", got)
-		}
-		_, _ = io.WriteString(w, `{"data":[]}`)
-	}))
-	defer srv.Close()
-
-	cfg := testConfig(t, srv)
-	cfg.APIKey = "api-key"
-	store := &memorySessionStore{loadErr: os.ErrPermission, saveErr: os.ErrPermission, deleteErr: os.ErrPermission}
-	c, err := client.NewWithSessionStore(cfg, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-	if c.AuthMethod() != "api_key" {
-		t.Fatalf("AuthMethod() = %q, want api_key", c.AuthMethod())
-	}
-	if err := c.Do(context.Background(), http.MethodGet, c.SitePath(client.PathStatDevice), nil, nil); err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-}
-
-func TestLogoutLocalSessionDeletesSavedStateWithoutControllerRequest(t *testing.T) {
-	store := &memorySessionStore{sessions: map[string]session.Session{
-		"https://controller.example:8443": {
-			Controller: "https://controller.example:8443",
-			Cookies:    []session.RequestCookie{{Name: "TOKEN", Value: "saved", Path: "/"}},
-			CSRF:       "saved-csrf",
-		},
-	}}
-	c, err := client.NewWithSessionStore(config.Config{
-		Host:   "controller.example",
-		Port:   8443,
-		Site:   "default",
-		APIKey: "configured-api-key",
-	}, store)
-	if err != nil {
-		t.Fatalf("NewWithSessionStore: %v", err)
-	}
-
-	if err := c.LogoutLocalSession(); err != nil {
-		t.Fatalf("LogoutLocalSession: %v", err)
-	}
-	if _, found := store.sessions["https://controller.example:8443"]; found {
-		t.Fatal("saved session was not deleted")
 	}
 }
