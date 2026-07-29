@@ -176,7 +176,13 @@ func (s *KeyringStore) Save(controller, apiKey string, allowFileFallback bool) e
 	if !allowFileFallback {
 		return fmt.Errorf("save API key: %w", ErrKeyringUnavailable)
 	}
-	return s.writeFallback(record)
+	if err := s.writeFallback(record); err != nil {
+		return err
+	}
+	if err := os.Remove(s.legacyFallbackPath(normalized)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove legacy fallback API key: %w", err)
+	}
+	return nil
 }
 
 // Delete removes the keyring account, new fallback, and legacy fallback;

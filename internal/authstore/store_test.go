@@ -136,6 +136,31 @@ func TestSaveUsesFallbackOnlyWhenExplicitlyAllowed(t *testing.T) {
 	}
 }
 
+func TestFallbackSaveRemovesLegacySessionFallback(t *testing.T) {
+	keyring := newMemoryKeyring()
+	keyring.setErr = ErrKeyringUnavailable
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	controller := "https://controller.example:443"
+	legacyPath := store.legacyFallbackPath(controller)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll legacy fallback: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"controller":"https://controller.example:443","csrf":"legacy"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy fallback: %v", err)
+	}
+
+	if err := store.Save(controller, "api-key-secret", true); err != nil {
+		t.Fatalf("Save fallback: %v", err)
+	}
+	key, found, err := store.Load(controller)
+	if err != nil || !found || key != "api-key-secret" {
+		t.Fatalf("Load current fallback = key %q, found %t, err %v", key, found, err)
+	}
+	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy fallback exists or stat failed: %v", err)
+	}
+}
+
 func TestFallbackUsesProtectedPermissionsAndAtomicReplacement(t *testing.T) {
 	keyring := newMemoryKeyring()
 	keyring.setErr = ErrKeyringUnavailable
