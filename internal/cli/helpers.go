@@ -12,6 +12,8 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/render"
 )
 
+var newRuntimeClient = client.New
+
 func loadRuntime(needClient bool) (*Runtime, error) {
 	cfg, err := config.Load(flagConfig)
 	if err != nil {
@@ -33,7 +35,7 @@ func loadRuntime(needClient bool) (*Runtime, error) {
 	rt.Site = cfg.Site
 
 	if needClient {
-		c, err := client.New(cfg)
+		c, err := newRuntimeClient(cfg)
 		if err != nil {
 			return rt, err
 		}

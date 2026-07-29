@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +26,7 @@ type authCommandStore struct {
 	loadCalls      int
 	saveCalls      int
 	deleteCalls    int
+	saveErr        error
 	saveFallback   bool
 	savedKey       string
 	savedBaseURL   string
@@ -41,6 +44,9 @@ func (s *authCommandStore) Save(controller, apiKey string, allowFileFallback boo
 	s.savedBaseURL = controller
 	s.savedKey = apiKey
 	s.saveFallback = allowFileFallback
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	if s.keys == nil {
 		s.keys = make(map[string]string)
 	}
@@ -149,6 +155,98 @@ func TestAuthStatusPrefersEnvironmentAPIKeyWithoutLoadingStore(t *testing.T) {
 	}
 }
 
+func TestControllerErrorsNeverReflectActiveAPIKey(t *testing.T) {
+	const apiKey = "reflected-active-api-key-not-for-output"
+	sources := []string{"saved", "environment"}
+	commands := []string{"status", "ordinary"}
+	formats := []string{"text", "json"}
+	responses := []struct {
+		name     string
+		status   int
+		wantCode string
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, wantCode: "auth_failed"},
+		{name: "unexpected", status: http.StatusBadGateway, wantCode: "internal"},
+	}
+
+	for _, source := range sources {
+		for _, command := range commands {
+			for _, format := range formats {
+				for _, response := range responses {
+					name := strings.Join([]string{source, command, format, response.name}, "/")
+					t.Run(name, func(t *testing.T) {
+						srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							if got := r.Header.Get("X-API-KEY"); got != apiKey {
+								t.Errorf("X-API-KEY = %q, want reflected sentinel", got)
+							}
+							w.WriteHeader(response.status)
+							_, _ = io.WriteString(w, `{"message":"controller reflected `+apiKey+`"}`)
+						}))
+						defer srv.Close()
+
+						cfg := useAuthCommandConfig(t, srv)
+						flagJSON = format == "json"
+						store := &authCommandStore{keys: map[string]string{}}
+						if source == "saved" {
+							store.keys[cfg.BaseURL()] = apiKey
+						} else {
+							t.Setenv("UNIFI_API_KEY", apiKey)
+						}
+
+						var stdout, stderr string
+						var execErr error
+						if command == "status" {
+							useAuthStore(t, store)
+							out := new(bytes.Buffer)
+							errOut := new(bytes.Buffer)
+							cmd := newAuthStatusCmd()
+							cmd.SilenceErrors = true
+							cmd.SilenceUsage = true
+							cmd.SetOut(out)
+							cmd.SetErr(errOut)
+							execErr = cmd.ExecuteContext(context.Background())
+							stdout = out.String()
+							stderr = errOut.String()
+						} else {
+							previousClient := newRuntimeClient
+							newRuntimeClient = func(got config.Config) (*client.Client, error) {
+								return client.NewWithStore(got, store)
+							}
+							t.Cleanup(func() { newRuntimeClient = previousClient })
+							stdout, stderr, execErr = captureProcessOutput(t, runClientList)
+						}
+
+						for outputName, output := range map[string]string{
+							"stdout": stdout,
+							"stderr": stderr,
+							"error":  errorString(execErr),
+						} {
+							if strings.Contains(output, apiKey) {
+								t.Fatalf("%s leaked active API key: %q", outputName, output)
+							}
+						}
+						if format == "json" {
+							var envelope map[string]any
+							if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+								t.Fatalf("JSON stdout is not parseable: %v; stdout=%q", err, stdout)
+							}
+							if !strings.Contains(stdout, `"code": "`+response.wantCode+`"`) {
+								t.Fatalf("JSON output lacks %s code: %q", response.wantCode, stdout)
+							}
+						} else if !strings.Contains(stderr, response.wantCode) {
+							t.Fatalf("text output lacks %s code: %q", response.wantCode, stderr)
+						}
+						if response.status == http.StatusBadGateway &&
+							!strings.Contains(stdout+stderr, strconv.Itoa(response.status)) {
+							t.Fatalf("unexpected-status output lacks HTTP status %d: stdout=%q stderr=%q", response.status, stdout, stderr)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestAuthContainsOnlyReadOnlyStatus(t *testing.T) {
 	cmd := newAuthCmd()
 	subcommands := cmd.Commands()
@@ -224,4 +322,42 @@ func useAuthStore(t *testing.T, store authstore.Store) {
 	previous := newAuthStore
 	newAuthStore = func() authstore.Store { return store }
 	t.Cleanup(func() { newAuthStore = previous })
+}
+
+func captureProcessOutput(t *testing.T, run func() error) (string, string, error) {
+	t.Helper()
+	oldOut := os.Stdout
+	oldErr := os.Stderr
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		t.Fatalf("create stderr pipe: %v", err)
+	}
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+	defer func() {
+		os.Stdout = oldOut
+		os.Stderr = oldErr
+	}()
+
+	execErr := run()
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	stdout, _ := io.ReadAll(stdoutReader)
+	stderr, _ := io.ReadAll(stderrReader)
+	_ = stdoutReader.Close()
+	_ = stderrReader.Close()
+	return string(stdout), string(stderr), execErr
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

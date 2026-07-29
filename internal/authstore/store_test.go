@@ -273,6 +273,29 @@ func TestDeleteRemovesKeyringCurrentAndLegacyFallbacks(t *testing.T) {
 	}
 }
 
+func TestDeleteReportsUnavailableAfterFallbackCleanupWhenNativeKeyMayRemain(t *testing.T) {
+	keyring := newMemoryKeyring()
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	controller := "https://controller.example:443"
+	account := serviceName + ":" + controllerAccount(controller)
+	keyring.entries[account] = `{"controller":"https://controller.example:443","api_key":"retained-native-key"}`
+	if err := store.writeFallback(apiKeyRecord{Controller: controller, APIKey: "fallback-key"}); err != nil {
+		t.Fatalf("write current fallback: %v", err)
+	}
+	keyring.deleteErr = ErrKeyringUnavailable
+
+	err := store.Delete(controller)
+	if !errors.Is(err, ErrKeyringUnavailable) {
+		t.Fatalf("Delete error = %v, want ErrKeyringUnavailable", err)
+	}
+	if _, found := keyring.entries[account]; !found {
+		t.Fatal("test keyring did not retain the native key after deletion failure")
+	}
+	if _, statErr := os.Stat(store.fallbackPath(controller)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("fallback was not cleaned up: %v", statErr)
+	}
+}
+
 func TestDeleteAttemptsLegacyCleanupWhenCurrentFallbackRemovalFails(t *testing.T) {
 	store := NewStore(Options{Keyring: newMemoryKeyring(), StateHome: t.TempDir(), GOOS: "linux"})
 	controller := "https://controller.example:443"

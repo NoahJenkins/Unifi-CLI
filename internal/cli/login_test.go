@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -198,6 +199,73 @@ func TestLoginFileFallbackAppliesOnlyToThatSave(t *testing.T) {
 	}
 	if store.saveCalls != 1 || !store.saveFallback {
 		t.Fatalf("save calls = %d, allowFileFallback = %v", store.saveCalls, store.saveFallback)
+	}
+}
+
+func TestJSONLoginKeepsInteractivePromptOffStdout(t *testing.T) {
+	const apiKey = "json-login-api-key-not-for-output"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	useAuthCommandConfig(t, srv)
+	flagJSON = true
+	useAuthStore(t, &authCommandStore{})
+	previousPrompt := promptAPIKey
+	promptAPIKey = func(_ *os.File, promptOut io.Writer) (string, error) {
+		_, _ = io.WriteString(promptOut, "API key: ")
+		return apiKey, nil
+	}
+	t.Cleanup(func() { promptAPIKey = previousPrompt })
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd := newLoginCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	var envelope map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("JSON stdout is not parseable: %v; stdout=%q", err, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "API key:") {
+		t.Fatalf("JSON stdout contains interactive prompt: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "API key:") {
+		t.Fatalf("stderr lacks interactive prompt: %q", stderr.String())
+	}
+}
+
+func TestLoginGuidesFileFallbackWhenNativeKeyringIsUnavailable(t *testing.T) {
+	const apiKey = "fallback-guidance-api-key-not-for-output"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	useAuthCommandConfig(t, srv)
+	store := &authCommandStore{saveErr: authstore.ErrKeyringUnavailable}
+	useAuthStore(t, store)
+	useAPIPrompt(t, apiKey, nil)
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd := newLoginCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	if err := cmd.ExecuteContext(context.Background()); err == nil {
+		t.Fatal("login succeeded without native keyring or fallback permission")
+	}
+	output := stdout.String() + stderr.String()
+	if !strings.Contains(output, "unifi login --file-fallback") {
+		t.Fatalf("login error lacks file-fallback guidance: %q", output)
+	}
+	if strings.Contains(output, apiKey) {
+		t.Fatalf("login error leaked API key: %q", output)
 	}
 }
 

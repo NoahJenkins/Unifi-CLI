@@ -172,40 +172,21 @@ func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) e
 	return nil
 }
 
-func mapStatus(code int, body []byte) error {
+func mapStatus(code int, _ []byte) error {
 	switch {
 	case code >= 200 && code < 300:
 		return nil
 	case code == http.StatusUnauthorized:
-		return apperr.New(apperr.AuthFailed, statusMessage(body, "authentication failed"))
+		return apperr.Newf(apperr.AuthFailed, "controller returned HTTP status %d: authentication failed", code)
 	case code == http.StatusForbidden:
-		return apperr.New(apperr.PermissionDenied, statusMessage(body, "permission denied"))
+		return apperr.Newf(apperr.PermissionDenied, "controller returned HTTP status %d: permission denied", code)
 	case code == http.StatusNotFound:
-		return apperr.New(apperr.NotFound, statusMessage(body, "not found"))
+		return apperr.Newf(apperr.NotFound, "controller returned HTTP status %d: not found", code)
 	case code == http.StatusConflict:
-		return apperr.New(apperr.Conflict, statusMessage(body, "conflict"))
+		return apperr.Newf(apperr.Conflict, "controller returned HTTP status %d: conflict", code)
 	default:
-		return apperr.Newf(apperr.Internal, "unexpected status %d: %s", code, truncate(string(body), 200))
+		return apperr.Newf(apperr.Internal, "controller returned unexpected HTTP status %d", code)
 	}
-}
-
-func statusMessage(body []byte, fallback string) string {
-	var envelope struct {
-		Meta struct {
-			Msg string `json:"msg"`
-			RC  string `json:"rc"`
-		} `json:"meta"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(body, &envelope); err == nil {
-		if envelope.Meta.Msg != "" {
-			return envelope.Meta.Msg
-		}
-		if envelope.Message != "" {
-			return envelope.Message
-		}
-	}
-	return fallback
 }
 
 func mapTransportError(err error) error {
@@ -233,11 +214,4 @@ func DecodeData(body []byte, out any) error {
 		}
 	}
 	return json.Unmarshal(body, out)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

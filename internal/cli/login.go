@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -38,7 +39,7 @@ func newLoginCmd() *cobra.Command {
 			rt := baseRuntime()
 			rt.Out = cmd.OutOrStdout()
 			rt.Err = cmd.ErrOrStderr()
-			apiKey, err := promptAPIKey(os.Stdin, rt.Out)
+			apiKey, err := promptAPIKey(os.Stdin, rt.Err)
 			if err != nil {
 				return emitAuthError(rt, "login", err)
 			}
@@ -59,6 +60,15 @@ func newLoginCmd() *cobra.Command {
 				return emitAuthError(rt, "login", err)
 			}
 			if err := newAuthStore().Save(rt.Cfg.BaseURL(), apiKey, allowFileFallback); err != nil {
+				if errors.Is(err, authstore.ErrKeyringUnavailable) && !allowFileFallback {
+					err = apperr.WithCause(
+						apperr.WithHint(
+							apperr.New(apperr.Internal, "native credential store is unavailable"),
+							"retry with 'unifi login --file-fallback' to use protected local storage",
+						),
+						err,
+					)
+				}
 				return emitAuthError(rt, "login", err)
 			}
 

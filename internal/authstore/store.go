@@ -196,14 +196,11 @@ func (s *KeyringStore) Delete(controller string) error {
 	if errors.Is(keyringErr, ErrNotFound) {
 		keyringErr = nil
 	}
-	removedFallback, cleanupErr := s.removeFallbacksWithStatus(normalized)
+	_, cleanupErr := s.removeFallbacksWithStatus(normalized)
 	if cleanupErr != nil {
 		return cleanupErr
 	}
 	if errors.Is(keyringErr, ErrKeyringUnavailable) {
-		if removedFallback {
-			return nil
-		}
 		return fmt.Errorf("delete stored API key: %w", ErrKeyringUnavailable)
 	}
 	if keyringErr != nil {
