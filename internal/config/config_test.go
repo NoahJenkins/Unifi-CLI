@@ -73,14 +73,19 @@ func TestLoadIgnoresAPIKeyEnvironment(t *testing.T) {
 	if err := os.WriteFile(path, []byte("host: 10.0.0.1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("UNIFI_API_KEY", "legacy-secret")
-
-	cfg, err := config.Load(path)
+	t.Setenv("UNIFI_API_KEY", "")
+	want, err := config.Load(path)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("Load without API-key environment: %v", err)
 	}
-	if cfg.APIKey != "" {
-		t.Fatalf("API key environment changed config: %+v", cfg)
+
+	t.Setenv("UNIFI_API_KEY", "legacy-secret")
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load with API-key environment: %v", err)
+	}
+	if got != want {
+		t.Fatalf("UNIFI_API_KEY changed non-secret config: got %+v, want %+v", got, want)
 	}
 }
 

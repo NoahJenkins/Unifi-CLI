@@ -126,7 +126,7 @@ func TestConfigShowRejectsLegacyCredentialsWithoutLeakingValues(t *testing.T) {
 	}
 }
 
-func TestAuthHelp(t *testing.T) {
+func TestAuthHelpOnlyShowsReadOnlyStatus(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
@@ -136,22 +136,26 @@ func TestAuthHelp(t *testing.T) {
 		t.Fatalf("auth help: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "status") || !strings.Contains(out, "login") || !strings.Contains(out, "logout") {
-		t.Fatalf("auth help missing verbs:\n%s", out)
+	if !strings.Contains(out, "status") {
+		t.Fatalf("auth help missing status:\n%s", out)
+	}
+	if strings.Contains(out, "login") || strings.Contains(out, "logout") {
+		t.Fatalf("auth help retained mutating commands:\n%s", out)
 	}
 }
 
-func TestAuthLoginHelpShowsFileFallback(t *testing.T) {
+func TestRootHelpShowsTopLevelLoginAndLogout(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
 	root.SetErr(buf)
-	root.SetArgs([]string{"auth", "login", "--help"})
+	root.SetArgs([]string{"--help"})
 	if err := root.Execute(); err != nil {
-		t.Fatalf("auth login help: %v", err)
+		t.Fatalf("root help: %v", err)
 	}
-	if out := buf.String(); !strings.Contains(out, "--file-fallback") {
-		t.Fatalf("auth login help missing --file-fallback:\n%s", out)
+	out := buf.String()
+	if !strings.Contains(out, "login") || !strings.Contains(out, "logout") {
+		t.Fatalf("root help missing top-level auth commands:\n%s", out)
 	}
 }
 

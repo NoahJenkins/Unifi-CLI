@@ -39,7 +39,7 @@ func newConfigPathCmd() *cobra.Command {
 func newConfigShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show",
-		Short: "Print effective config with secrets redacted",
+		Short: "Print effective non-secret config",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rt, err := loadRuntime(false)
 			if err != nil {
@@ -57,22 +57,11 @@ func newConfigShowCmd() *cobra.Command {
 
 func redactedConfig(rt *Runtime) map[string]any {
 	cfg := rt.Cfg
-	password := ""
-	if cfg.Password != "" {
-		password = "***"
-	}
-	apiKey := ""
-	if cfg.APIKey != "" {
-		apiKey = "***"
-	}
 	return map[string]any{
 		"host":      cfg.Host,
 		"port":      cfg.Port,
 		"insecure":  cfg.Insecure,
 		"site":      cfg.Site,
-		"username":  cfg.Username,
-		"password":  password,
-		"api_key":   apiKey,
 		"safe_mode": cfg.SafeMode,
 		"timeout":   cfg.Timeout.String(),
 	}

@@ -36,6 +36,8 @@ func NewRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&flagTimeout, "timeout", "", "per-command timeout")
 	root.AddCommand(
 		newAuthCmd(),
+		newLoginCmd(),
+		newLogoutCmd(),
 		newConfigCmd(),
 		newDeviceCmd(),
 		newClientCmd(),
