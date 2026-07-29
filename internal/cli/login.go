@@ -35,12 +35,14 @@ func newLoginCmd() *cobra.Command {
 		Short: "Validate and save a controller API key",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rt, err := loadAuthCommandRuntime(cmd)
+			rt := baseRuntime()
+			rt.Out = cmd.OutOrStdout()
+			rt.Err = cmd.ErrOrStderr()
+			apiKey, err := promptAPIKey(os.Stdin, rt.Out)
 			if err != nil {
 				return emitAuthError(rt, "login", err)
 			}
-
-			apiKey, err := promptAPIKey(os.Stdin, rt.Out)
+			rt, err = loadAuthCommandRuntime(cmd)
 			if err != nil {
 				return emitAuthError(rt, "login", err)
 			}

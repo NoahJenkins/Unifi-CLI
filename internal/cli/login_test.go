@@ -217,6 +217,34 @@ func TestPromptAPIKeyRejectsNonTerminalWithEnvironmentGuidance(t *testing.T) {
 	}
 }
 
+func TestLoginNonInteractiveReportsAPIKeyGuidanceBeforeMissingHost(t *testing.T) {
+	t.Setenv("UNIFI_CONFIG", t.TempDir()+"/missing.yaml")
+	t.Setenv("UNIFI_HOST", "")
+	t.Setenv("UNIFI_API_KEY", "")
+	t.Setenv("UNIFI_USERNAME", "")
+	t.Setenv("UNIFI_PASSWORD", "")
+	resetAuthCommandFlags(t)
+
+	useAPIPrompt(t, "", apperr.WithHint(
+		apperr.New(apperr.ValidationFailed, "interactive login requires a terminal"),
+		apiKeyAutomationHint,
+	))
+	output := new(bytes.Buffer)
+	cmd := newLoginCmd()
+	cmd.SetOut(output)
+	cmd.SetErr(output)
+
+	if err := cmd.ExecuteContext(context.Background()); err == nil {
+		t.Fatal("login accepted non-interactive input")
+	}
+	if got := output.String(); !strings.Contains(got, "UNIFI_API_KEY") {
+		t.Fatalf("login output lacks API-key guidance: %q", got)
+	}
+	if strings.Contains(output.String(), "host is required") {
+		t.Fatalf("login checked the host before rejecting non-interactive input: %q", output.String())
+	}
+}
+
 func TestPromptAPIKeyHidesInputAndTrimsWhitespace(t *testing.T) {
 	previousTerminal := isTerminal
 	previousReadPassword := readPassword
