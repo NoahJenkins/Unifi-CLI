@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/authstore"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/config"
@@ -44,11 +45,11 @@ func newLoginCmd() *cobra.Command {
 				return emitAuthError(rt, "login", err)
 			}
 			validationClient, err := newClientWithAPIKey(rt.Cfg, apiKey, "interactive_api_key")
-			if err == nil {
-				err = validationClient.Validate(cmd.Context())
-			}
 			if err != nil {
-				return emitAuthError(rt, "login", err)
+				return emitAuthError(rt, "login", safeAPIKeyValidationError(err))
+			}
+			if err := validationClient.Validate(cmd.Context()); err != nil {
+				return emitAuthError(rt, "login", safeAPIKeyValidationError(err))
 			}
 
 			allowFileFallback, err := cmd.Flags().GetBool("file-fallback")
@@ -109,4 +110,30 @@ func loadAuthCommandRuntime(cmd *cobra.Command) (*Runtime, error) {
 
 func emitAuthError(rt *Runtime, action string, err error) error {
 	return emittedExit(rt.Emit("auth", action, nil, nil, err))
+}
+
+func safeAPIKeyValidationError(err error) error {
+	if appError := apperr.As(err); appError != nil {
+		switch appError.Code {
+		case apperr.AuthFailed, apperr.NotAuthenticated:
+			return apperr.WithHint(
+				apperr.New(apperr.AuthFailed, "API key validation failed"),
+				"verify the API key and controller access",
+			)
+		case apperr.PermissionDenied:
+			return apperr.WithHint(
+				apperr.New(apperr.PermissionDenied, "API key is not authorized"),
+				"verify the API key's controller permissions",
+			)
+		case apperr.ControllerUnreachable:
+			return apperr.WithHint(
+				apperr.New(apperr.ControllerUnreachable, "cannot reach controller to validate API key"),
+				"check host, port, TLS settings, and that the controller is online",
+			)
+		}
+	}
+	return apperr.WithHint(
+		apperr.New(apperr.ValidationFailed, "API key validation failed"),
+		"verify the controller address and API key, then try again",
+	)
 }

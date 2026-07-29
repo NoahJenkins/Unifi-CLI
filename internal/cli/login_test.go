@@ -96,7 +96,7 @@ func TestLoginValidationFailurePreservesExistingSavedKey(t *testing.T) {
 		rejectedKey = "rejected-interactive-key"
 	)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"invalid API key"}`, http.StatusUnauthorized)
+		http.Error(w, `{"message":"invalid API key `+rejectedKey+`"}`, http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 
@@ -120,6 +120,60 @@ func TestLoginValidationFailurePreservesExistingSavedKey(t *testing.T) {
 	}
 	if strings.Contains(output.String(), rejectedKey) || strings.Contains(output.String(), existingKey) {
 		t.Fatalf("failed login output leaked an API key: %q", output.String())
+	}
+}
+
+func TestLoginValidationFailureNeverEchoesReflectedAPIKey(t *testing.T) {
+	const apiKey = "reflected-api-key-not-for-output"
+	responses := []struct {
+		name     string
+		status   int
+		wantCode string
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, wantCode: "auth_failed"},
+		{name: "forbidden", status: http.StatusForbidden, wantCode: "permission_denied"},
+		{name: "unexpected", status: http.StatusBadGateway, wantCode: "validation_failed"},
+	}
+	for _, response := range responses {
+		t.Run(response.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"message":"rejected `+apiKey+`"}`, response.status)
+			}))
+			defer srv.Close()
+
+			for _, jsonOutput := range []bool{false, true} {
+				name := "text"
+				if jsonOutput {
+					name = "json"
+				}
+				t.Run(name, func(t *testing.T) {
+					useAuthCommandConfig(t, srv)
+					flagJSON = jsonOutput
+					useAuthStore(t, &authCommandStore{})
+					useAPIPrompt(t, apiKey, nil)
+
+					stdout := new(bytes.Buffer)
+					stderr := new(bytes.Buffer)
+					cmd := newLoginCmd()
+					cmd.SetOut(stdout)
+					cmd.SetErr(stderr)
+					if err := cmd.ExecuteContext(context.Background()); err == nil {
+						t.Fatal("login accepted a reflected rejected API key")
+					}
+					for stream, output := range map[string]string{
+						"stdout": stdout.String(),
+						"stderr": stderr.String(),
+					} {
+						if strings.Contains(output, apiKey) {
+							t.Fatalf("%s leaked reflected API key: %q", stream, output)
+						}
+					}
+					if jsonOutput && !strings.Contains(stdout.String(), `"code": "`+response.wantCode+`"`) {
+						t.Fatalf("JSON output lacks generic %s result: %q", response.wantCode, stdout.String())
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -217,6 +271,9 @@ func TestPromptAPIKeyRejectsEmptyInputWithoutEchoingIt(t *testing.T) {
 	_, err = promptAPIKey(in, output)
 	if !apperr.Is(err, apperr.ValidationFailed) {
 		t.Fatalf("prompt error = %v, want validation_failed", err)
+	}
+	if !strings.Contains(err.Error(), "UNIFI_API_KEY") {
+		t.Fatalf("empty prompt error lacks UNIFI_API_KEY guidance: %v", err)
 	}
 	if strings.Contains(err.Error(), " \t\n") {
 		t.Fatalf("prompt error echoed input: %q", err.Error())

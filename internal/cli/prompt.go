@@ -10,6 +10,8 @@ import (
 	"golang.org/x/term"
 )
 
+const apiKeyAutomationHint = "set UNIFI_API_KEY for non-interactive authentication"
+
 var (
 	isTerminal   = term.IsTerminal
 	readPassword = term.ReadPassword
@@ -20,7 +22,7 @@ func promptAPIKeyFromTerminal(in *os.File, out io.Writer) (string, error) {
 	if !isTerminal(int(in.Fd())) {
 		return "", apperr.WithHint(
 			apperr.New(apperr.ValidationFailed, "interactive login requires a terminal"),
-			"set UNIFI_API_KEY for non-interactive authentication",
+			apiKeyAutomationHint,
 		)
 	}
 	if _, err := fmt.Fprint(out, "API key: "); err != nil {
@@ -46,7 +48,10 @@ func promptAPIKeyFromTerminal(in *os.File, out io.Writer) (string, error) {
 
 	apiKey := strings.TrimSpace(string(input))
 	if apiKey == "" {
-		return "", apperr.New(apperr.ValidationFailed, "API key is required")
+		return "", apperr.WithHint(
+			apperr.New(apperr.ValidationFailed, "API key is required"),
+			apiKeyAutomationHint,
+		)
 	}
 	return apiKey, nil
 }
