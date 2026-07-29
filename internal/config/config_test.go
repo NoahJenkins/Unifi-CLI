@@ -37,6 +37,9 @@ func TestLoadRejectsLegacyCredentials(t *testing.T) {
 		{name: "username config", contents: "host: 10.0.0.1\nusername: legacy-secret\n"},
 		{name: "password config", contents: "host: 10.0.0.1\npassword: legacy-secret\n"},
 		{name: "api key config", contents: "host: 10.0.0.1\napi_key: legacy-secret\n"},
+		{name: "merged username config", contents: "legacy: &legacy\n  username: legacy-secret\n<<: *legacy\nhost: 10.0.0.1\n"},
+		{name: "merged password config", contents: "legacy: &legacy\n  password: legacy-secret\n<<: *legacy\nhost: 10.0.0.1\n"},
+		{name: "merged api key config", contents: "legacy: &legacy\n  api_key: legacy-secret\n<<: *legacy\nhost: 10.0.0.1\n"},
 		{name: "username environment", contents: "host: 10.0.0.1\n", env: "UNIFI_USERNAME"},
 		{name: "password environment", contents: "host: 10.0.0.1\n", env: "UNIFI_PASSWORD"},
 	}
