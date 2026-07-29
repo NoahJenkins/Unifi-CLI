@@ -75,8 +75,9 @@ existing saved key.
 
 Configuration contains only non-secret controller settings: host, port, TLS
 behavior, site, safe mode, and timeout. `username`, `password`, and `api_key`
-are removed from the config schema, example config, environment documentation,
-and runtime configuration object.
+are removed from the config schema, example config, user-credential environment
+documentation, and runtime configuration object. `UNIFI_API_KEY` remains
+documented solely as the process-only automation override.
 
 Existing configurations that contain any of those keys fail with a concise
 migration message. The message tells users to remove the secret setting and
