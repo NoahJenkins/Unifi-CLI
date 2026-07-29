@@ -42,6 +42,15 @@ func Load(path string) (Config, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err == nil {
+		var fields map[string]yaml.Node
+		if err := yaml.Unmarshal(data, &fields); err != nil {
+			return Config{}, fmt.Errorf("parse config: %w", err)
+		}
+		for _, name := range []string{"username", "password", "api_key"} {
+			if _, ok := fields[name]; ok {
+				return Config{}, legacyCredentialError(name)
+			}
+		}
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, fmt.Errorf("parse config: %w", err)
 		}
@@ -51,9 +60,11 @@ func Load(path string) (Config, error) {
 	// timeout may unmarshal as nanoseconds if int; support string via custom if needed later
 	overrideString(&cfg.Host, "UNIFI_HOST")
 	overrideString(&cfg.Site, "UNIFI_SITE")
-	overrideString(&cfg.Username, "UNIFI_USERNAME")
-	overrideString(&cfg.Password, "UNIFI_PASSWORD")
-	overrideString(&cfg.APIKey, "UNIFI_API_KEY")
+	for _, name := range []string{"UNIFI_USERNAME", "UNIFI_PASSWORD"} {
+		if os.Getenv(name) != "" {
+			return Config{}, legacyCredentialError(name)
+		}
+	}
 	if v := os.Getenv("UNIFI_PORT"); v != "" {
 		p, err := strconv.Atoi(v)
 		if err != nil {
@@ -81,6 +92,10 @@ func Load(path string) (Config, error) {
 		cfg.Port = 443
 	}
 	return cfg, nil
+}
+
+func legacyCredentialError(name string) error {
+	return fmt.Errorf("config %q is no longer supported; remove it and run 'unifi login'", name)
 }
 
 func overrideString(dst *string, env string) {

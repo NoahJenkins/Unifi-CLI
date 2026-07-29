@@ -6,6 +6,7 @@ type Code string
 
 const (
 	AuthFailed            Code = "auth_failed"
+	NotAuthenticated      Code = "not_authenticated"
 	ControllerUnreachable Code = "controller_unreachable"
 	NotFound              Code = "not_found"
 	AmbiguousID           Code = "ambiguous_id"

@@ -25,6 +25,13 @@ func TestNewf(t *testing.T) {
 	}
 }
 
+func TestNotAuthenticatedCode(t *testing.T) {
+	err := apperr.New(apperr.NotAuthenticated, "not authenticated")
+	if !apperr.Is(err, apperr.NotAuthenticated) {
+		t.Fatal("missing NotAuthenticated code")
+	}
+}
+
 func TestIsAndAs(t *testing.T) {
 	err := apperr.New(apperr.ValidationFailed, "bad input")
 	if !apperr.Is(err, apperr.ValidationFailed) {
