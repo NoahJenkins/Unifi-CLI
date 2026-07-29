@@ -10,6 +10,8 @@ import (
 )
 
 func TestLoadFromFileAndEnv(t *testing.T) {
+	t.Setenv("UNIFI_HOST", "")
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := []byte("host: 10.0.0.1\nport: 443\nsite: default\ninsecure: true\nsafe_mode: true\n")
