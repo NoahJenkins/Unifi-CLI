@@ -1,3 +1,4 @@
 .worktrees/
 .superpowers/
-dist/test-reports/
+/dist/
+/unifi
