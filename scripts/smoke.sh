@@ -13,6 +13,9 @@ echo "==> build"
 mkdir -p "$(dirname "$BIN")"
 go build -o "$BIN" ./cmd/unifi
 
+echo "==> vet"
+go vet ./...
+
 echo "==> unit tests"
 go test ./...
 
