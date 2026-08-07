@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -58,7 +57,7 @@ func NewNetworkService(api NetworkAPI) *NetworkService {
 }
 
 func (s *NetworkService) List(ctx context.Context) ([]Network, error) {
-	raw, official, err := fetchNetworkObjects(ctx, s.api)
+	raw, official, err := fetchOfficialSite(s.api, ctx, "networks")
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +79,18 @@ func (s *NetworkService) Get(ctx context.Context, id string) (Network, error) {
 	if err != nil {
 		return Network{}, err
 	}
-	return resolve.One(items, id)
+	overview, err := resolve.One(items, id)
+	if err != nil {
+		return Network{}, err
+	}
+	if !supportsOfficialDetails(s.api) || !looksLikeUUID(overview.ID) {
+		return overview, nil
+	}
+	detail, err := fetchOfficialSiteDetail(s.api, ctx, overview.ID, "networks")
+	if err != nil {
+		return Network{}, err
+	}
+	return mergeOfficialNetworkDetail(overview, NormalizeNetwork(detail)), nil
 }
 
 func (s *NetworkService) listLegacy(ctx context.Context) ([]Network, error) {
@@ -100,7 +110,24 @@ func (s *NetworkService) getLegacy(ctx context.Context, id string) (Network, err
 	if err != nil {
 		return Network{}, err
 	}
-	return resolve.One(items, id)
+	if item, ok := findExactID(items, id); ok {
+		return item, nil
+	}
+	if !looksLikeUUID(id) {
+		return resolve.One(items, id)
+	}
+	raw, official, err := fetchOfficialSite(s.api, ctx, "networks")
+	if err != nil {
+		return Network{}, err
+	}
+	if !official {
+		return resolve.One(items, id)
+	}
+	officialItems := make([]Network, 0, len(raw))
+	for _, item := range raw {
+		officialItems = append(officialItems, NormalizeNetwork(item))
+	}
+	return resolveLegacyMutationTarget(items, officialItems, id, "network", func(a, b Network) bool { return sameName(a, b) })
 }
 
 func (s *NetworkService) Create(ctx context.Context, in NetworkInput) (plan.Plan, error) {
@@ -236,9 +263,6 @@ func NormalizeNetwork(m map[string]any) Network {
 		DHCPEnabled: boolField(m, "dhcpd_enabled"),
 		DomainName:  strField(m, "domain_name"),
 	}
-	if n.Purpose == "" {
-		n.Purpose = strings.ToLower(strField(m, "management"))
-	}
 	if ipv4, ok := m["ipv4Configuration"].(map[string]any); ok {
 		host := strField(ipv4, "hostIpAddress")
 		prefix := intField(ipv4, "prefixLength")
@@ -267,23 +291,17 @@ func NormalizeNetwork(m map[string]any) Network {
 	return n
 }
 
-func fetchNetworkObjects(ctx context.Context, api any) ([]map[string]any, bool, error) {
-	raw, official, err := fetchOfficialSite(api, ctx, "networks")
-	if err != nil || !official || !supportsOfficialDetails(api) {
-		return raw, official, err
+func mergeOfficialNetworkDetail(overview, detail Network) Network {
+	if detail.ID == "" {
+		detail.ID = overview.ID
 	}
-	for i, overview := range raw {
-		id := strField(overview, "id")
-		if id == "" {
-			continue
-		}
-		detail, err := fetchOfficialSiteDetail(api, ctx, id, "networks")
-		if err != nil {
-			return nil, true, err
-		}
-		raw[i] = detail
+	if detail.Name == "" {
+		detail.Name = overview.Name
 	}
-	return raw, true, nil
+	if detail.VLAN == nil {
+		detail.VLAN = overview.VLAN
+	}
+	return detail
 }
 
 func networkInputBody(in NetworkInput) map[string]any {

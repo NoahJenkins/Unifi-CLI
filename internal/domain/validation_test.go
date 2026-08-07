@@ -39,6 +39,10 @@ func TestWlanInputValidation(t *testing.T) {
 		{Name: "", Security: "open"},
 		{Name: "Bad security", Security: "rot13"},
 		{Name: "Bad band", Security: "open", Band: "900mhz"},
+		{Name: "Missing PSK", Security: "wpapsk"},
+		{Name: "Missing WPA2 PSK", Security: "wpa2_personal"},
+		{Name: "Missing WPA3 PSK", Security: "wpa3_personal"},
+		{Name: "Missing transition PSK", Security: "wpa2_wpa3_personal"},
 	} {
 		if _, err := svc.Create(ctx, input); !apperr.Is(err, apperr.ValidationFailed) {
 			t.Errorf("Create(%+v) error = %v, want validation_failed", input, err)
@@ -91,6 +95,9 @@ func TestRequiredDeviceRenameAndResolverValidation(t *testing.T) {
 	if _, _, err := deviceSvc.Rename(ctx, "gw1", ""); !apperr.Is(err, apperr.ValidationFailed) {
 		t.Fatalf("empty device name error = %v", err)
 	}
+	if _, err := deviceSvc.ApplyRename(ctx, "gw1", ""); !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("ApplyRename empty device name error = %v", err)
+	}
 
 	dnsAPI := &fakeDNSAPI{networks: fixtureNetworks(t)}
 	dnsSvc := domain.NewDNSService(dnsAPI)
@@ -125,16 +132,15 @@ func TestNullableUpdateFieldsUseExplicitClearSemantics(t *testing.T) {
 	}
 
 	rules := fixtureFirewallRules(t)
-	rules[0]["description"] = "temporary"
 	rules[0]["src_address"] = "192.0.2.0/24"
 	rules[0]["dst_address"] = "198.51.100.0/24"
 	firewallSvc := domain.NewFirewallService(&fakeFirewallAPI{rules: rules})
-	firewallPlan, _, err := firewallSvc.Update(ctx, "fw1", domain.FirewallInput{ClearDescription: true, ClearSrc: true, ClearDst: true})
+	firewallPlan, _, err := firewallSvc.Update(ctx, "fw1", domain.FirewallInput{ClearSrc: true, ClearDst: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	firewallAfter := firewallPlan.Changes[0].After.(map[string]any)
-	for _, field := range []string{"description", "src", "dst"} {
+	for _, field := range []string{"src", "dst"} {
 		if value, ok := firewallAfter[field]; !ok || value != "" {
 			t.Fatalf("cleared firewall %s = %#v", field, firewallAfter)
 		}

@@ -1,5 +1,5 @@
 {
-  "id": "device-gateway",
+  "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
   "configurationId": "config-gateway",
   "macAddress": "aa:bb:cc:dd:ee:01",
   "name": "Gateway",
@@ -7,7 +7,7 @@
   "state": "ONLINE",
   "ipAddress": "192.0.2.1",
   "firmwareVersion": "4.3.6",
-  "features": {"gateway": {}, "switching": {}},
+  "features": {"switching": {"lags": []}},
   "interfaces": {
     "ports": [
       {"idx": 1, "connector": "RJ45", "maxSpeedMbps": 2500, "speedMbps": 1000, "state": "UP", "poe": {"enabled": true, "standard": "802.3at", "state": "UP", "type": 2}}

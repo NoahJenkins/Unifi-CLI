@@ -5,15 +5,15 @@
   "totalCount": 1,
   "data": [
     {
-      "id": "policy-allow-dns",
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
       "name": "Allow DNS",
       "description": "Permit DNS from internal clients",
       "enabled": true,
       "index": 100,
-      "action": {"type": "ALLOW"},
-      "source": {"zoneId": "zone-internal"},
-      "destination": {"zoneId": "zone-gateway"},
-      "ipProtocolScope": {"type": "IPV4", "protocolFilter": {"type": "PRESET", "protocolPreset": "UDP"}},
+      "action": {"type": "ALLOW", "allowReturnTraffic": false},
+      "source": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff1"},
+      "destination": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2"},
+      "ipProtocolScope": {"ipVersion": "IPV4", "protocolFilter": {"type": "NAMED_PROTOCOL", "protocol": {"name": "udp"}, "matchOpposite": false}},
       "loggingEnabled": false,
       "metadata": {"origin": "USER"}
     }

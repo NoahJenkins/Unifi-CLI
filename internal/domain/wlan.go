@@ -98,7 +98,24 @@ func (s *WlanService) getLegacy(ctx context.Context, id string) (Wlan, error) {
 	if err != nil {
 		return Wlan{}, err
 	}
-	return resolve.One(items, id)
+	if item, ok := findExactID(items, id); ok {
+		return item, nil
+	}
+	if !looksLikeUUID(id) {
+		return resolve.One(items, id)
+	}
+	raw, official, err := fetchOfficialSite(s.api, ctx, "wifi", "broadcasts")
+	if err != nil {
+		return Wlan{}, err
+	}
+	if !official {
+		return resolve.One(items, id)
+	}
+	officialItems := make([]Wlan, 0, len(raw))
+	for _, item := range raw {
+		officialItems = append(officialItems, NormalizeWlan(item))
+	}
+	return resolveLegacyMutationTarget(items, officialItems, id, "WLAN", func(a, b Wlan) bool { return sameName(a, b) })
 }
 
 func (s *WlanService) Create(ctx context.Context, in WlanInput) (plan.Plan, error) {
@@ -313,19 +330,16 @@ func numberSlice(v any) []float64 {
 }
 
 func officialBand(frequencies []float64) string {
-	if len(frequencies) > 1 {
-		return "both"
+	labels := make([]string, 0, len(frequencies))
+	for _, candidate := range []float64{2.4, 5, 6} {
+		for _, frequency := range frequencies {
+			if frequency == candidate {
+				labels = append(labels, anyToString(candidate))
+				break
+			}
+		}
 	}
-	switch frequencies[0] {
-	case 2.4:
-		return "2g"
-	case 5:
-		return "5g"
-	case 6:
-		return "6g"
-	default:
-		return anyToString(frequencies[0])
-	}
+	return strings.Join(labels, "+")
 }
 
 func wlanInputBody(in WlanInput) map[string]any {
@@ -417,7 +431,13 @@ func validateWlanCreate(in WlanInput) error {
 	if err := validateRequired("WLAN security", in.Security); err != nil {
 		return err
 	}
-	return validateWlanFields(in)
+	if err := validateWlanFields(in); err != nil {
+		return err
+	}
+	if wlanSecurityRequiresPassword(in.Security) && strings.TrimSpace(in.Password) == "" {
+		return apperr.New(apperr.ValidationFailed, "secured personal WLAN creation requires a password")
+	}
+	return nil
 }
 
 func validateWlanUpdate(in WlanInput) error {
@@ -447,3 +467,12 @@ func inputSetsWlanSecurity(in WlanInput) bool { return in.SetSecurity || in.Secu
 func inputSetsWlanNetwork(in WlanInput) bool  { return in.SetNetwork || in.Network != "" }
 func inputSetsWlanPassword(in WlanInput) bool { return in.SetPassword || in.Password != "" }
 func inputSetsWlanBand(in WlanInput) bool     { return in.SetBand || in.Band != "" }
+
+func wlanSecurityRequiresPassword(security string) bool {
+	switch strings.ToLower(security) {
+	case "wpapsk", "wpa2_personal", "wpa3_personal", "wpa2_wpa3_personal":
+		return true
+	default:
+		return false
+	}
+}

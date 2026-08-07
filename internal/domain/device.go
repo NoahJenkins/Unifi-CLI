@@ -52,18 +52,6 @@ func (s *DeviceService) List(ctx context.Context) ([]Device, error) {
 		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
 			return nil, err
 		}
-	} else if supportsOfficialDetails(s.api) {
-		for i, overview := range raw {
-			id := strField(overview, "id")
-			if id == "" {
-				continue
-			}
-			detail, err := fetchOfficialSiteDetail(s.api, ctx, id, "devices")
-			if err != nil {
-				return nil, err
-			}
-			raw[i] = detail
-		}
 	}
 	out := make([]Device, 0, len(raw))
 	for _, m := range raw {
@@ -77,7 +65,18 @@ func (s *DeviceService) Get(ctx context.Context, id string) (Device, error) {
 	if err != nil {
 		return Device{}, err
 	}
-	return resolve.One(items, id)
+	overview, err := resolve.One(items, id)
+	if err != nil {
+		return Device{}, err
+	}
+	if !supportsOfficialDetails(s.api) || !looksLikeUUID(overview.ID) {
+		return overview, nil
+	}
+	detail, err := fetchOfficialSiteDetail(s.api, ctx, overview.ID, "devices")
+	if err != nil {
+		return Device{}, err
+	}
+	return mergeOfficialDeviceDetail(overview, NormalizeDevice(detail)), nil
 }
 
 func (s *DeviceService) listLegacy(ctx context.Context) ([]Device, error) {
@@ -97,7 +96,24 @@ func (s *DeviceService) getLegacy(ctx context.Context, id string) (Device, error
 	if err != nil {
 		return Device{}, err
 	}
-	return resolve.One(items, id)
+	if item, ok := findExactID(items, id); ok {
+		return item, nil
+	}
+	if !looksLikeUUID(id) {
+		return resolve.One(items, id)
+	}
+	raw, official, err := fetchOfficialSite(s.api, ctx, "devices")
+	if err != nil {
+		return Device{}, err
+	}
+	if !official {
+		return resolve.One(items, id)
+	}
+	officialItems := make([]Device, 0, len(raw))
+	for _, item := range raw {
+		officialItems = append(officialItems, NormalizeDevice(item))
+	}
+	return resolveLegacyMutationTarget(items, officialItems, id, "device", func(a, b Device) bool { return sameMAC(a, b) })
 }
 
 func (s *DeviceService) Rename(ctx context.Context, id, newName string) (plan.Plan, Device, error) {
@@ -117,6 +133,9 @@ func (s *DeviceService) Rename(ctx context.Context, id, newName string) (plan.Pl
 }
 
 func (s *DeviceService) ApplyRename(ctx context.Context, id, newName string) (Device, error) {
+	if err := validateRequired("device name", newName); err != nil {
+		return Device{}, err
+	}
 	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Device{}, err
@@ -128,6 +147,35 @@ func (s *DeviceService) ApplyRename(ctx context.Context, id, newName string) (De
 	}
 	d.Name = newName
 	return d, nil
+}
+
+func mergeOfficialDeviceDetail(overview, detail Device) Device {
+	if detail.ID == "" {
+		detail.ID = overview.ID
+	}
+	if detail.MAC == "" {
+		detail.MAC = overview.MAC
+	}
+	if detail.Name == "" {
+		detail.Name = overview.Name
+	}
+	if detail.Model == "" {
+		detail.Model = overview.Model
+	}
+	if overview.Type != "" {
+		detail.Type = overview.Type
+	}
+	if detail.State == "unknown" {
+		detail.State = overview.State
+	}
+	if detail.IP == "" {
+		detail.IP = overview.IP
+	}
+	if detail.Version == "" {
+		detail.Version = overview.Version
+	}
+	detail.Adopted = overview.Adopted || detail.Adopted
+	return detail
 }
 
 func (s *DeviceService) Restart(ctx context.Context, id string) (plan.Plan, Device, error) {

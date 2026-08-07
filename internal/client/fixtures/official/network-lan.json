@@ -1,11 +1,15 @@
 {
-  "id": "network-lan",
+  "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
   "name": "LAN",
   "enabled": true,
   "default": true,
   "management": "GATEWAY",
   "vlanId": 1,
   "metadata": {"origin": "SYSTEM"},
+  "cellularBackupEnabled": false,
+  "internetAccessEnabled": true,
+  "isolationEnabled": false,
+  "mdnsForwardingEnabled": true,
   "ipv4Configuration": {
     "hostIpAddress": "192.0.2.1",
     "prefixLength": 24,

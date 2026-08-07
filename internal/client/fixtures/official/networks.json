@@ -5,7 +5,7 @@
   "totalCount": 2,
   "data": [
     {
-      "id": "network-lan",
+      "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
       "name": "LAN",
       "enabled": true,
       "default": true,
@@ -14,7 +14,7 @@
       "metadata": {"origin": "SYSTEM"}
     },
     {
-      "id": "network-iot",
+      "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
       "name": "IoT",
       "enabled": true,
       "default": false,

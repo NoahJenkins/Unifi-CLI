@@ -336,15 +336,10 @@ func (s *DNSService) ApplyDelete(ctx context.Context, id string) (DNSRecord, err
 }
 
 func (s *DNSService) ListResolvers(ctx context.Context) ([]DNSResolver, error) {
-	raw, official, err := fetchNetworkObjects(ctx, s.api)
-	if err != nil {
+	var raw []map[string]any
+	path := s.api.SitePath(client.PathRestNetwork)
+	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return nil, err
-	}
-	if !official {
-		path := s.api.SitePath(client.PathRestNetwork)
-		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-			return nil, err
-		}
 	}
 	out := make([]DNSResolver, 0, len(raw))
 	for _, m := range raw {

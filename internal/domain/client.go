@@ -88,7 +88,24 @@ func (s *ClientService) getLegacy(ctx context.Context, id string) (Client, error
 	if err != nil {
 		return Client{}, err
 	}
-	return resolve.One(items, id)
+	if item, ok := findExactID(items, id); ok {
+		return item, nil
+	}
+	if !looksLikeUUID(id) {
+		return resolve.One(items, id)
+	}
+	raw, official, err := fetchOfficialSite(s.api, ctx, "clients")
+	if err != nil {
+		return Client{}, err
+	}
+	if !official {
+		return resolve.One(items, id)
+	}
+	officialItems := make([]Client, 0, len(raw))
+	for _, item := range raw {
+		officialItems = append(officialItems, NormalizeClient(item))
+	}
+	return resolveLegacyMutationTarget(items, officialItems, id, "client", func(a, b Client) bool { return sameMAC(a, b) })
 }
 
 func (s *ClientService) Reconnect(ctx context.Context, id string) (plan.Plan, Client, error) {
@@ -173,7 +190,7 @@ func NormalizeClient(m map[string]any) Client {
 		Network:  strField(m, "network", "network_name"),
 		IsWired:  boolField(m, "is_wired"),
 		Blocked:  boolField(m, "blocked"),
-		LastSeen: strField(m, "last_seen", "connectedAt"),
+		LastSeen: strField(m, "last_seen"),
 	}
 	if strField(m, "type") == "WIRED" {
 		c.IsWired = true

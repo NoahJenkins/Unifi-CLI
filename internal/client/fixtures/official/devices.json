@@ -5,7 +5,7 @@
   "totalCount": 2,
   "data": [
     {
-      "id": "device-gateway",
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
       "macAddress": "aa:bb:cc:dd:ee:01",
       "name": "Gateway",
       "model": "UDM-SE",
@@ -18,7 +18,7 @@
       "supported": true
     },
     {
-      "id": "device-switch",
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
       "macAddress": "aa:bb:cc:dd:ee:02",
       "name": "Core Switch",
       "model": "USW-Pro-24-PoE",

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -18,16 +19,40 @@ type PortAPI interface {
 }
 
 type Port struct {
-	DeviceID   string `json:"device_id"`
-	DeviceName string `json:"device_name"`
-	PortIdx    int    `json:"port_idx"`
-	Name       string `json:"name"`
-	Media      string `json:"media"`
-	Speed      string `json:"speed"`
-	POE        string `json:"poe"`
-	Enabled    bool   `json:"enabled"`
-	Profile    string `json:"profile"`
-	Networks   string `json:"networks"`
+	DeviceID     string `json:"device_id"`
+	DeviceName   string `json:"device_name"`
+	PortIdx      int    `json:"port_idx"`
+	Name         string `json:"name"`
+	Media        string `json:"media"`
+	Speed        string `json:"speed"`
+	POE          string `json:"poe"`
+	Enabled      bool   `json:"enabled"`
+	EnabledKnown bool   `json:"-"`
+	Profile      string `json:"profile"`
+	Networks     string `json:"networks"`
+}
+
+func (p Port) MarshalJSON() ([]byte, error) {
+	type portJSON struct {
+		DeviceID   string `json:"device_id"`
+		DeviceName string `json:"device_name"`
+		PortIdx    int    `json:"port_idx"`
+		Name       string `json:"name"`
+		Media      string `json:"media"`
+		Speed      string `json:"speed"`
+		POE        string `json:"poe"`
+		Enabled    *bool  `json:"enabled,omitempty"`
+		Profile    string `json:"profile"`
+		Networks   string `json:"networks"`
+	}
+	var enabled *bool
+	if p.EnabledKnown {
+		enabled = &p.Enabled
+	}
+	return json.Marshal(portJSON{
+		DeviceID: p.DeviceID, DeviceName: p.DeviceName, PortIdx: p.PortIdx, Name: p.Name,
+		Media: p.Media, Speed: p.Speed, POE: p.POE, Enabled: enabled, Profile: p.Profile, Networks: p.Networks,
+	})
 }
 
 // PortInput is the update payload from CLI flags.
@@ -81,6 +106,15 @@ func (s *PortService) List(ctx context.Context, deviceQuery string) ([]Port, err
 }
 
 func (s *PortService) listOfficial(ctx context.Context, raw []map[string]any, deviceQuery string) ([]Port, error) {
+	if len(raw) == 0 {
+		return []Port{}, nil
+	}
+	if deviceQuery == "" {
+		return nil, apperr.WithHint(
+			apperr.New(apperr.ValidationFailed, "official port list requires --device"),
+			"rerun with --device <id|mac|exact-name>",
+		)
+	}
 	selected := raw
 	if deviceQuery != "" {
 		dev, err := resolveDeviceRaw(raw, deviceQuery)
@@ -186,7 +220,7 @@ func (s *PortService) loadAuthoritativePort(ctx context.Context, deviceQuery str
 	if err != nil {
 		return Port{}, nil, err
 	}
-	dev, err := resolveDeviceRaw(raw, deviceQuery)
+	dev, err := s.resolveLegacyDeviceRaw(ctx, raw, deviceQuery)
 	if err != nil {
 		return Port{}, nil, err
 	}
@@ -212,6 +246,46 @@ func (s *PortService) loadAuthoritativePort(ctx context.Context, deviceQuery str
 		apperr.Newf(apperr.NotFound, "port %d not found on %s", portIdx, deviceQuery),
 		"list ports with: unifi port list --device <device>",
 	)
+}
+
+func (s *PortService) resolveLegacyDeviceRaw(ctx context.Context, raw []map[string]any, query string) (map[string]any, error) {
+	legacy := make([]Device, 0, len(raw))
+	byID := make(map[string]map[string]any, len(raw))
+	for _, item := range raw {
+		device := NormalizeDevice(item)
+		legacy = append(legacy, device)
+		byID[device.ID] = item
+	}
+	if item, ok := byID[query]; ok {
+		return item, nil
+	}
+	if !looksLikeUUID(query) {
+		device, err := resolve.One(legacy, query)
+		if err != nil {
+			return nil, err
+		}
+		return byID[device.ID], nil
+	}
+	officialRaw, official, err := fetchOfficialSite(s.api, ctx, "devices")
+	if err != nil {
+		return nil, err
+	}
+	if !official {
+		device, err := resolve.One(legacy, query)
+		if err != nil {
+			return nil, err
+		}
+		return byID[device.ID], nil
+	}
+	officialDevices := make([]Device, 0, len(officialRaw))
+	for _, item := range officialRaw {
+		officialDevices = append(officialDevices, NormalizeDevice(item))
+	}
+	device, err := resolveLegacyMutationTarget(legacy, officialDevices, query, "port device", func(a, b Device) bool { return sameMAC(a, b) })
+	if err != nil {
+		return nil, err
+	}
+	return byID[device.ID], nil
 }
 
 func (s *PortService) loadDevices(ctx context.Context) ([]map[string]any, error) {
@@ -250,16 +324,17 @@ func ExtractPortsFromDevice(dev map[string]any) []Port {
 			continue
 		}
 		p := Port{
-			DeviceID:   devID,
-			DeviceName: devName,
-			PortIdx:    idx,
-			Name:       strField(row, "name"),
-			Media:      strField(row, "media"),
-			Speed:      speedString(row["speed"]),
-			POE:        strField(row, "poe_mode", "poe"),
-			Enabled:    boolFieldDefault(row, "enable", true),
-			Profile:    strField(row, "portconf_id", "profile"),
-			Networks:   strField(row, "native_networkconf_id", "networks"),
+			DeviceID:     devID,
+			DeviceName:   devName,
+			PortIdx:      idx,
+			Name:         strField(row, "name"),
+			Media:        strField(row, "media"),
+			Speed:        speedString(row["speed"]),
+			POE:          strField(row, "poe_mode", "poe"),
+			Enabled:      boolFieldDefault(row, "enable", true),
+			EnabledKnown: true,
+			Profile:      strField(row, "portconf_id", "profile"),
+			Networks:     strField(row, "native_networkconf_id", "networks"),
 		}
 		if ov, ok := overrides[idx]; ok {
 			if v := strField(ov, "name"); v != "" {
@@ -307,7 +382,6 @@ func ExtractOfficialPortsFromDevice(dev map[string]any) []Port {
 			Media:      strField(row, "connector"),
 			Speed:      speedString(row["speedMbps"]),
 			POE:        poe,
-			Enabled:    true,
 		})
 	}
 	return out

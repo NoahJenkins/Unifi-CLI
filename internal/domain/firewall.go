@@ -21,16 +21,15 @@ type FirewallAPI interface {
 
 // FirewallRule is a classic UniFi firewall rule.
 type FirewallRule struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Enabled     bool   `json:"enabled"`
-	Action      string `json:"action"`
-	Ruleset     string `json:"ruleset"`
-	Src         string `json:"src"`
-	Dst         string `json:"dst"`
-	Protocol    string `json:"protocol"`
-	Index       int    `json:"index"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Enabled  bool   `json:"enabled"`
+	Action   string `json:"action"`
+	Ruleset  string `json:"ruleset"`
+	Src      string `json:"src"`
+	Dst      string `json:"dst"`
+	Protocol string `json:"protocol"`
+	Index    int    `json:"index"`
 }
 
 func (r FirewallRule) GetID() string   { return r.ID }
@@ -39,27 +38,24 @@ func (r FirewallRule) GetName() string { return r.Name }
 
 // FirewallInput is create/update payload from CLI flags.
 type FirewallInput struct {
-	Name             string
-	SetName          bool
-	Description      string
-	SetDescription   bool
-	ClearDescription bool
-	Enabled          bool
-	SetEnabled       bool
-	Action           string
-	SetAction        bool
-	Ruleset          string
-	SetRuleset       bool
-	Src              string
-	SetSrc           bool
-	ClearSrc         bool
-	Dst              string
-	SetDst           bool
-	ClearDst         bool
-	Protocol         string
-	SetProtocol      bool
-	Index            int
-	SetIndex         bool
+	Name        string
+	SetName     bool
+	Enabled     bool
+	SetEnabled  bool
+	Action      string
+	SetAction   bool
+	Ruleset     string
+	SetRuleset  bool
+	Src         string
+	SetSrc      bool
+	ClearSrc    bool
+	Dst         string
+	SetDst      bool
+	ClearDst    bool
+	Protocol    string
+	SetProtocol bool
+	Index       int
+	SetIndex    bool
 }
 
 // FirewallReorder selects full-order (--ids) or single-move (--id + --index).
@@ -127,7 +123,24 @@ func (s *FirewallService) getLegacy(ctx context.Context, id string) (FirewallRul
 	if err != nil {
 		return FirewallRule{}, err
 	}
-	return resolve.One(items, id)
+	if item, ok := findExactID(items, id); ok {
+		return item, nil
+	}
+	if !looksLikeUUID(id) {
+		return resolve.One(items, id)
+	}
+	raw, official, err := fetchOfficialSite(s.api, ctx, "firewall", "policies")
+	if err != nil {
+		return FirewallRule{}, err
+	}
+	if !official {
+		return resolve.One(items, id)
+	}
+	officialItems := make([]FirewallRule, 0, len(raw))
+	for _, item := range raw {
+		officialItems = append(officialItems, NormalizeFirewallRule(item))
+	}
+	return resolveLegacyMutationTarget(items, officialItems, id, "firewall policy", func(a, b FirewallRule) bool { return sameName(a, b) })
 }
 
 func (s *FirewallService) Create(ctx context.Context, in FirewallInput) (plan.Plan, error) {
@@ -163,15 +176,8 @@ func (s *FirewallService) ApplyCreate(ctx context.Context, in FirewallInput) (Fi
 		return NormalizeFirewallRule(raw[0]), nil
 	}
 	return FirewallRule{
-		Name:        in.Name,
-		Description: in.Description,
-		Enabled:     in.Enabled,
-		Action:      in.Action,
-		Ruleset:     in.Ruleset,
-		Src:         in.Src,
-		Dst:         in.Dst,
-		Protocol:    in.Protocol,
-		Index:       in.Index,
+		Name: in.Name, Enabled: in.Enabled, Action: in.Action, Ruleset: in.Ruleset,
+		Src: in.Src, Dst: in.Dst, Protocol: in.Protocol, Index: in.Index,
 	}, nil
 }
 
@@ -401,16 +407,11 @@ func (s *FirewallService) fetchLegacyRules(ctx context.Context) ([]map[string]an
 
 func NormalizeFirewallRule(m map[string]any) FirewallRule {
 	r := FirewallRule{
-		ID:          strField(m, "_id", "id"),
-		Name:        strField(m, "name"),
-		Description: strField(m, "description"),
-		Enabled:     boolFieldDefault(m, "enabled", true),
-		Action:      strField(m, "action"),
-		Ruleset:     strField(m, "ruleset"),
-		Src:         strField(m, "src_address", "src", "src_ip", "src_networkconf_id"),
-		Dst:         strField(m, "dst_address", "dst", "dst_ip", "dst_networkconf_id"),
-		Protocol:    strField(m, "protocol"),
-		Index:       intField(m, "rule_index", "index"),
+		ID: strField(m, "_id", "id"), Name: strField(m, "name"), Enabled: boolFieldDefault(m, "enabled", true),
+		Action: strField(m, "action"), Ruleset: strField(m, "ruleset"),
+		Src:      strField(m, "src_address", "src", "src_ip", "src_networkconf_id"),
+		Dst:      strField(m, "dst_address", "dst", "dst_ip", "dst_networkconf_id"),
+		Protocol: strField(m, "protocol"), Index: intField(m, "rule_index", "index"),
 	}
 	if action, ok := m["action"].(map[string]any); ok {
 		switch strings.ToUpper(strField(action, "type")) {
@@ -423,11 +424,41 @@ func NormalizeFirewallRule(m map[string]any) FirewallRule {
 		}
 	}
 	if scope, ok := m["ipProtocolScope"].(map[string]any); ok {
-		if filter, ok := scope["protocolFilter"].(map[string]any); ok {
-			r.Protocol = strings.ToLower(strField(filter, "protocolPreset", "protocol", "type"))
-		}
+		r.Protocol = normalizeOfficialFirewallProtocol(scope)
 	}
 	return r
+}
+
+func normalizeOfficialFirewallProtocol(scope map[string]any) string {
+	ipVersion := strings.ToLower(strField(scope, "ipVersion"))
+	filter, ok := scope["protocolFilter"].(map[string]any)
+	if !ok {
+		return ipVersion
+	}
+
+	var protocol string
+	switch strings.ToUpper(strField(filter, "type")) {
+	case "NAMED_PROTOCOL":
+		if named, ok := filter["protocol"].(map[string]any); ok {
+			protocol = strings.ToLower(strField(named, "name"))
+		}
+	case "PRESET":
+		if preset, ok := filter["preset"].(map[string]any); ok {
+			protocol = strings.ToLower(strField(preset, "name"))
+		}
+	case "PROTOCOL_NUMBER":
+		protocol = strField(filter, "protocolNumber")
+	}
+	if protocol == "" {
+		return ipVersion
+	}
+	if boolField(filter, "matchOpposite") {
+		protocol = "not(" + protocol + ")"
+	}
+	if ipVersion == "" {
+		return protocol
+	}
+	return ipVersion + ":" + protocol
 }
 
 func intField(m map[string]any, keys ...string) int {
@@ -454,12 +485,6 @@ func firewallInputBody(in FirewallInput) map[string]any {
 	if inputSetsFirewallName(in) {
 		body["name"] = in.Name
 	}
-	if inputSetsFirewallDescription(in) {
-		body["description"] = in.Description
-	}
-	if in.ClearDescription {
-		body["description"] = ""
-	}
 	if inputSetsFirewallAction(in) {
 		body["action"] = in.Action
 	}
@@ -484,13 +509,12 @@ func firewallInputBody(in FirewallInput) map[string]any {
 func firewallInputBodyMerged(r FirewallRule, in FirewallInput) map[string]any {
 	merged := applyFirewallInput(r, in)
 	body := map[string]any{
-		"name":        merged.Name,
-		"description": merged.Description,
-		"enabled":     merged.Enabled,
-		"action":      merged.Action,
-		"ruleset":     merged.Ruleset,
-		"protocol":    merged.Protocol,
-		"rule_index":  merged.Index,
+		"name":       merged.Name,
+		"enabled":    merged.Enabled,
+		"action":     merged.Action,
+		"ruleset":    merged.Ruleset,
+		"protocol":   merged.Protocol,
+		"rule_index": merged.Index,
 	}
 	if merged.Src != "" {
 		body["src_address"] = merged.Src
@@ -504,12 +528,6 @@ func firewallInputBodyMerged(r FirewallRule, in FirewallInput) map[string]any {
 func applyFirewallInput(r FirewallRule, in FirewallInput) FirewallRule {
 	if inputSetsFirewallName(in) {
 		r.Name = in.Name
-	}
-	if inputSetsFirewallDescription(in) {
-		r.Description = in.Description
-	}
-	if in.ClearDescription {
-		r.Description = ""
 	}
 	if in.SetEnabled {
 		r.Enabled = in.Enabled
@@ -543,16 +561,8 @@ func applyFirewallInput(r FirewallRule, in FirewallInput) FirewallRule {
 
 func firewallSnapshot(r FirewallRule) map[string]any {
 	return map[string]any{
-		"id":          r.ID,
-		"name":        r.Name,
-		"description": r.Description,
-		"enabled":     r.Enabled,
-		"action":      r.Action,
-		"ruleset":     r.Ruleset,
-		"src":         r.Src,
-		"dst":         r.Dst,
-		"protocol":    r.Protocol,
-		"index":       r.Index,
+		"id": r.ID, "name": r.Name, "enabled": r.Enabled, "action": r.Action,
+		"ruleset": r.Ruleset, "src": r.Src, "dst": r.Dst, "protocol": r.Protocol, "index": r.Index,
 	}
 }
 
@@ -562,15 +572,8 @@ func firewallSnapshotFromInput(in FirewallInput) map[string]any {
 		enabled = true
 	}
 	return map[string]any{
-		"name":        in.Name,
-		"description": in.Description,
-		"enabled":     enabled,
-		"action":      in.Action,
-		"ruleset":     in.Ruleset,
-		"src":         in.Src,
-		"dst":         in.Dst,
-		"protocol":    in.Protocol,
-		"index":       in.Index,
+		"name": in.Name, "enabled": enabled, "action": in.Action, "ruleset": in.Ruleset,
+		"src": in.Src, "dst": in.Dst, "protocol": in.Protocol, "index": in.Index,
 	}
 }
 
@@ -592,14 +595,12 @@ func validateFirewallCreate(in FirewallInput) error {
 }
 
 func validateFirewallUpdate(in FirewallInput) error {
-	if !inputSetsFirewallName(in) && !inputSetsFirewallDescription(in) && !in.ClearDescription &&
-		!in.SetEnabled && !inputSetsFirewallAction(in) && !inputSetsFirewallRuleset(in) &&
+	if !inputSetsFirewallName(in) && !in.SetEnabled && !inputSetsFirewallAction(in) && !inputSetsFirewallRuleset(in) &&
 		!inputSetsFirewallSrc(in) && !in.ClearSrc && !inputSetsFirewallDst(in) && !in.ClearDst &&
 		!inputSetsFirewallProtocol(in) && !in.SetIndex {
 		return apperr.New(apperr.ValidationFailed, "firewall update requires at least one changed field")
 	}
-	if (in.ClearDescription && inputSetsFirewallDescription(in)) || (in.ClearSrc && inputSetsFirewallSrc(in)) ||
-		(in.ClearDst && inputSetsFirewallDst(in)) {
+	if (in.ClearSrc && inputSetsFirewallSrc(in)) || (in.ClearDst && inputSetsFirewallDst(in)) {
 		return apperr.New(apperr.ValidationFailed, "set and clear flags are mutually exclusive")
 	}
 	if inputSetsFirewallName(in) {
@@ -629,10 +630,7 @@ func validateFirewallFields(in FirewallInput) error {
 	return nil
 }
 
-func inputSetsFirewallName(in FirewallInput) bool { return in.SetName || in.Name != "" }
-func inputSetsFirewallDescription(in FirewallInput) bool {
-	return in.SetDescription || in.Description != ""
-}
+func inputSetsFirewallName(in FirewallInput) bool     { return in.SetName || in.Name != "" }
 func inputSetsFirewallAction(in FirewallInput) bool   { return in.SetAction || in.Action != "" }
 func inputSetsFirewallRuleset(in FirewallInput) bool  { return in.SetRuleset || in.Ruleset != "" }
 func inputSetsFirewallSrc(in FirewallInput) bool      { return in.SetSrc || in.Src != "" }

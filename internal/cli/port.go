@@ -131,7 +131,7 @@ func runPortList(device string) error {
 			p.Media,
 			p.Speed,
 			p.POE,
-			strconv.FormatBool(p.Enabled),
+			portEnabledText(p),
 			p.Profile,
 		})
 	}
@@ -166,10 +166,17 @@ func runPortGet(device string, portIdx int) error {
 	fmt.Fprintf(rt.Out, "media: %s\n", render.SafeText(p.Media))
 	fmt.Fprintf(rt.Out, "speed: %s\n", render.SafeText(p.Speed))
 	fmt.Fprintf(rt.Out, "poe: %s\n", render.SafeText(p.POE))
-	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(p.Enabled))
+	fmt.Fprintf(rt.Out, "enabled: %s\n", portEnabledText(p))
 	fmt.Fprintf(rt.Out, "profile: %s\n", render.SafeText(p.Profile))
 	fmt.Fprintf(rt.Out, "networks: %s\n", render.SafeText(p.Networks))
 	return nil
+}
+
+func portEnabledText(p domain.Port) string {
+	if !p.EnabledKnown {
+		return ""
+	}
+	return strconv.FormatBool(p.Enabled)
 }
 
 func runPortUpdate(device string, portIdx int, in domain.PortInput) error {

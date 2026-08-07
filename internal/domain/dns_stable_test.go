@@ -115,13 +115,13 @@ func TestDNSListUsesOfficialCollectionFetcherAndPreservesAllPolicyFields(t *test
 		t.Fatalf("records = %d, want 7", len(records))
 	}
 	want := []domain.DNSRecord{
-		{ID: "dns-a", Type: "A_RECORD", Domain: "a.example.test", Enabled: true, IPv4Address: "192.0.2.10", TTLSeconds: 300, Name: "a.example.test", IP: "192.0.2.10"},
-		{ID: "dns-aaaa", Type: "AAAA_RECORD", Domain: "aaaa.example.test", Enabled: true, IPv6Address: "2001:db8::10", TTLSeconds: 600, Name: "aaaa.example.test"},
-		{ID: "dns-cname", Type: "CNAME_RECORD", Domain: "alias.example.test", Enabled: true, TargetDomain: "target.example.test", TTLSeconds: 900, Name: "alias.example.test"},
-		{ID: "dns-mx", Type: "MX_RECORD", Domain: "example.test", Enabled: true, MailServerDomain: "mail.example.test", TTLSeconds: 1200, Priority: 10, Name: "example.test"},
-		{ID: "dns-txt", Type: "TXT_RECORD", Domain: "txt.example.test", Enabled: false, Text: "verification=value", TTLSeconds: 1800, Name: "txt.example.test"},
-		{ID: "dns-srv", Type: "SRV_RECORD", Domain: "_sip._tcp.example.test", Enabled: true, ServerDomain: "sip.example.test", TTLSeconds: 2400, Priority: 20, Service: "_sip", Protocol: "_tcp", Port: 5060, Weight: 5, Name: "_sip._tcp.example.test"},
-		{ID: "dns-forward", Type: "FORWARD_DOMAIN", Domain: "forward.example.test", Enabled: true, ServerDomain: "resolver.example.test", IPAddress: "198.51.100.53", Name: "forward.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000001", Type: "A_RECORD", Domain: "a.example.test", Enabled: true, IPv4Address: "192.0.2.10", TTLSeconds: 300, Name: "a.example.test", IP: "192.0.2.10"},
+		{ID: "10000000-0000-4000-8000-000000000002", Type: "AAAA_RECORD", Domain: "aaaa.example.test", Enabled: true, IPv6Address: "2001:db8::10", TTLSeconds: 600, Name: "aaaa.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000003", Type: "CNAME_RECORD", Domain: "alias.example.test", Enabled: true, TargetDomain: "target.example.test", TTLSeconds: 900, Name: "alias.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000004", Type: "MX_RECORD", Domain: "example.test", Enabled: true, MailServerDomain: "mail.example.test", TTLSeconds: 1200, Priority: 10, Name: "example.test"},
+		{ID: "10000000-0000-4000-8000-000000000005", Type: "TXT_RECORD", Domain: "txt.example.test", Enabled: false, Text: "verification=value", TTLSeconds: 1800, Name: "txt.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000006", Type: "SRV_RECORD", Domain: "_sip._tcp.example.test", Enabled: true, ServerDomain: "sip.example.test", TTLSeconds: 2400, Priority: 20, Service: "_sip", Protocol: "_tcp", Port: 5060, Weight: 5, Name: "_sip._tcp.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000007", Type: "FORWARD_DOMAIN", Domain: "forward.example.test", Enabled: true, ServerDomain: "resolver.example.test", IPAddress: "198.51.100.53", Name: "forward.example.test"},
 	}
 	if !reflect.DeepEqual(records, want) {
 		t.Fatalf("records =\n%#v\nwant =\n%#v", records, want)

@@ -6,23 +6,23 @@
   "data": [
     {
       "type": "STANDARD",
-      "id": "wifi-main",
+      "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd1",
       "name": "Main",
       "enabled": true,
       "metadata": {"origin": "USER"},
-      "network": {"type": "SPECIFIC", "networkId": "network-lan"},
+      "network": {"type": "SPECIFIC", "networkId": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},
       "securityConfiguration": {"type": "WPA2_PERSONAL"},
-      "broadcastingFrequenciesGHz": [2.4, 5]
+      "broadcastingFrequenciesGHz": [2.4, 6]
     },
     {
       "type": "STANDARD",
-      "id": "wifi-guest",
+      "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd2",
       "name": "Guest",
       "enabled": false,
       "metadata": {"origin": "USER"},
-      "network": {"type": "SPECIFIC", "networkId": "network-iot"},
+      "network": {"type": "SPECIFIC", "networkId": "cccccccc-cccc-4ccc-8ccc-ccccccccccc2"},
       "securityConfiguration": {"type": "OPEN"},
-      "broadcastingFrequenciesGHz": [5],
+      "broadcastingFrequenciesGHz": [5, 6],
       "hotspotConfiguration": {"type": "CAPTIVE_PORTAL"}
     }
   ]
