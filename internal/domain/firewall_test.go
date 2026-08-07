@@ -744,6 +744,36 @@ func TestFirewallUpdateRejectsExplicitReturnTrafficForExistingNonAllowPolicy(t *
 	}
 }
 
+func TestFirewallUpdateRejectsMalformedControllerZoneEndpointsWithoutPanic(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		input domain.FirewallInput
+	}{
+		{name: "source", field: "source", input: domain.FirewallInput{SourceZone: "External", SetSourceZone: true}},
+		{name: "destination", field: "destination", input: domain.FirewallInput{DestinationZone: "Internal", SetDestinationZone: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			for _, policy := range api.policies {
+				if policy["id"] == allowDNSPolicyID {
+					policy[tt.field] = "malformed-controller-value"
+				}
+			}
+
+			_, _, err := domain.NewFirewallService(api).Update(context.Background(), allowDNSPolicyID, tt.input)
+			if !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("Update error = %v, want typed malformed-%s failure", err, tt.field)
+			}
+			if len(firewallMutationCalls(api.calls)) != 0 {
+				t.Fatalf("malformed policy triggered mutation: %+v", api.calls)
+			}
+		})
+	}
+}
+
 func TestFirewallReorderUsesOneAtomicZonePairWriteAndVerifiesFullOrder(t *testing.T) {
 	api := newModernFirewallAPI(t)
 	api.orderingReads = []domain.FirewallOrdering{

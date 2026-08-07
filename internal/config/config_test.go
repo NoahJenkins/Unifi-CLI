@@ -31,6 +31,26 @@ func TestLoadFromFileAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOversizedAndNonRegularConfiguration(t *testing.T) {
+	t.Run("oversized regular file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("host: 10.0.0.1\n#"+strings.Repeat("x", 1<<20)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := config.Load(path)
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("Load error = %v, want size-limit failure", err)
+		}
+	})
+
+	t.Run("directory", func(t *testing.T) {
+		_, err := config.Load(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("Load error = %v, want regular-file failure", err)
+		}
+	})
+}
+
 func TestLoadRejectsLegacyCredentials(t *testing.T) {
 	tests := []struct {
 		name     string

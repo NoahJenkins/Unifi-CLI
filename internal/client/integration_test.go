@@ -3,12 +3,14 @@ package client_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,6 +172,74 @@ func TestFetchOfficialAllRejectsNonProgressingPage(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("requests = %d, want 1", requests)
 	}
+}
+
+func TestFetchOfficialAllRejectsChangingTotalCount(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		offset := r.URL.Query().Get("offset")
+		items := make([]officialFixtureResource, 100)
+		for i := range items {
+			items[i] = officialFixtureResource{ID: fmt.Sprintf("resource-%s-%d", offset, i)}
+		}
+		total := 200
+		if offset == "100" {
+			total = 300
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"offset": mustAtoi(t, offset), "limit": 100, "count": len(items), "totalCount": total, "data": items,
+		})
+	}))
+	defer srv.Close()
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	_, err = client.FetchOfficialAll[officialFixtureResource](context.Background(), c, "/proxy/network/integration/v1/resources")
+	if !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), "totalCount changed") {
+		t.Fatalf("error = %v, want changing-totalCount failure", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestFetchOfficialAllRejectsExcessiveTotalCountBeforeSecondRequest(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"offset": 0, "limit": 100, "count": 1, "totalCount": 100001,
+			"data": []officialFixtureResource{{ID: "resource-1"}},
+		})
+	}))
+	defer srv.Close()
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	_, err = client.FetchOfficialAll[officialFixtureResource](context.Background(), c, "/proxy/network/integration/v1/resources")
+	if !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("error = %v, want excessive-totalCount failure", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
+func mustAtoi(t *testing.T, value string) int {
+	t.Helper()
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatalf("parse %q: %v", value, err)
+	}
+	return parsed
 }
 
 func TestFetchOfficialAllMapsPermissionDeniedWithoutResponseSecrets(t *testing.T) {

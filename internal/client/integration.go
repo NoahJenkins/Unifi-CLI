@@ -13,6 +13,8 @@ import (
 const (
 	integrationBasePath = "/proxy/network/integration/v1"
 	officialPageSize    = 100
+	maxOfficialItems    = 100000
+	maxOfficialPages    = maxOfficialItems / officialPageSize
 )
 
 // OfficialPage is the complete pagination envelope returned by the official
@@ -56,10 +58,19 @@ func OfficialPath(parts ...string) string {
 // Network API. It always requests 100 items and advances only by the metadata
 // returned by a well-formed, progressing page.
 func FetchOfficialAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	defer cancel()
+
 	offset := 0
+	expectedTotal := -1
+	pages := 0
 	var all []T
 
 	for {
+		if pages >= maxOfficialPages {
+			return nil, apperr.Newf(apperr.Internal, "official API pagination exceeds maximum of %d pages", maxOfficialPages)
+		}
+		pages++
 		pagePath, err := officialPagePath(path, offset)
 		if err != nil {
 			return nil, apperr.Newf(apperr.Internal, "build official API page query: %v", err)
@@ -75,6 +86,14 @@ func FetchOfficialAll[T any](ctx context.Context, c *Client, path string) ([]T, 
 		pageOffset := *page.Offset
 		pageCount := *page.Count
 		totalCount := *page.TotalCount
+		if expectedTotal == -1 {
+			expectedTotal = totalCount
+		} else if totalCount != expectedTotal {
+			return nil, apperr.Newf(apperr.Internal, "official API totalCount changed from %d to %d", expectedTotal, totalCount)
+		}
+		if len(all) > maxOfficialItems-pageCount {
+			return nil, apperr.Newf(apperr.Internal, "official API items exceed maximum of %d", maxOfficialItems)
+		}
 		all = append(all, (*page.Data)...)
 
 		nextOffset := pageOffset + pageCount
@@ -119,6 +138,9 @@ func validateOfficialPage[T any](page officialPageWire[T], expectedOffset int) e
 	totalCount := *page.TotalCount
 	if offset < 0 || limit <= 0 || count < 0 || totalCount < 0 {
 		return apperr.New(apperr.Internal, "official API page contains invalid negative or zero pagination values")
+	}
+	if totalCount > maxOfficialItems {
+		return apperr.Newf(apperr.Internal, "official API totalCount %d exceeds maximum of %d", totalCount, maxOfficialItems)
 	}
 	if offset != expectedOffset {
 		return apperr.Newf(apperr.Internal, "official API page offset %d does not match requested offset %d", offset, expectedOffset)

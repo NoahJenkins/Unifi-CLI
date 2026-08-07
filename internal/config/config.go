@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/noahjenkins/unifi-cli/internal/fileutil"
 )
+
+const maxConfigBytes = 1 << 20
 
 type Config struct {
 	Host     string        `yaml:"host"`
@@ -42,7 +46,7 @@ func Load(path string) (Config, error) {
 		SafeMode: true,
 		Timeout:  30 * time.Second,
 	}
-	data, err := os.ReadFile(path)
+	data, err := fileutil.ReadRegularFile(path, maxConfigBytes)
 	if err == nil {
 		var fields map[string]yaml.Node
 		if err := yaml.Unmarshal(data, &fields); err != nil {

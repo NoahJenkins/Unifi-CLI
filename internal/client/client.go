@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/authstore"
 	"github.com/noahjenkins/unifi-cli/internal/config"
+	"github.com/noahjenkins/unifi-cli/internal/fileutil"
 )
 
 type Client struct {
@@ -33,7 +35,10 @@ type Client struct {
 	integrationSiteID string
 }
 
-const maxResponseBodyBytes = 16 << 20
+const (
+	maxResponseBodyBytes = 16 << 20
+	maxCACertBytes       = 1 << 20
+)
 
 func New(cfg config.Config) (*Client, error) {
 	return NewWithStore(cfg, authstore.NewStore(authstore.Options{}))
@@ -94,7 +99,7 @@ func newClient(cfg config.Config, apiKey, method string, store authstore.Store) 
 		if err != nil || rootCAs == nil {
 			rootCAs = x509.NewCertPool()
 		}
-		caPEM, err := os.ReadFile(cfg.CACert)
+		caPEM, err := fileutil.ReadRegularFile(cfg.CACert, maxCACertBytes)
 		if err != nil {
 			return nil, fmt.Errorf("load ca_cert: %w", err)
 		}
@@ -130,15 +135,38 @@ func (c *Client) Site() string {
 }
 
 func (c *Client) SitePath(parts ...string) string {
-	p := "/proxy/network/api/s/" + c.cfg.Site
-	for _, part := range parts {
+	p := "/proxy/network/api/s/" + escapeLegacySegment(c.cfg.Site)
+	for i, part := range parts {
 		part = strings.Trim(part, "/")
 		if part == "" {
 			continue
 		}
-		p += "/" + part
+		if i == 0 && isLegacyStaticRoute(part) {
+			for _, segment := range strings.Split(part, "/") {
+				p += "/" + url.PathEscape(segment)
+			}
+			continue
+		}
+		p += "/" + escapeLegacySegment(part)
 	}
 	return p
+}
+
+func escapeLegacySegment(value string) string {
+	if value == "." || value == ".." {
+		return strings.Repeat("%2E", len(value))
+	}
+	return url.PathEscape(value)
+}
+
+func isLegacyStaticRoute(part string) bool {
+	switch part {
+	case PathStatDevice, PathStatSta, PathStatHealth, PathCmdDevMgr, PathCmdStaMgr,
+		PathRestDevice, PathRestNetwork, PathRestWlan, PathRestUser:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {

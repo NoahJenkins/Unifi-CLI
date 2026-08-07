@@ -412,12 +412,18 @@ func (s *FirewallService) prepareUpdate(ctx context.Context, query string, in Fi
 			}
 		}
 		if source.ID != "" {
-			endpoint := deepCloneFirewallMap(body["source"].(map[string]any))
+			endpoint, err := firewallEndpointForUpdate(body, "source")
+			if err != nil {
+				return firewallPolicyDocument{}, nil, err
+			}
 			endpoint["zoneId"] = source.ID
 			body["source"] = endpoint
 		}
 		if destination.ID != "" {
-			endpoint := deepCloneFirewallMap(body["destination"].(map[string]any))
+			endpoint, err := firewallEndpointForUpdate(body, "destination")
+			if err != nil {
+				return firewallPolicyDocument{}, nil, err
+			}
 			endpoint["zoneId"] = destination.ID
 			body["destination"] = endpoint
 		}
@@ -454,6 +460,14 @@ func (s *FirewallService) prepareUpdate(ctx context.Context, query string, in Fi
 		return firewallPolicyDocument{}, nil, apperr.New(apperr.ValidationFailed, "firewall update would not change controller state")
 	}
 	return doc, body, nil
+}
+
+func firewallEndpointForUpdate(body map[string]any, field string) (map[string]any, error) {
+	endpoint, ok := body[field].(map[string]any)
+	if !ok || endpoint == nil || strField(endpoint, "zoneId") == "" {
+		return nil, apperr.Newf(apperr.Internal, "controller firewall policy has malformed %s endpoint", field)
+	}
+	return deepCloneFirewallMap(endpoint), nil
 }
 
 func (s *FirewallService) resolveReorder(ctx context.Context, in FirewallReorder) (resolvedFirewallReorder, error) {

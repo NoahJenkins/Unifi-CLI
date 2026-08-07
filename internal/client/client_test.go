@@ -348,6 +348,38 @@ func TestCustomCACertificateEstablishesVerifiedTLS(t *testing.T) {
 	}
 }
 
+func TestCustomCARejectsOversizedAndNonRegularFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(*testing.T) string
+		want string
+	}{
+		{
+			name: "oversized regular file",
+			path: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), "controller-ca.pem")
+				if err := os.WriteFile(path, []byte(strings.Repeat("x", (1<<20)+1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			want: "exceeds",
+		},
+		{name: "directory", path: func(t *testing.T) string { return t.TempDir() }, want: "regular file"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.NewWithAPIKey(config.Config{
+				Host: "controller.example", Port: 443, Timeout: time.Second, CACert: tt.path(t),
+			}, "key", "interactive_api_key")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewWithAPIKey error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestVerifiedTLSIsDefaultWithoutCustomCAOrInsecureMode(t *testing.T) {
 	requests := 0
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -538,6 +570,36 @@ func TestSitePath(t *testing.T) {
 	want = "/proxy/network/api/s/default/rest/networkconf/abc"
 	if got != want {
 		t.Fatalf("SitePath multi = %q, want %q", got, want)
+	}
+}
+
+func TestSitePathEscapesEveryLegacyDynamicSegment(t *testing.T) {
+	c, err := client.NewWithAPIKey(config.Config{
+		Host: "127.0.0.1", Port: 443, Site: "site ?#/%2e%2e",
+	}, "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	got := c.SitePath("rest/networkconf", "record ?#/../value")
+	want := "/proxy/network/api/s/site%20%3F%23%2F%252e%252e/rest/networkconf/record%20%3F%23%2F..%2Fvalue"
+	if got != want {
+		t.Fatalf("SitePath = %q, want %q", got, want)
+	}
+}
+
+func TestSitePathEncodesLegacyDotSegments(t *testing.T) {
+	c, err := client.NewWithAPIKey(config.Config{
+		Host: "127.0.0.1", Port: 443, Site: "..",
+	}, "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	got := c.SitePath(client.PathRestDevice, ".")
+	want := "/proxy/network/api/s/%2E%2E/rest/device/%2E"
+	if got != want {
+		t.Fatalf("SitePath = %q, want %q", got, want)
 	}
 }
 
