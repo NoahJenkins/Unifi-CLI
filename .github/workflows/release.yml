@@ -37,6 +37,17 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Build trusted native smoke binary
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$GITHUB_SHA")"
+          RELEASE_COMMIT_DATE="$(date -u -d "@$RELEASE_COMMIT_TIMESTAMP" +%Y-%m-%dT%H:%M:%SZ)"
+          RELEASE_LDFLAGS="-s -w -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version=$RELEASE_VERSION -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit=$GITHUB_SHA -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate=$RELEASE_COMMIT_DATE"
+          go build -trimpath -ldflags "$RELEASE_LDFLAGS" -o "$RUNNER_TEMP/unifi-trusted" ./cmd/unifi
+
       - name: Install pinned Syft for archive SBOMs
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610
         with:
@@ -53,7 +64,7 @@ jobs:
 
       - name: Verify draft artifact set
         shell: bash
-        run: go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA"
+        run: go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-native "$RUNNER_TEMP/unifi-trusted"
 
       - name: Attest release provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8

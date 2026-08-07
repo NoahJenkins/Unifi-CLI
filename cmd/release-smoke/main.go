@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha1"
@@ -24,12 +25,22 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/noahjenkins/unifi-cli/internal/fileutil"
 )
 
 const (
 	smokeVersion   = "1.0.0-rc.1-smoke"
 	smokeCommit    = "0123456789abcdef0123456789abcdef01234567"
 	smokeBuildDate = "2026-08-07T00:00:00Z"
+
+	maxReleaseEntryBytes     = 128 << 20
+	maxReleaseManifestBytes  = 4 << 20
+	maxReleaseSBOMBytes      = 32 << 20
+	maxReleaseArchiveBytes   = 128 << 20
+	maxReleaseExpandedBytes  = 512 << 20
+	maxReleaseArchiveEntries = 64
+	maxReleaseSourceEntries  = 10000
 )
 
 var targets = []target{
@@ -64,12 +75,14 @@ func main() {
 	var artifacts string
 	var expectedVersion string
 	var expectedCommit string
+	var trustedNative string
 	flag.BoolVar(&describe, "describe", false, "print the target and smoke-command contract")
 	flag.BoolVar(&all, "all", false, "cross-build and structurally verify all release targets")
 	flag.BoolVar(&native, "native", false, "build and execute the current native release target")
 	flag.StringVar(&artifacts, "artifacts", "", "verify an existing GoReleaser dist directory")
 	flag.StringVar(&expectedVersion, "expected-version", "", "exact release version without a leading v")
 	flag.StringVar(&expectedCommit, "expected-commit", "", "exact release commit")
+	flag.StringVar(&trustedNative, "trusted-native", "", "trusted native binary built from the exact checkout before artifact generation")
 	flag.Parse()
 
 	selected := 0
@@ -82,8 +95,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, or --artifacts DIR")
 		os.Exit(2)
 	}
-	if artifacts != "" && (expectedVersion == "" || expectedCommit == "") {
-		fmt.Fprintln(os.Stderr, "--artifacts requires --expected-version and --expected-commit")
+	if artifacts != "" && (expectedVersion == "" || expectedCommit == "" || trustedNative == "") {
+		fmt.Fprintln(os.Stderr, "--artifacts requires --expected-version, --expected-commit, and --trusted-native")
 		os.Exit(2)
 	}
 
@@ -96,7 +109,7 @@ func main() {
 	defer cancel()
 	var err error
 	if artifacts != "" {
-		err = verifyArtifacts(ctx, artifacts, expectedVersion, expectedCommit)
+		err = verifyArtifacts(ctx, artifacts, expectedVersion, expectedCommit, trustedNative)
 	} else {
 		err = buildAndVerify(ctx, all)
 	}
@@ -295,7 +308,7 @@ type artifact struct {
 	} `json:"extra"`
 }
 
-func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit string) error {
+func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit, trustedNative string) error {
 	root, err := repositoryRoot()
 	if err != nil {
 		return err
@@ -307,7 +320,18 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	if err := validateExpectedMetadata(expectedVersion, expectedCommit); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(filepath.Join(dist, "artifacts.json"))
+	trustedNative, err = canonicalTrustedNative(dist, trustedNative)
+	if err != nil {
+		return err
+	}
+	nativeTarget := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
+	if err := verifyStructure(trustedNative, nativeTarget); err != nil {
+		return fmt.Errorf("trusted native binary: %w", err)
+	}
+	if err := verifyNativeCommands(ctx, root, trustedNative, expectedVersion, expectedCommit, ""); err != nil {
+		return fmt.Errorf("trusted native binary: %w", err)
+	}
+	data, err := readReleaseFile(filepath.Join(dist, "artifacts.json"), maxReleaseManifestBytes)
 	if err != nil {
 		return fmt.Errorf("read artifacts.json: %w", err)
 	}
@@ -381,7 +405,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	if err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
-	if err := inspectSourceArchive(sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion), expectedCommit); err != nil {
+	if err := inspectSourceArchive(ctx, sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion), expectedCommit); err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
 
@@ -402,7 +426,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	if err := requireExactNames(checksums, wantChecksums, "checksum manifest"); err != nil {
 		return err
 	}
-	if err := verifyChecksum(sourcePath, checksums[sources[0].Name]); err != nil {
+	if err := verifyChecksum(ctx, sourcePath, checksums[sources[0].Name]); err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
 	for _, target := range targets {
@@ -422,7 +446,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
-		if err := verifyChecksum(archivePath, checksums[current.Name]); err != nil {
+		if err := verifyChecksum(ctx, archivePath, checksums[current.Name]); err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
 		wantSBOMName := wantName + ".sbom.json"
@@ -437,11 +461,11 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 		if err != nil {
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
-		if err := verifyChecksum(sbomPath, checksums[sbom.Name]); err != nil {
+		if err := verifyChecksum(ctx, sbomPath, checksums[sbom.Name]); err != nil {
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
 		expectedRoot := strings.TrimSuffix(strings.TrimSuffix(wantName, ".tar.gz"), ".zip")
-		executable, cleanup, err := inspectReleaseArchive(archivePath, target, expectedRoot)
+		executable, cleanup, err := inspectReleaseArchive(ctx, archivePath, target, expectedRoot)
 		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
@@ -454,17 +478,43 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 			return err
 		}
 		if target.goos == runtime.GOOS && target.goarch == runtime.GOARCH {
-			if err := verifyNativeCommands(ctx, root, executable.extractedPath, expectedVersion, expectedCommit, ""); err != nil {
+			if err := verifyTrustedNativeArtifact(ctx, trustedNative, executable); err != nil {
 				cleanup()
 				return err
 			}
-			fmt.Printf("%s archive: checksum, SBOM, structure, and native commands verified\n", target)
+			fmt.Printf("%s archive: checksum, SBOM, structure, and trusted-binary equality verified\n", target)
 		} else {
 			fmt.Printf("%s archive: checksum, SBOM, and structure verified; execution skipped (non-native on %s/%s)\n", target, runtime.GOOS, runtime.GOARCH)
 		}
 		cleanup()
 	}
 	return nil
+}
+
+func canonicalTrustedNative(dist, path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve trusted native binary: %w", err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stat trusted native binary: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("trusted native binary is not a regular file")
+	}
+	rel, err := filepath.Rel(dist, resolved)
+	if err != nil {
+		return "", fmt.Errorf("compare trusted native binary and artifact directory: %w", err)
+	}
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+		return "", fmt.Errorf("trusted native binary must be outside the untrusted artifact directory")
+	}
+	return resolved, nil
 }
 
 func validateExpectedMetadata(version, commit string) error {
@@ -554,7 +604,7 @@ func sanitizedCommandEnv(environ []string) []string {
 }
 
 func readChecksums(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readReleaseFile(path, maxReleaseManifestBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read checksums: %w", err)
 	}
@@ -582,20 +632,18 @@ func readChecksums(path string) (map[string]string, error) {
 	return result, nil
 }
 
-func verifyChecksum(path, want string) error {
+func readReleaseFile(path string, maxBytes int64) ([]byte, error) {
+	return fileutil.ReadRegularFile(path, maxBytes)
+}
+
+func verifyChecksum(ctx context.Context, path, want string) error {
 	if want == "" {
 		return fmt.Errorf("checksum entry missing for %s", filepath.Base(path))
 	}
-	file, err := os.Open(path)
+	got, err := sha256File(ctx, path, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return err
-	}
-	got := hex.EncodeToString(hash.Sum(nil))
 	if got != want {
 		return fmt.Errorf("SHA-256 for %s = %s, want %s", filepath.Base(path), got, want)
 	}
@@ -608,7 +656,23 @@ type archiveExecutable struct {
 	sha256        string
 }
 
-func inspectReleaseArchive(archivePath string, target target, expectedRoot string) (archiveExecutable, func(), error) {
+func verifyTrustedNativeArtifact(ctx context.Context, trustedPath string, artifact archiveExecutable) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	trustedSHA256, err := sha256File(ctx, trustedPath, maxReleaseEntryBytes)
+	if err != nil {
+		return fmt.Errorf("hash trusted native binary: %w", err)
+	}
+	if !strings.EqualFold(artifact.sha256, trustedSHA256) {
+		return fmt.Errorf("native artifact SHA-256 does not match trusted native binary")
+	}
+	return nil
+}
+
+func inspectReleaseArchive(ctx context.Context, archivePath string, target target, expectedRoot string) (archiveExecutable, func(), error) {
 	dir, err := os.MkdirTemp("", "unifi-release-artifact-")
 	if err != nil {
 		return archiveExecutable{}, func() {}, err
@@ -616,15 +680,15 @@ func inspectReleaseArchive(archivePath string, target target, expectedRoot strin
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	destination := filepath.Join(dir, target.executableName())
 	if strings.HasSuffix(archivePath, ".zip") {
-		err = inspectZipArchive(archivePath, target, expectedRoot, destination)
+		err = inspectZipArchive(ctx, archivePath, target, expectedRoot, destination)
 	} else {
-		err = inspectTarArchive(archivePath, target, expectedRoot, destination)
+		err = inspectTarArchive(ctx, archivePath, target, expectedRoot, destination)
 	}
 	if err != nil {
 		cleanup()
 		return archiveExecutable{}, func() {}, err
 	}
-	digest, err := sha256File(destination)
+	digest, err := sha256File(ctx, destination, maxReleaseEntryBytes)
 	if err != nil {
 		cleanup()
 		return archiveExecutable{}, func() {}, err
@@ -636,22 +700,37 @@ func inspectReleaseArchive(archivePath string, target target, expectedRoot strin
 	}, cleanup, nil
 }
 
-func inspectZipArchive(archivePath string, target target, expectedRoot, destination string) error {
-	archive, err := zip.OpenReader(archivePath)
+func inspectZipArchive(ctx context.Context, archivePath string, target target, expectedRoot, destination string) error {
+	file, size, err := openReleaseFile(archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
 	}
-	defer archive.Close()
+	defer file.Close()
+	archive, err := zip.NewReader(file, size)
+	if err != nil {
+		return err
+	}
+	if len(archive.File) > maxReleaseArchiveEntries {
+		return fmt.Errorf("archive entry count %d exceeds maximum of %d", len(archive.File), maxReleaseArchiveEntries)
+	}
 	want := expectedArchiveEntries(expectedRoot, target)
 	seenPaths := make(map[string]struct{})
 	seenNames := make(map[string]struct{})
-	for _, file := range archive.File {
-		clean, isDir, err := validateArchiveEntry(file.Name, expectedRoot, file.FileInfo().IsDir())
+	var expanded int64
+	for _, entry := range archive.File {
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
+		if entry.UncompressedSize64 > uint64(maxReleaseEntryBytes) || entry.UncompressedSize64 > uint64(maxReleaseExpandedBytes-expanded) {
+			return fmt.Errorf("archive entry %q exceeds expanded byte limit", entry.Name)
+		}
+		expanded += int64(entry.UncompressedSize64)
+		clean, isDir, err := validateArchiveEntry(entry.Name, expectedRoot, entry.FileInfo().IsDir())
 		if err != nil {
 			return err
 		}
-		if !isDir && !file.Mode().IsRegular() {
-			return fmt.Errorf("archive entry %q has unsupported mode %s", file.Name, file.Mode())
+		if !isDir && !entry.Mode().IsRegular() {
+			return fmt.Errorf("archive entry %q has unsupported mode %s", entry.Name, entry.Mode())
 		}
 		if err := recordArchiveEntry(clean, isDir, seenPaths, seenNames); err != nil {
 			return err
@@ -662,7 +741,7 @@ func inspectZipArchive(archivePath string, target target, expectedRoot, destinat
 		if _, ok := want[clean]; !ok {
 			return fmt.Errorf("unexpected archive entry %q", clean)
 		}
-		mode := file.Mode().Perm()
+		mode := entry.Mode().Perm()
 		wantMode := expectedArchiveMode(clean, expectedRoot, target)
 		if mode != wantMode {
 			return fmt.Errorf("archive entry %q mode = %04o, want %04o", clean, mode, wantMode)
@@ -670,11 +749,11 @@ func inspectZipArchive(archivePath string, target target, expectedRoot, destinat
 		if clean != expectedRoot+"/"+target.executableName() {
 			continue
 		}
-		reader, err := file.Open()
+		reader, err := entry.Open()
 		if err != nil {
 			return err
 		}
-		err = writeExtracted(destination, reader, mode)
+		err = writeExtracted(destination, contextReader{ctx: ctx, reader: reader}, mode, maxReleaseEntryBytes)
 		closeErr := reader.Close()
 		if err != nil {
 			return err
@@ -686,13 +765,13 @@ func inspectZipArchive(archivePath string, target target, expectedRoot, destinat
 	return requireArchiveEntries(seenPaths, want, destination, expectedRoot)
 }
 
-func inspectTarArchive(archivePath string, target target, expectedRoot, destination string) error {
-	file, err := os.Open(archivePath)
+func inspectTarArchive(ctx context.Context, archivePath string, target target, expectedRoot, destination string) error {
+	file, _, err := openReleaseFile(archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	gzipReader, err := gzip.NewReader(file)
+	gzipReader, err := gzip.NewReader(contextReader{ctx: ctx, reader: file})
 	if err != nil {
 		return err
 	}
@@ -701,7 +780,12 @@ func inspectTarArchive(archivePath string, target target, expectedRoot, destinat
 	want := expectedArchiveEntries(expectedRoot, target)
 	seenPaths := make(map[string]struct{})
 	seenNames := make(map[string]struct{})
+	entries := 0
+	var expanded int64
 	for {
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -709,6 +793,14 @@ func inspectTarArchive(archivePath string, target target, expectedRoot, destinat
 		if err != nil {
 			return err
 		}
+		entries++
+		if entries > maxReleaseArchiveEntries {
+			return fmt.Errorf("archive entry count exceeds maximum of %d", maxReleaseArchiveEntries)
+		}
+		if header.Size < 0 || header.Size > maxReleaseEntryBytes || header.Size > maxReleaseExpandedBytes-expanded {
+			return fmt.Errorf("archive entry %q exceeds expanded byte limit", header.Name)
+		}
+		expanded += header.Size
 		isDir := header.Typeflag == tar.TypeDir
 		if header.Typeflag != tar.TypeReg && !isDir {
 			return fmt.Errorf("archive entry %q has unsupported type %d", header.Name, header.Typeflag)
@@ -732,27 +824,43 @@ func inspectTarArchive(archivePath string, target target, expectedRoot, destinat
 			return fmt.Errorf("archive entry %q mode = %04o, want %04o", clean, mode, wantMode)
 		}
 		if clean == expectedRoot+"/"+target.executableName() {
-			if err := writeExtracted(destination, reader, mode); err != nil {
+			if err := writeExtracted(destination, contextReader{ctx: ctx, reader: reader}, mode, maxReleaseEntryBytes); err != nil {
 				return err
 			}
+		} else if _, err := io.CopyN(io.Discard, contextReader{ctx: ctx, reader: reader}, header.Size); err != nil {
+			return fmt.Errorf("read archive entry %q: %w", header.Name, err)
 		}
 	}
 	return requireArchiveEntries(seenPaths, want, destination, expectedRoot)
 }
 
-func writeExtracted(path string, reader io.Reader, mode fs.FileMode) error {
+func writeExtracted(path string, reader io.Reader, mode fs.FileMode, maxBytes int64) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(file, reader); err != nil {
-		file.Close()
+	remove := true
+	defer func() {
+		_ = file.Close()
+		if remove {
+			_ = os.Remove(path)
+		}
+	}()
+	written, err := io.Copy(file, io.LimitReader(reader, maxBytes+1))
+	if err != nil {
 		return err
+	}
+	if written > maxBytes {
+		return fmt.Errorf("archive entry exceeds %d bytes", maxBytes)
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(path, mode)
+	if err := os.Chmod(path, mode); err != nil {
+		return err
+	}
+	remove = false
+	return nil
 }
 
 func expectedArchiveEntries(root string, target target) map[string]struct{} {
@@ -855,13 +963,13 @@ func resolveArtifactPath(dist, artifactPath string) (string, error) {
 	return resolved, nil
 }
 
-func inspectSourceArchive(archivePath, expectedRoot, expectedCommit string) error {
-	file, err := os.Open(archivePath)
+func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expectedCommit string) error {
+	file, _, err := openReleaseFile(archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	gzipReader, err := gzip.NewReader(file)
+	gzipReader, err := gzip.NewReader(contextReader{ctx: ctx, reader: file})
 	if err != nil {
 		return fmt.Errorf("open gzip: %w", err)
 	}
@@ -876,7 +984,12 @@ func inspectSourceArchive(archivePath, expectedRoot, expectedCommit string) erro
 	}
 	regularFiles := 0
 	globalHeaders := 0
+	entries := 0
+	var expanded int64
 	for {
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -884,6 +997,14 @@ func inspectSourceArchive(archivePath, expectedRoot, expectedCommit string) erro
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
+		entries++
+		if entries > maxReleaseSourceEntries {
+			return fmt.Errorf("source archive entry count exceeds maximum of %d", maxReleaseSourceEntries)
+		}
+		if header.Size < 0 || header.Size > maxReleaseEntryBytes || header.Size > maxReleaseExpandedBytes-expanded {
+			return fmt.Errorf("source archive entry %q exceeds expanded byte limit", header.Name)
+		}
+		expanded += header.Size
 		if header.Typeflag == tar.TypeXGlobalHeader {
 			globalHeaders++
 			if globalHeaders > 1 {
@@ -919,6 +1040,9 @@ func inspectSourceArchive(archivePath, expectedRoot, expectedCommit string) erro
 			}
 			core[clean] = true
 		}
+		if _, err := io.CopyN(io.Discard, contextReader{ctx: ctx, reader: reader}, header.Size); err != nil {
+			return fmt.Errorf("read source entry %q: %w", header.Name, err)
+		}
 	}
 	if regularFiles == 0 {
 		return fmt.Errorf("source archive has no files")
@@ -932,6 +1056,48 @@ func inspectSourceArchive(archivePath, expectedRoot, expectedCommit string) erro
 		}
 	}
 	return nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := contextErr(r.ctx); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
+func contextErr(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+func openReleaseFile(path string, maxBytes int64) (*os.File, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, 0, fmt.Errorf("%s is not a regular file", path)
+	}
+	if info.Size() > maxBytes {
+		file.Close()
+		return nil, 0, fmt.Errorf("%s exceeds %d bytes", path, maxBytes)
+	}
+	return file, info.Size(), nil
 }
 
 func validateSourceEntry(name, expectedRoot string, directory bool) (string, bool, error) {
@@ -950,11 +1116,10 @@ func validateSourceEntry(name, expectedRoot string, directory bool) (string, boo
 }
 
 func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executable archiveExecutable) error {
-	file, err := os.Open(sbomPath)
+	data, err := readReleaseFile(sbomPath, maxReleaseSBOMBytes)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	var bom struct {
 		BOMFormat   string `json:"bomFormat"`
 		SpecVersion string `json:"specVersion"`
@@ -976,7 +1141,7 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 			} `json:"hashes"`
 		} `json:"components"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 32<<20))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(&bom); err != nil {
 		return fmt.Errorf("decode CycloneDX JSON: %w", err)
 	}
@@ -1058,21 +1223,21 @@ func matchesSyftExecutablePath(name, relativePath string) bool {
 	return strings.HasPrefix(tempDir, "syft-archive-contents-") && len(tempDir) > len("syft-archive-contents-")
 }
 
-func sha256File(path string) (string, error) {
-	file, err := os.Open(path)
+func sha256File(ctx context.Context, path string, maxBytes int64) (string, error) {
+	file, _, err := openReleaseFile(path, maxBytes)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
+	if _, err := io.Copy(hash, contextReader{ctx: ctx, reader: file}); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func inspectGoReleaserMetadata(path, expectedVersion, expectedCommit string) error {
-	data, err := os.ReadFile(path)
+	data, err := readReleaseFile(path, maxReleaseManifestBytes)
 	if err != nil {
 		return err
 	}

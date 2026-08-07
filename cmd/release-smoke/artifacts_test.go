@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,6 +27,187 @@ import (
 func TestVerifyArtifactsAcceptsExactHardenedRelease(t *testing.T) {
 	fixture := newReleaseFixture(t)
 	verifyReleaseFixture(t, fixture)
+}
+
+func TestWriteExtractedRejectsEntryLimitOverflow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unifi")
+	err := writeExtracted(path, bytes.NewReader([]byte("123456789")), 0o755, 8)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("writeExtracted error = %v, want explicit size-limit failure", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized extraction left file behind: %v", statErr)
+	}
+}
+
+func TestReadReleaseFileRejectsOversizedAndNonRegularInput(t *testing.T) {
+	t.Run("oversized", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "metadata.json")
+		if err := os.WriteFile(path, []byte("123456789"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := readReleaseFile(path, 8)
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("readReleaseFile error = %v, want size-limit failure", err)
+		}
+	})
+
+	t.Run("directory", func(t *testing.T) {
+		_, err := readReleaseFile(t.TempDir(), 8)
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("readReleaseFile error = %v, want regular-file failure", err)
+		}
+	})
+}
+
+func TestSHA256FileRejectsOversizedInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	if err := os.WriteFile(path, []byte("123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := sha256File(context.Background(), path, 8)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("sha256File error = %v, want size-limit failure", err)
+	}
+}
+
+func TestArchiveInspectionRejectsDeclaredEntryExpansionBeforeReadingBody(t *testing.T) {
+	t.Run("release archive", func(t *testing.T) {
+		target := target{goos: "linux", goarch: "amd64"}
+		root := "unifi-cli_1.0.0_linux_amd64"
+		path := filepath.Join(t.TempDir(), "release.tar.gz")
+		writeTruncatedTarGzHeader(t, path, &tar.Header{
+			Name: root + "/unifi", Mode: 0o755, Typeflag: tar.TypeReg, Size: maxReleaseEntryBytes + 1,
+		})
+		err := inspectTarArchive(context.Background(), path, target, root, filepath.Join(t.TempDir(), "unifi"))
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("inspectTarArchive error = %v, want expansion-limit failure", err)
+		}
+	})
+
+	t.Run("source archive", func(t *testing.T) {
+		root := "unifi-cli_1.0.0"
+		path := filepath.Join(t.TempDir(), "source.tar.gz")
+		writeTruncatedTarGzHeader(t, path, &tar.Header{
+			Name: root + "/huge", Mode: 0o644, Typeflag: tar.TypeReg, Size: maxReleaseEntryBytes + 1,
+		})
+		err := inspectSourceArchive(context.Background(), path, root, smokeCommit)
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("inspectSourceArchive error = %v, want expansion-limit failure", err)
+		}
+	})
+}
+
+func TestReleaseArchiveInspectionRejectsEntryCountAndCompressedSizeBudgets(t *testing.T) {
+	releaseTarget := target{goos: "linux", goarch: "amd64"}
+	root := "unifi-cli_1.0.0_linux_amd64"
+
+	t.Run("entry count", func(t *testing.T) {
+		entries := make([]archiveEntry, maxReleaseArchiveEntries+1)
+		for i := range entries {
+			entries[i] = archiveEntry{name: fmt.Sprintf("%s/file-%d", root, i), mode: 0o644, body: []byte("x")}
+		}
+		path := filepath.Join(t.TempDir(), "many-entries.zip")
+		writeZip(t, path, entries)
+		windowsTarget := target{goos: "windows", goarch: "amd64"}
+		err := inspectZipArchive(context.Background(), path, windowsTarget, root, filepath.Join(t.TempDir(), "unifi.exe"))
+		if err == nil || !strings.Contains(err.Error(), "entry count") {
+			t.Fatalf("inspectTarArchive error = %v, want entry-count failure", err)
+		}
+	})
+
+	t.Run("compressed bytes", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "oversized.tar.gz")
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Truncate(maxReleaseArchiveBytes + 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		err = inspectTarArchive(context.Background(), path, releaseTarget, root, filepath.Join(t.TempDir(), "unifi"))
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("inspectTarArchive error = %v, want compressed-size failure", err)
+		}
+	})
+}
+
+func TestSourceArchiveInspectionHonorsCanceledContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source.tar.gz")
+	writeTarGz(t, path, []archiveEntry{{
+		name: "pax_global_header", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": smokeCommit},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := inspectSourceArchive(ctx, path, "unifi-cli_1.0.0", smokeCommit)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("inspectSourceArchive error = %v, want context.Canceled", err)
+	}
+}
+
+func writeTruncatedTarGzHeader(t *testing.T, path string, header *tar.Header) {
+	t.Helper()
+	var raw bytes.Buffer
+	writer := tar.NewWriter(&raw)
+	if err := writer.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	if _, err := gzipWriter.Write(raw.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeArtifactMustMatchTrustedBinaryWithoutExecution(t *testing.T) {
+	dir := t.TempDir()
+	trusted := filepath.Join(dir, "trusted")
+	if err := os.WriteFile(trusted, []byte("trusted-release-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "artifact-executed")
+	artifactPath := filepath.Join(dir, "artifact")
+	script := fmt.Sprintf("#!/bin/sh\nprintf executed > %q\n", marker)
+	if err := os.WriteFile(artifactPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(script))
+	artifact := archiveExecutable{extractedPath: artifactPath, sha256: hex.EncodeToString(digest[:])}
+
+	err := verifyTrustedNativeArtifact(context.Background(), trusted, artifact)
+	if err == nil || !strings.Contains(err.Error(), "trusted native binary") {
+		t.Fatalf("verifyTrustedNativeArtifact error = %v, want hash mismatch", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("untrusted artifact was executed: %v", statErr)
+	}
+}
+
+func TestVerifyArtifactsRejectsNativeArchiveThatDiffersFromTrustedBuild(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	trusted, err := os.ReadFile(fixture.trustedNative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered := filepath.Join(t.TempDir(), "trusted-unifi")
+	trusted = append(trusted, []byte("different-build")...)
+	if err := os.WriteFile(altered, trusted, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture.trustedNative = altered
+	verifyReleaseFixtureFails(t, fixture)
 }
 
 func TestVerifyArtifactsAcceptsPinnedToolOutputSnapshot(t *testing.T) {
@@ -120,7 +302,7 @@ func TestVerifyArtifactsRejectsWrongExpectedVersion(t *testing.T) {
 	fixture := newReleaseFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := verifyArtifacts(ctx, fixture.dist, "9.9.9", smokeCommit); err == nil {
+	if err := verifyArtifacts(ctx, fixture.dist, "9.9.9", smokeCommit, fixture.trustedNative); err == nil {
 		t.Fatal("artifact verification accepted a release built for a different version")
 	}
 }
@@ -175,7 +357,7 @@ func TestInspectSourceArchiveAcceptsPinnedGoReleaserPAXHeader(t *testing.T) {
 		{name: root + "/CHANGELOG.md", mode: 0o664, body: []byte("changelog")},
 		{name: root + "/go.mod", mode: 0o664, body: []byte("module github.com/noahjenkins/unifi-cli")},
 	})
-	if err := inspectSourceArchive(path, root, smokeCommit); err != nil {
+	if err := inspectSourceArchive(context.Background(), path, root, smokeCommit); err != nil {
 		t.Fatalf("pinned GoReleaser source PAX header rejected: %v", err)
 	}
 }
@@ -576,10 +758,11 @@ type archiveEntry struct {
 }
 
 type releaseFixture struct {
-	dist      string
-	artifacts []artifact
-	checksums map[string]string
-	binaries  map[target][]byte
+	dist          string
+	artifacts     []artifact
+	checksums     map[string]string
+	binaries      map[target][]byte
+	trustedNative string
 }
 
 type pinnedOutputSnapshot struct {
@@ -692,6 +875,11 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			Name: fixture.sbomName(target), Path: fixture.sbomName(target), Type: "SBOM",
 		})
 	}
+	native := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
+	fixture.trustedNative = filepath.Join(t.TempDir(), native.executableName())
+	if err := os.WriteFile(fixture.trustedNative, fixture.binaries[native], 0o755); err != nil {
+		t.Fatal(err)
+	}
 	fixture.replaceSource(t, fixture.validSourceEntries())
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: fixture.sourceName(), Path: fixture.sourceName(), Type: "Source"})
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: "checksums.txt", Path: "checksums.txt", Type: "Checksum"})
@@ -707,10 +895,11 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 func (f *releaseFixture) clone(t *testing.T) *releaseFixture {
 	t.Helper()
 	clone := &releaseFixture{
-		dist:      t.TempDir(),
-		artifacts: slices.Clone(f.artifacts),
-		checksums: make(map[string]string, len(f.checksums)),
-		binaries:  f.binaries,
+		dist:          t.TempDir(),
+		artifacts:     slices.Clone(f.artifacts),
+		checksums:     make(map[string]string, len(f.checksums)),
+		binaries:      f.binaries,
+		trustedNative: f.trustedNative,
 	}
 	for name, checksum := range f.checksums {
 		clone.checksums[name] = checksum
@@ -930,7 +1119,7 @@ func verifyReleaseFixture(t *testing.T, fixture *releaseFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit); err != nil {
+	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit, fixture.trustedNative); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -939,7 +1128,7 @@ func verifyReleaseFixtureFails(t *testing.T, fixture *releaseFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit); err == nil {
+	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit, fixture.trustedNative); err == nil {
 		t.Fatal("artifact verification unexpectedly accepted invalid release")
 	}
 }

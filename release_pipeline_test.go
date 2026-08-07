@@ -258,7 +258,9 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		"dist/*.tar.gz",
 		"dist/*.zip",
 		"dist/checksums.txt",
-		"go run ./cmd/release-smoke --artifacts dist --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\"",
+		"RELEASE_COMMIT_DATE=\"$(date -u -d \"@$RELEASE_COMMIT_TIMESTAMP\" +%Y-%m-%dT%H:%M:%SZ)\"",
+		"go build -trimpath -ldflags \"$RELEASE_LDFLAGS\" -o \"$RUNNER_TEMP/unifi-trusted\" ./cmd/unifi",
+		"go run ./cmd/release-smoke --artifacts dist --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-native \"$RUNNER_TEMP/unifi-trusted\"",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("release workflow missing %q", want)
@@ -267,13 +269,14 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 
 	steps := releaseSteps(t, workflow)
 	preflight := stepIndex(t, steps, "Refuse published release replacement")
+	trusted := stepIndex(t, steps, "Build trusted native smoke binary")
 	syft := stepIndex(t, steps, "Install pinned Syft for archive SBOMs")
 	build := stepIndex(t, steps, "Build and upload draft release artifacts")
 	verify := stepIndex(t, steps, "Verify draft artifact set")
 	attest := stepIndex(t, steps, "Attest release provenance")
 	publish := stepIndex(t, steps, "Publish verified release")
-	if !(preflight < syft && syft < build && build < verify && verify < attest && attest < publish) {
-		t.Errorf("unsafe release ordering: preflight=%d syft=%d build=%d verify=%d attest=%d publish=%d", preflight, syft, build, verify, attest, publish)
+	if !(preflight < trusted && trusted < syft && syft < build && build < verify && verify < attest && attest < publish) {
+		t.Errorf("unsafe release ordering: preflight=%d trusted=%d syft=%d build=%d verify=%d attest=%d publish=%d", preflight, trusted, syft, build, verify, attest, publish)
 	}
 	preflightStep := steps[preflight].(map[string]any)
 	if fmt.Sprint(preflightStep["run"]) != "bash ./scripts/release-preflight.sh" {
