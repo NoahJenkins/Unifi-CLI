@@ -32,15 +32,16 @@ type modernFirewallCall struct {
 }
 
 type modernFirewallAPI struct {
-	zones              []map[string]any
-	policies           []map[string]any
-	details            map[string]map[string]any
-	orderingReads      []domain.FirewallOrdering
-	orderingReadIndex  int
-	postResponse       map[string]any
-	putResponse        map[string]any
-	calls              []modernFirewallCall
-	errByMethodAndPath map[string]error
+	zones               []map[string]any
+	policies            []map[string]any
+	details             map[string]map[string]any
+	orderingReads       []domain.FirewallOrdering
+	orderingReadIndex   int
+	postResponse        map[string]any
+	putResponse         map[string]any
+	retainDeletedDetail bool
+	calls               []modernFirewallCall
+	errByMethodAndPath  map[string]error
 }
 
 func newModernFirewallAPI(t *testing.T) *modernFirewallAPI {
@@ -126,7 +127,9 @@ func (f *modernFirewallAPI) DoOfficial(_ context.Context, method, path string, i
 	case method == http.MethodPut && strings.HasPrefix(parsed.Path, policiesPath+"/"):
 		return decodeFirewallInto(f.putResponse, out)
 	case method == http.MethodDelete && strings.HasPrefix(parsed.Path, policiesPath+"/"):
-		delete(f.details, parsed.Path)
+		if !f.retainDeletedDetail {
+			delete(f.details, parsed.Path)
+		}
 		return nil
 	default:
 		return errors.New("unexpected official request: " + method + " " + path)
@@ -210,6 +213,108 @@ func TestFirewallPoliciesNormalizeOfficialZonesActionsAndProtocols(t *testing.T)
 	}
 }
 
+func TestFirewallCompleteFixtureUsesOfficialNestedDiscriminatorShapes(t *testing.T) {
+	policies := newModernFirewallAPI(t).policies
+	policy := policies[0]
+
+	t.Run("all policies contain required writable and response fields", func(t *testing.T) {
+		for i, item := range policies {
+			for _, field := range []string{"id", "name", "enabled", "index", "action", "source", "destination", "ipProtocolScope", "loggingEnabled", "metadata"} {
+				if _, ok := item[field]; !ok {
+					t.Errorf("policy %d missing required field %s", i, field)
+				}
+			}
+		}
+	})
+
+	t.Run("action variants contain only their required fields", func(t *testing.T) {
+		allow := policies[0]["action"].(map[string]any)
+		if allow["type"] != "ALLOW" || allow["allowReturnTraffic"] != false {
+			t.Fatalf("ALLOW action = %#v", allow)
+		}
+		for _, index := range []int{1, 2} {
+			action := policies[index]["action"].(map[string]any)
+			if _, unsupported := action["allowReturnTraffic"]; unsupported {
+				t.Fatalf("%s action contains ALLOW-only field: %#v", action["type"], action)
+			}
+		}
+	})
+
+	t.Run("IP_ADDRESS uses required typed nested filters", func(t *testing.T) {
+		source := policy["source"].(map[string]any)
+		traffic := source["trafficFilter"].(map[string]any)
+		ipFilter := traffic["ipAddressFilter"].(map[string]any)
+		items, ok := ipFilter["items"].([]any)
+		if traffic["type"] != "IP_ADDRESS" || ipFilter["type"] != "IP_ADDRESSES" || ipFilter["matchOpposite"] != false || !ok || len(items) != 1 {
+			t.Fatalf("IP_ADDRESS filter = %#v", traffic)
+		}
+		subnet := items[0].(map[string]any)
+		if subnet["type"] != "SUBNET" || subnet["value"] != "192.0.2.0/24" {
+			t.Fatalf("IP_ADDRESS item = %#v", subnet)
+		}
+	})
+
+	t.Run("PORTS uses typed items", func(t *testing.T) {
+		source := policy["source"].(map[string]any)
+		traffic := source["trafficFilter"].(map[string]any)
+		ports := traffic["portFilter"].(map[string]any)
+		if _, invented := ports["ports"]; invented {
+			t.Fatalf("PORTS filter contains unsupported ports field: %#v", ports)
+		}
+		items, ok := ports["items"].([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("PORTS items = %#v, want one typed item", ports["items"])
+		}
+		item, ok := items[0].(map[string]any)
+		if !ok || item["type"] != "PORT_NUMBER_RANGE" || item["start"] != float64(1024) || item["stop"] != float64(65535) {
+			t.Fatalf("PORTS item = %#v, want typed number range", items[0])
+		}
+	})
+
+	t.Run("DOMAIN uses required domainFilter", func(t *testing.T) {
+		destination := policy["destination"].(map[string]any)
+		traffic := destination["trafficFilter"].(map[string]any)
+		if _, invented := traffic["domain"]; invented {
+			t.Fatalf("DOMAIN filter contains unsupported domain field: %#v", traffic)
+		}
+		domainFilter, ok := traffic["domainFilter"].(map[string]any)
+		if !ok || domainFilter["type"] != "DOMAINS" || !reflect.DeepEqual(domainFilter["domains"], []any{"resolver.example.test"}) {
+			t.Fatalf("DOMAIN domainFilter = %#v", traffic["domainFilter"])
+		}
+	})
+
+	t.Run("EVERY_DAY uses required timeFilter", func(t *testing.T) {
+		schedule := policy["schedule"].(map[string]any)
+		if _, invented := schedule["startTime"]; invented {
+			t.Fatalf("EVERY_DAY contains unsupported flat time fields: %#v", schedule)
+		}
+		timeFilter, ok := schedule["timeFilter"].(map[string]any)
+		if !ok || timeFilter["startTime"] != "08:00" || timeFilter["stopTime"] != "18:00" {
+			t.Fatalf("EVERY_DAY timeFilter = %#v", schedule["timeFilter"])
+		}
+	})
+
+	t.Run("IP protocol variants contain required nested discriminators", func(t *testing.T) {
+		named := policies[0]["ipProtocolScope"].(map[string]any)
+		namedFilter := named["protocolFilter"].(map[string]any)
+		if named["ipVersion"] != "IPV4" || namedFilter["type"] != "NAMED_PROTOCOL" || namedFilter["matchOpposite"] != false || namedFilter["protocol"].(map[string]any)["name"] != "udp" {
+			t.Fatalf("NAMED_PROTOCOL scope = %#v", named)
+		}
+		preset := policies[1]["ipProtocolScope"].(map[string]any)
+		presetFilter := preset["protocolFilter"].(map[string]any)
+		if preset["ipVersion"] != "IPV4_AND_IPV6" || presetFilter["type"] != "PRESET" || presetFilter["preset"].(map[string]any)["name"] != "TCP_UDP" {
+			t.Fatalf("PRESET scope = %#v", preset)
+		}
+		all := policies[2]["ipProtocolScope"].(map[string]any)
+		if all["ipVersion"] != "IPV4_AND_IPV6" {
+			t.Fatalf("all-protocol scope = %#v", all)
+		}
+		if _, unexpected := all["protocolFilter"]; unexpected {
+			t.Fatalf("all-protocol scope contains filter: %#v", all)
+		}
+	})
+}
+
 func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *testing.T) {
 	ctx := context.Background()
 	api := newModernFirewallAPI(t)
@@ -255,6 +360,102 @@ func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *te
 	assertFirewallCall(t, api.calls, http.MethodGet, client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID), 1)
 }
 
+func TestFirewallCreateVerificationComparesCompleteWritableDocument(t *testing.T) {
+	baseObserved := map[string]any{
+		"id": createdPolicyID, "name": "Allow HTTPS", "description": "Verified create", "enabled": true, "index": float64(120),
+		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": true},
+		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+		"loggingEnabled":  true, "metadata": map[string]any{"origin": "USER_DEFINED"},
+	}
+	in := domain.FirewallInput{
+		Name: "Allow HTTPS", Description: "Verified create", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp", LoggingEnabled: true,
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "allow return traffic mismatch", mutate: func(observed map[string]any) {
+			observed["action"].(map[string]any)["allowReturnTraffic"] = false
+		}},
+		{name: "source filter mismatch", mutate: func(observed map[string]any) {
+			observed["source"].(map[string]any)["trafficFilter"] = map[string]any{
+				"type": "PORT",
+				"portFilter": map[string]any{
+					"type": "PORTS", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "PORT_NUMBER", "value": float64(443)}},
+				},
+			}
+		}},
+		{name: "destination filter mismatch", mutate: func(observed map[string]any) {
+			observed["destination"].(map[string]any)["trafficFilter"] = map[string]any{
+				"type": "DOMAIN", "domainFilter": map[string]any{"type": "DOMAINS", "domains": []any{"example.test"}},
+			}
+		}},
+		{name: "connection state mismatch", mutate: func(observed map[string]any) {
+			observed["connectionStateFilter"] = []any{"NEW"}
+		}},
+		{name: "IPsec mismatch", mutate: func(observed map[string]any) {
+			observed["ipsecFilter"] = "MATCH_ENCRYPTED"
+		}},
+		{name: "schedule mismatch", mutate: func(observed map[string]any) {
+			observed["schedule"] = map[string]any{"mode": "EVERY_DAY", "timeFilter": map[string]any{"startTime": "08:00", "stopTime": "18:00"}}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			observed := cloneFirewallMap(t, baseObserved)
+			tt.mutate(observed)
+			api.postResponse = map[string]any{"id": createdPolicyID}
+			api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+
+			_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in)
+			if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verification") {
+				t.Fatalf("error = %v, want explicit verification conflict", err)
+			}
+			if got := len(firewallCalls(api.calls, http.MethodPost)); got != 1 {
+				t.Fatalf("POST attempts = %d, want 1", got)
+			}
+			if got := len(firewallCalls(api.calls, http.MethodGet)); got != 1 {
+				t.Fatalf("verification GETs = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestFirewallCreatePreservesExplicitZeroValueFields(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	in := domain.FirewallInput{
+		Name: "Disabled allow", Description: "", SetDescription: true,
+		Enabled: false, SetEnabled: true, Action: "allow", AllowReturnTraffic: false, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		LoggingEnabled: false, SetLoggingEnabled: true,
+	}
+	observed := map[string]any{
+		"id": createdPolicyID, "name": "Disabled allow", "description": "", "enabled": false, "index": float64(120),
+		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false},
+		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+		"loggingEnabled":  false, "metadata": map[string]any{"origin": "USER_DEFINED"},
+	}
+	api.postResponse = map[string]any{"id": createdPolicyID}
+	api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+
+	if _, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	posts := firewallCalls(api.calls, http.MethodPost)
+	if len(posts) != 1 {
+		t.Fatalf("POST attempts = %d, want 1", len(posts))
+	}
+	body := posts[0].body.(map[string]any)
+	if description, present := body["description"]; !present || description != "" {
+		t.Fatalf("explicit empty description = %#v present=%t", description, present)
+	}
+}
+
 func TestFirewallCreateRejectsRequiredEnumsAndZoneResolutionFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -268,6 +469,8 @@ func TestFirewallCreateRejectsRequiredEnumsAndZoneResolutionFailures(t *testing.
 		{name: "invalid IP version", in: domain.FirewallInput{Name: "x", Action: "block", SourceZone: "Internal", DestinationZone: "External", IPVersion: "both"}, code: apperr.ValidationFailed},
 		{name: "invalid protocol", in: domain.FirewallInput{Name: "x", Action: "block", SourceZone: "Internal", DestinationZone: "External", Protocol: "gre"}, code: apperr.ValidationFailed},
 		{name: "IPv4 ICMPv6", in: domain.FirewallInput{Name: "x", Action: "block", SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "icmpv6"}, code: apperr.ValidationFailed},
+		{name: "block with explicit return traffic", in: domain.FirewallInput{Name: "x", Action: "block", SetAllowReturnTraffic: true, SourceZone: "Internal", DestinationZone: "External"}, code: apperr.ValidationFailed},
+		{name: "reject with explicit return traffic", in: domain.FirewallInput{Name: "x", Action: "reject", AllowReturnTraffic: true, SetAllowReturnTraffic: true, SourceZone: "Internal", DestinationZone: "External"}, code: apperr.ValidationFailed},
 		{name: "missing named zone", in: domain.FirewallInput{Name: "x", Action: "block", SourceZone: "Missing", DestinationZone: "External"}, code: apperr.NotFound},
 	}
 	for _, tt := range tests {
@@ -343,9 +546,34 @@ func TestFirewallIPVersionUpdatePreservesUnmodifiedProtocolNumberFilter(t *testi
 		},
 	}
 
-	// Planning performs no writes. Apply is covered by the complete-document
-	// test; this assertion names the nested field that must survive unchanged.
-	// The requested plan snapshot must still report the protocol number.
+	updated := cloneFirewallMap(t, policy)
+	updated["ipProtocolScope"].(map[string]any)["ipVersion"] = "IPV6"
+	api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", allowDNSPolicyID)] = updated
+	got, err := domain.NewFirewallService(api).ApplyUpdate(context.Background(), allowDNSPolicyID, domain.FirewallInput{
+		IPVersion: "ipv6", SetIPVersion: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Protocol != "ipv6:not(132)" {
+		t.Fatalf("observed protocol = %q, want preserved protocol-number filter", got.Protocol)
+	}
+	puts := firewallCalls(api.calls, http.MethodPut)
+	if len(puts) != 1 {
+		t.Fatalf("PUT attempts = %d, want 1", len(puts))
+	}
+	wantBody := cloneFirewallMap(t, policy)
+	delete(wantBody, "id")
+	delete(wantBody, "index")
+	delete(wantBody, "metadata")
+	wantBody["ipProtocolScope"].(map[string]any)["ipVersion"] = "IPV6"
+	if !reflect.DeepEqual(puts[0].body, wantBody) {
+		t.Fatalf("PUT body = %#v\nwant protocol-number-preserving body = %#v", puts[0].body, wantBody)
+	}
+	if got := len(firewallCalls(api.calls, http.MethodGet)); got != 1 {
+		t.Fatalf("verification GETs = %d, want 1", got)
+	}
+
 	p, _, err := domain.NewFirewallService(api).Update(context.Background(), allowDNSPolicyID, domain.FirewallInput{
 		IPVersion: "ipv6", SetIPVersion: true,
 	})
@@ -355,6 +583,129 @@ func TestFirewallIPVersionUpdatePreservesUnmodifiedProtocolNumberFilter(t *testi
 	after := p.Changes[0].After.(map[string]any)
 	if after["protocol"] != "ipv6:not(132)" {
 		t.Fatalf("protocol snapshot = %#v, want preserved protocol-number filter", after["protocol"])
+	}
+}
+
+func TestFirewallMutationVerificationFailuresAreExplicitAndNeverRetried(t *testing.T) {
+	createInput := domain.FirewallInput{Name: "Allow HTTPS", Action: "allow", SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp"}
+
+	t.Run("create missing ID is unverified", func(t *testing.T) {
+		api := newModernFirewallAPI(t)
+		api.postResponse = map[string]any{}
+		_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), createInput)
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "unverified") {
+			t.Fatalf("error = %v, want explicit unverified conflict", err)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodPost)); got != 1 {
+			t.Fatalf("POST attempts = %d, want 1", got)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodGet)); got != 0 {
+			t.Fatalf("verification GETs = %d, want 0 without an ID", got)
+		}
+	})
+
+	t.Run("create observed mismatch", func(t *testing.T) {
+		api := newModernFirewallAPI(t)
+		api.postResponse = map[string]any{"id": createdPolicyID}
+		observed := cloneFirewallMap(t, api.policies[1])
+		observed["id"] = createdPolicyID
+		api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+		_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), createInput)
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verification") {
+			t.Fatalf("error = %v, want explicit verification conflict", err)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodPost)); got != 1 {
+			t.Fatalf("POST attempts = %d, want 1", got)
+		}
+	})
+
+	t.Run("update observed mismatch", func(t *testing.T) {
+		api := newModernFirewallAPI(t)
+		_, err := domain.NewFirewallService(api).ApplyUpdate(context.Background(), allowDNSPolicyID, domain.FirewallInput{Name: "Renamed", SetName: true})
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verification") {
+			t.Fatalf("error = %v, want explicit verification conflict", err)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodPut)); got != 1 {
+			t.Fatalf("PUT attempts = %d, want 1", got)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodGet)); got != 1 {
+			t.Fatalf("verification GETs = %d, want 1", got)
+		}
+	})
+
+	t.Run("delete still present", func(t *testing.T) {
+		api := newModernFirewallAPI(t)
+		api.retainDeletedDetail = true
+		_, err := domain.NewFirewallService(api).ApplyDelete(context.Background(), allowDNSPolicyID)
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verification") {
+			t.Fatalf("error = %v, want explicit verification conflict", err)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodDelete)); got != 1 {
+			t.Fatalf("DELETE attempts = %d, want 1", got)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodGet)); got != 1 {
+			t.Fatalf("verification GETs = %d, want 1", got)
+		}
+	})
+
+	verificationReadTests := []struct {
+		name        string
+		writeMethod string
+		configure   func(*modernFirewallAPI, string)
+		run         func(*modernFirewallAPI) error
+	}{
+		{
+			name: "create verification read failure", writeMethod: http.MethodPost,
+			configure: func(api *modernFirewallAPI, path string) {
+				api.postResponse = map[string]any{"id": createdPolicyID}
+				api.errByMethodAndPath[http.MethodGet+" "+path] = errors.New("detail read failed")
+			},
+			run: func(api *modernFirewallAPI) error {
+				_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), createInput)
+				return err
+			},
+		},
+		{
+			name: "update verification read failure", writeMethod: http.MethodPut,
+			configure: func(api *modernFirewallAPI, path string) {
+				api.errByMethodAndPath[http.MethodGet+" "+path] = errors.New("detail read failed")
+			},
+			run: func(api *modernFirewallAPI) error {
+				_, err := domain.NewFirewallService(api).ApplyUpdate(context.Background(), allowDNSPolicyID, domain.FirewallInput{Name: "Renamed", SetName: true})
+				return err
+			},
+		},
+		{
+			name: "delete verification read failure", writeMethod: http.MethodDelete,
+			configure: func(api *modernFirewallAPI, path string) {
+				api.errByMethodAndPath[http.MethodGet+" "+path] = errors.New("detail read failed")
+			},
+			run: func(api *modernFirewallAPI) error {
+				_, err := domain.NewFirewallService(api).ApplyDelete(context.Background(), allowDNSPolicyID)
+				return err
+			},
+		},
+	}
+	for _, tt := range verificationReadTests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			id := allowDNSPolicyID
+			if tt.writeMethod == http.MethodPost {
+				id = createdPolicyID
+			}
+			path := client.OfficialPath("sites", firewallSiteID, "firewall", "policies", id)
+			tt.configure(api, path)
+			err := tt.run(api)
+			if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verified") {
+				t.Fatalf("error = %v, want explicit verification conflict", err)
+			}
+			if got := len(firewallCalls(api.calls, tt.writeMethod)); got != 1 {
+				t.Fatalf("%s attempts = %d, want 1", tt.writeMethod, got)
+			}
+			if got := len(firewallCalls(api.calls, http.MethodGet)); got != 1 {
+				t.Fatalf("verification GETs = %d, want 1", got)
+			}
+		})
 	}
 }
 
@@ -377,6 +728,19 @@ func TestFirewallUpdateRejectsZeroFieldAndEffectiveNoOpWithoutWrite(t *testing.T
 		if len(firewallMutationCalls(api.calls)) != 0 {
 			t.Fatalf("case %d wrote on no-op: %+v", i, api.calls)
 		}
+	}
+}
+
+func TestFirewallUpdateRejectsExplicitReturnTrafficForExistingNonAllowPolicy(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	_, _, err := domain.NewFirewallService(api).Update(context.Background(), blockWebPolicyID, domain.FirewallInput{
+		Name: "Renamed Block", SetName: true, AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+	})
+	if !apperr.Is(err, apperr.ValidationFailed) || !strings.Contains(err.Error(), "allow-return-traffic") {
+		t.Fatalf("error = %v, want explicit allow-return-traffic validation failure", err)
+	}
+	if len(firewallMutationCalls(api.calls)) != 0 {
+		t.Fatalf("invalid update wrote: %+v", api.calls)
 	}
 }
 

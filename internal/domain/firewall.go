@@ -231,14 +231,14 @@ func (s *FirewallService) ApplyCreate(ctx context.Context, in FirewallInput) (Fi
 	}
 	id := strField(created, "id")
 	if id == "" {
-		return FirewallRule{}, apperr.New(apperr.Internal, "controller create response is missing firewall policy ID")
+		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall create result is unverified: controller response is missing the policy ID")
 	}
 	observed, observedRaw, err := s.readPolicyDetail(ctx, id)
 	if err != nil {
-		return FirewallRule{}, err
+		return FirewallRule{}, verificationError("created firewall policy could not be verified", err)
 	}
-	if !firewallObservedMatchesInput(observedRaw, in, source.ID, destination.ID) {
-		return FirewallRule{}, apperr.New(apperr.Conflict, "created firewall policy does not match requested state")
+	if !reflect.DeepEqual(firewallWritableDocument(observedRaw), body) {
+		return FirewallRule{}, apperr.New(apperr.Conflict, "created firewall policy verification failed: observed writable document differs from requested state")
 	}
 	return observed, nil
 }
@@ -271,10 +271,10 @@ func (s *FirewallService) ApplyUpdate(ctx context.Context, query string, in Fire
 	}
 	observed, observedRaw, err := s.readPolicyDetail(ctx, doc.normalized.ID)
 	if err != nil {
-		return FirewallRule{}, err
+		return FirewallRule{}, verificationError("updated firewall policy could not be verified", err)
 	}
 	if !reflect.DeepEqual(firewallWritableDocument(observedRaw), body) {
-		return FirewallRule{}, apperr.New(apperr.Conflict, "updated firewall policy does not match requested state")
+		return FirewallRule{}, apperr.New(apperr.Conflict, "updated firewall policy verification failed: observed writable document differs from requested state")
 	}
 	return observed, nil
 }
@@ -304,9 +304,9 @@ func (s *FirewallService) ApplyDelete(ctx context.Context, query string) (Firewa
 		return FirewallRule{}, err
 	}
 	if _, _, err := s.readPolicyDetail(ctx, doc.normalized.ID); err == nil {
-		return FirewallRule{}, apperr.New(apperr.Conflict, "deleted firewall policy is still present")
+		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall delete verification failed: deleted policy is still present")
 	} else if !apperr.Is(err, apperr.NotFound) {
-		return FirewallRule{}, err
+		return FirewallRule{}, verificationError("deleted firewall policy could not be verified", err)
 	}
 	return doc.normalized, nil
 }
@@ -357,6 +357,15 @@ func (s *FirewallService) prepareUpdate(ctx context.Context, query string, in Fi
 		return firewallPolicyDocument{}, nil, err
 	}
 	body := firewallWritableDocument(doc.wire)
+	if in.SetAllowReturnTraffic {
+		action := doc.normalized.Action
+		if inputSetsFirewallAction(in) {
+			action = in.Action
+		}
+		if action != "allow" {
+			return firewallPolicyDocument{}, nil, apperr.New(apperr.ValidationFailed, "allow-return-traffic applies only to action allow")
+		}
+	}
 
 	if inputSetsFirewallName(in) {
 		body["name"] = in.Name
@@ -688,7 +697,7 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 		"ipProtocolScope": firewallProtocolBody(ipVersion, protocol),
 		"loggingEnabled":  in.LoggingEnabled,
 	}
-	if in.Description != "" {
+	if inputSetsFirewallDescription(in) {
 		body["description"] = in.Description
 	}
 	return body
@@ -748,26 +757,6 @@ func firewallPolicyResponseView(body map[string]any, existing FirewallRule) map[
 	return view
 }
 
-func firewallObservedMatchesInput(raw map[string]any, in FirewallInput, sourceZoneID, destinationZoneID string) bool {
-	observed := NormalizeFirewallRule(raw)
-	ipVersion := in.IPVersion
-	if ipVersion == "" {
-		ipVersion = "ipv4_and_ipv6"
-	}
-	protocol := in.Protocol
-	if protocol == "" {
-		protocol = "all"
-	}
-	wantProtocol := normalizeOfficialFirewallProtocol(firewallProtocolBody(ipVersion, protocol))
-	wantEnabled := true
-	if in.SetEnabled {
-		wantEnabled = in.Enabled
-	}
-	return observed.Name == in.Name && observed.Description == in.Description && observed.Enabled == wantEnabled &&
-		observed.Action == in.Action && observed.SourceZoneID == sourceZoneID && observed.DestinationZoneID == destinationZoneID &&
-		observed.Protocol == wantProtocol && observed.LoggingEnabled == in.LoggingEnabled
-}
-
 func firewallOrderingBody(ordering FirewallOrdering) map[string]any {
 	return map[string]any{"orderedFirewallPolicyIds": map[string]any{
 		"beforeSystemDefined": append([]string(nil), ordering.BeforeSystemDefined...),
@@ -803,6 +792,9 @@ func validateFirewallCreate(in FirewallInput) error {
 	}
 	if err := validateRequired("destination firewall zone", in.DestinationZone); err != nil {
 		return err
+	}
+	if (in.SetAllowReturnTraffic || in.AllowReturnTraffic) && in.Action != "allow" {
+		return apperr.New(apperr.ValidationFailed, "allow-return-traffic applies only to action allow")
 	}
 	return validateFirewallFields(in, true)
 }

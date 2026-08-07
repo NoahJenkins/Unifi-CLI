@@ -23,7 +23,9 @@
           "portFilter": {
             "type": "PORTS",
             "matchOpposite": false,
-            "ports": [1024, 65535]
+            "items": [
+              {"type": "PORT_NUMBER_RANGE", "start": 1024, "stop": 65535}
+            ]
           }
         }
       },
@@ -31,8 +33,10 @@
         "zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2",
         "trafficFilter": {
           "type": "DOMAIN",
-          "domain": "resolver.example.test",
-          "matchOpposite": false
+          "domainFilter": {
+            "type": "DOMAINS",
+            "domains": ["resolver.example.test"]
+          }
         }
       },
       "ipProtocolScope": {
@@ -46,7 +50,10 @@
       "connectionStateFilter": ["NEW", "ESTABLISHED"],
       "ipsecFilter": "MATCH_NOT_ENCRYPTED",
       "loggingEnabled": true,
-      "schedule": {"mode": "EVERY_DAY", "startTime": "08:00", "stopTime": "18:00"},
+      "schedule": {
+        "mode": "EVERY_DAY",
+        "timeFilter": {"startTime": "08:00", "stopTime": "18:00"}
+      },
       "metadata": {"origin": "USER_DEFINED"}
     },
     {
