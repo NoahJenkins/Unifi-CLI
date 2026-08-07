@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -240,8 +241,10 @@ func TestWriteReportRedactsUntrustedSummaryAndUsesPrivatePermissions(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
-		t.Fatalf("file mode = %o, want %o", got, want)
+	if runtime.GOOS != "windows" {
+		if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+			t.Fatalf("file mode = %o, want %o", got, want)
+		}
 	}
 	if filepath.Dir(path) != dir {
 		t.Fatalf("report dir = %q, want %q", filepath.Dir(path), dir)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -178,15 +179,19 @@ func TestFallbackUsesProtectedPermissionsAndAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat fallback: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("fallback file mode = %o, want 600", got)
+	if runtime.GOOS != "windows" {
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("fallback file mode = %o, want 600", got)
+		}
 	}
 	dirInfo, err := os.Stat(filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("Stat fallback directory: %v", err)
 	}
-	if got := dirInfo.Mode().Perm(); got != 0o700 {
-		t.Fatalf("fallback directory mode = %o, want 700", got)
+	if runtime.GOOS != "windows" {
+		if got := dirInfo.Mode().Perm(); got != 0o700 {
+			t.Fatalf("fallback directory mode = %o, want 700", got)
+		}
 	}
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
