@@ -26,6 +26,40 @@ func TestVerifyArtifactsAcceptsExactHardenedRelease(t *testing.T) {
 	verifyReleaseFixture(t, fixture)
 }
 
+func TestVerifyArtifactsAcceptsPinnedToolOutputSnapshot(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	snapshot := materializePinnedOutputSnapshot(t, fixture)
+
+	gotChecksums := make([]string, 0, len(fixture.checksums))
+	for name := range fixture.checksums {
+		gotChecksums = append(gotChecksums, name)
+	}
+	sort.Strings(gotChecksums)
+	wantChecksums := slices.Clone(snapshot.ChecksumNames)
+	sort.Strings(wantChecksums)
+	if !slices.Equal(gotChecksums, wantChecksums) {
+		t.Fatalf("fixture checksum scope = %v, pinned GoReleaser scope = %v", gotChecksums, wantChecksums)
+	}
+
+	verifyReleaseFixture(t, fixture)
+}
+
+func TestInspectCycloneDXSBOMAcceptsPinnedSyftFileComponent(t *testing.T) {
+	snapshot := loadPinnedOutputSnapshot(t)
+	data, err := json.Marshal(snapshot.CycloneDX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "pinned-syft.cdx.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archiveName := "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip"
+	if err := inspectCycloneDXSBOM(path, archiveName, "0.0.0-SNAPSHOT-1aa4eee"); err != nil {
+		t.Fatalf("pinned Syft 1.48.0 CycloneDX shape rejected: %v", err)
+	}
+}
+
 func TestVerifyArtifactsRejectsPathsOutsideDist(t *testing.T) {
 	fixture := newReleaseFixture(t)
 	archive := fixture.archiveArtifact(targets[0])
@@ -118,6 +152,21 @@ func TestVerifyArtifactsRejectsInvalidSourceArchive(t *testing.T) {
 		clone.writeMetadata(t)
 		verifyReleaseFixtureFails(t, clone)
 	})
+}
+
+func TestInspectSourceArchiveAcceptsPinnedGoReleaserPAXHeader(t *testing.T) {
+	root := "unifi-cli_0.0.0-SNAPSHOT-1aa4eee"
+	path := filepath.Join(t.TempDir(), "source.tar.gz")
+	writeTarGz(t, path, []archiveEntry{
+		{typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": "1aa4eee2545655a1"}},
+		{name: root + "/LICENSE", mode: 0o664, body: []byte("license")},
+		{name: root + "/README.md", mode: 0o664, body: []byte("readme")},
+		{name: root + "/CHANGELOG.md", mode: 0o664, body: []byte("changelog")},
+		{name: root + "/go.mod", mode: 0o664, body: []byte("module github.com/noahjenkins/unifi-cli")},
+	})
+	if err := inspectSourceArchive(path, root); err != nil {
+		t.Fatalf("pinned GoReleaser source PAX header rejected: %v", err)
+	}
 }
 
 func TestVerifyArtifactsRejectsInvalidArchiveLayout(t *testing.T) {
@@ -248,9 +297,108 @@ func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(clone.dist, clone.sbomName(target)), data, 0o644); err != nil {
 				t.Fatal(err)
 			}
+			clone.checksums[clone.sbomName(target)] = fileSHA256(t, filepath.Join(clone.dist, clone.sbomName(target)))
+			clone.writeMetadata(t)
 			verifyReleaseFixtureFails(t, clone)
 		})
 	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"unsupported spec": func(bom map[string]any) {
+			bom["specVersion"] = "1.6"
+		},
+		"wrong source type": func(bom map[string]any) {
+			metadata := bom["metadata"].(map[string]any)
+			component := metadata["component"].(map[string]any)
+			component["type"] = "application"
+		},
+		"unversioned library": func(bom map[string]any) {
+			bom["components"] = []any{map[string]any{"type": "library", "name": "github.com/spf13/cobra"}}
+		},
+		"unhashed file": func(bom map[string]any) {
+			bom["components"] = []any{map[string]any{"type": "file", "name": "/tmp/unifi"}}
+		},
+		"invalid file hash": func(bom map[string]any) {
+			bom["components"] = []any{map[string]any{
+				"type": "file", "name": "/tmp/unifi",
+				"hashes": []any{map[string]any{"alg": "SHA-256", "content": "not-a-digest"}},
+			}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clone := fixture.clone(t)
+			bom := clone.sbom(target, clone.archiveName(target), smokeVersion, true)
+			mutate(bom)
+			data, err := json.Marshal(bom)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(clone.dist, clone.sbomName(target)), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			clone.checksums[clone.sbomName(target)] = fileSHA256(t, filepath.Join(clone.dist, clone.sbomName(target)))
+			clone.writeMetadata(t)
+			verifyReleaseFixtureFails(t, clone)
+		})
+	}
+}
+
+func TestVerifyArtifactsRejectsInvalidMetadataRecord(t *testing.T) {
+	fixture := newReleaseFixture(t)
+
+	t.Run("duplicate", func(t *testing.T) {
+		clone := fixture.clone(t)
+		clone.artifacts = append(clone.artifacts, artifact{Name: "metadata.json", Path: "metadata.json", Type: "Metadata"})
+		clone.writeMetadata(t)
+		verifyReleaseFixtureFails(t, clone)
+	})
+
+	for name, metadata := range map[string]string{
+		"wrong project": fmt.Sprintf(`{"project_name":"other","version":%q,"commit":%q}`, smokeVersion, smokeCommit),
+		"wrong version": fmt.Sprintf(`{"project_name":"unifi-cli","version":"9.9.9","commit":%q}`, smokeCommit),
+		"wrong commit":  fmt.Sprintf(`{"project_name":"unifi-cli","version":%q,"commit":"%s"}`, smokeVersion, strings.Repeat("0", 40)),
+		"malformed":     `{"project_name":`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			clone := fixture.clone(t)
+			if err := os.WriteFile(filepath.Join(clone.dist, "metadata.json"), []byte(metadata), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			verifyReleaseFixtureFails(t, clone)
+		})
+	}
+}
+
+func TestVerifyArtifactsRejectsAmbiguousTargetlessSBOMRecords(t *testing.T) {
+	fixture := newReleaseFixture(t)
+
+	t.Run("duplicate exact archive SBOM", func(t *testing.T) {
+		clone := fixture.clone(t)
+		name := clone.sbomName(targets[0])
+		clone.artifacts = append(clone.artifacts, artifact{Name: name, Path: name, Type: "SBOM"})
+		clone.writeMetadata(t)
+		verifyReleaseFixtureFails(t, clone)
+	})
+
+	t.Run("unrelated targetless SBOM name", func(t *testing.T) {
+		clone := fixture.clone(t)
+		name := clone.sbomName(targets[0])
+		for i := range clone.artifacts {
+			if clone.artifacts[i].Type == "SBOM" && clone.artifacts[i].Name == name {
+				clone.artifacts[i].Name = "unrelated.sbom.json"
+				clone.artifacts[i].Path = "unrelated.sbom.json"
+			}
+		}
+		data, err := os.ReadFile(filepath.Join(clone.dist, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(clone.dist, "unrelated.sbom.json"), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		clone.writeMetadata(t)
+		verifyReleaseFixtureFails(t, clone)
+	})
 }
 
 func TestVerifyArtifactsRejectsInexactChecksumManifest(t *testing.T) {
@@ -264,6 +412,9 @@ func TestVerifyArtifactsRejectsInexactChecksumManifest(t *testing.T) {
 		},
 		"bad hash": func(clone *releaseFixture) {
 			clone.checksums[clone.archiveName(targets[0])] = strings.Repeat("0", sha256.Size*2)
+		},
+		"bad SBOM hash": func(clone *releaseFixture) {
+			clone.checksums[clone.sbomName(targets[0])] = strings.Repeat("0", sha256.Size*2)
 		},
 	}
 	for name, mutate := range tests {
@@ -293,6 +444,24 @@ func TestVerifyArtifactsRejectsInexactChecksumManifest(t *testing.T) {
 		}
 		verifyReleaseFixtureFails(t, clone)
 	})
+
+	t.Run("unsafe name", func(t *testing.T) {
+		clone := fixture.clone(t)
+		clone.writeMetadata(t)
+		line := fmt.Sprintf("%s  ../escape\n", strings.Repeat("0", sha256.Size*2))
+		file, err := os.OpenFile(filepath.Join(clone.dist, "checksums.txt"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(file, line); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		verifyReleaseFixtureFails(t, clone)
+	})
 }
 
 func TestVerifyArtifactsRejectsUnexpectedArtifactRecord(t *testing.T) {
@@ -307,9 +476,11 @@ func TestVerifyArtifactsRejectsUnexpectedArtifactRecord(t *testing.T) {
 }
 
 type archiveEntry struct {
-	name string
-	mode fs.FileMode
-	body []byte
+	name       string
+	mode       fs.FileMode
+	body       []byte
+	typeflag   byte
+	paxRecords map[string]string
 }
 
 type releaseFixture struct {
@@ -317,6 +488,85 @@ type releaseFixture struct {
 	artifacts []artifact
 	checksums map[string]string
 	binaries  map[target][]byte
+}
+
+type pinnedOutputSnapshot struct {
+	Version         string         `json:"version"`
+	Commit          string         `json:"commit"`
+	ArtifactRecords []artifact     `json:"artifact_records"`
+	ChecksumNames   []string       `json:"checksum_names"`
+	CycloneDX       map[string]any `json:"cyclonedx"`
+}
+
+func loadPinnedOutputSnapshot(t *testing.T) pinnedOutputSnapshot {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "goreleaser-v2.17.1-syft-v1.48.0-snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot pinnedOutputSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func materializePinnedOutputSnapshot(t *testing.T, fixture *releaseFixture) pinnedOutputSnapshot {
+	t.Helper()
+	snapshot := loadPinnedOutputSnapshot(t)
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := strings.ReplaceAll(string(raw), snapshot.Version, smokeVersion)
+	rewritten = strings.ReplaceAll(rewritten, snapshot.Commit, smokeCommit)
+	if err := json.Unmarshal([]byte(rewritten), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.artifacts = snapshot.ArtifactRecords
+	for _, current := range fixture.artifacts {
+		path := filepath.Join(fixture.dist, strings.TrimPrefix(current.Path, "dist/"))
+		switch current.Type {
+		case "Metadata":
+			metadata := fmt.Sprintf(`{"project_name":"unifi-cli","version":%q,"commit":%q}`, smokeVersion, smokeCommit)
+			if err := os.WriteFile(path, []byte(metadata), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		case "Binary":
+			target := target{goos: current.Goos, goarch: current.Goarch}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, fixture.binaries[target], 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, target := range targets {
+		bomData, err := json.Marshal(snapshot.CycloneDX)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var bom map[string]any
+		if err := json.Unmarshal(bomData, &bom); err != nil {
+			t.Fatal(err)
+		}
+		metadata := bom["metadata"].(map[string]any)
+		component := metadata["component"].(map[string]any)
+		component["name"] = fixture.archiveName(target)
+		component["version"] = smokeVersion
+		data, err := json.Marshal(bom)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(fixture.dist, fixture.sbomName(target))
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fixture.checksums[fixture.sbomName(target)] = fileSHA256(t, path)
+	}
+	fixture.writeMetadata(t)
+	return snapshot
 }
 
 func newReleaseFixture(t *testing.T) *releaseFixture {
@@ -354,8 +604,9 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 		if err := os.WriteFile(filepath.Join(fixture.dist, fixture.sbomName(target)), sbomData, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		fixture.checksums[fixture.sbomName(target)] = fileSHA256(t, filepath.Join(fixture.dist, fixture.sbomName(target)))
 		fixture.artifacts = append(fixture.artifacts, artifact{
-			Name: fixture.sbomName(target), Path: fixture.sbomName(target), Goos: target.goos, Goarch: target.goarch, Type: "SBOM",
+			Name: fixture.sbomName(target), Path: fixture.sbomName(target), Type: "SBOM",
 		})
 	}
 	fixture.replaceSource(t, []archiveEntry{
@@ -366,6 +617,11 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	})
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: fixture.sourceName(), Path: fixture.sourceName(), Type: "Source"})
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: "checksums.txt", Path: "checksums.txt", Type: "Checksum"})
+	metadata := fmt.Sprintf(`{"project_name":"unifi-cli","version":%q,"commit":%q}`, smokeVersion, smokeCommit)
+	if err := os.WriteFile(filepath.Join(fixture.dist, "metadata.json"), []byte(metadata), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixture.artifacts = append(fixture.artifacts, artifact{Name: "metadata.json", Path: "metadata.json", Type: "Metadata"})
 	fixture.writeMetadata(t)
 	return fixture
 }
@@ -506,10 +762,10 @@ func (f *releaseFixture) archiveArtifact(target target) artifact {
 func (f *releaseFixture) sbom(target target, name, version string, components bool) map[string]any {
 	bom := map[string]any{
 		"bomFormat":   "CycloneDX",
-		"specVersion": "1.6",
+		"specVersion": "1.7",
 		"version":     1,
 		"metadata": map[string]any{
-			"component": map[string]any{"type": "application", "name": name, "version": version},
+			"component": map[string]any{"type": "file", "name": name, "version": version},
 		},
 		"components": []any{},
 	}
@@ -569,7 +825,17 @@ func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
 	gzipWriter := gzip.NewWriter(file)
 	tarWriter := tar.NewWriter(gzipWriter)
 	for _, entry := range entries {
-		header := &tar.Header{Name: entry.name, Mode: int64(entry.mode.Perm()), Size: int64(len(entry.body)), Typeflag: tar.TypeReg}
+		typeflag := entry.typeflag
+		if typeflag == 0 {
+			typeflag = tar.TypeReg
+		}
+		if typeflag == tar.TypeXGlobalHeader {
+			if err := tarWriter.WriteHeader(&tar.Header{Typeflag: typeflag, PAXRecords: entry.paxRecords}); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		header := &tar.Header{Name: entry.name, Mode: int64(entry.mode.Perm()), Size: int64(len(entry.body)), Typeflag: typeflag}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}

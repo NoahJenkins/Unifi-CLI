@@ -1,0 +1,64 @@
+{
+  "producer": {
+    "goreleaser": "2.17.1",
+    "goreleaser_commit": "83f4c19a5c5c0b9efef6bf2aedc6805bbcb9dfe2",
+    "syft": "1.48.0",
+    "syft_commit": "3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6"
+  },
+  "version": "0.0.0-SNAPSHOT-1aa4eee",
+  "commit": "1aa4eee2545655a1ed56e8efea396595c3b40c14",
+  "artifact_records": [
+    {"name":"metadata.json","path":"dist/metadata.json","type":"Metadata"},
+    {"name":"unifi","path":"dist/unifi_linux_arm64_v8.0/unifi","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Binary","extra":{"Binary":"unifi","Builder":"go","Ext":"","ID":"unifi"}},
+    {"name":"unifi","path":"dist/unifi_darwin_amd64_v1/unifi","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Binary","extra":{"Binary":"unifi","Builder":"go","Ext":"","ID":"unifi"}},
+    {"name":"unifi.exe","path":"dist/unifi_windows_amd64_v1/unifi.exe","goos":"windows","goarch":"amd64","target":"windows_amd64_v1","type":"Binary","extra":{"Binary":"unifi","Builder":"go","Ext":".exe","ID":"unifi"}},
+    {"name":"unifi","path":"dist/unifi_linux_amd64_v1/unifi","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Binary","extra":{"Binary":"unifi","Builder":"go","Ext":"","ID":"unifi"}},
+    {"name":"unifi.exe","path":"dist/unifi_windows_arm64_v8.0/unifi.exe","goos":"windows","goarch":"arm64","target":"windows_arm64_v8.0","type":"Binary","extra":{"Binary":"unifi","Builder":"go","Ext":".exe","ID":"unifi"}},
+    {"name":"unifi","path":"dist/unifi_darwin_arm64_v8.0/unifi","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Binary","extra":{"Binary":"unifi","Builder":"go","Ext":"","ID":"unifi"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip","goos":"windows","goarch":"arm64","target":"windows_arm64_v8.0","type":"Archive","extra":{"Binaries":["unifi.exe"],"Files":["CHANGELOG.md","LICENSE","README.md"],"Format":"zip","ID":"default","WrappedIn":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Archive","extra":{"Binaries":["unifi"],"Files":["CHANGELOG.md","LICENSE","README.md"],"Format":"tar.gz","ID":"default","WrappedIn":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip","goos":"windows","goarch":"amd64","target":"windows_amd64_v1","type":"Archive","extra":{"Binaries":["unifi.exe"],"Files":["CHANGELOG.md","LICENSE","README.md"],"Format":"zip","ID":"default","WrappedIn":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Archive","extra":{"Binaries":["unifi"],"Files":["CHANGELOG.md","LICENSE","README.md"],"Format":"tar.gz","ID":"default","WrappedIn":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Archive","extra":{"Binaries":["unifi"],"Files":["CHANGELOG.md","LICENSE","README.md"],"Format":"tar.gz","ID":"default","WrappedIn":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Archive","extra":{"Binaries":["unifi"],"Files":["CHANGELOG.md","LICENSE","README.md"],"Format":"tar.gz","ID":"default","WrappedIn":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_source.tar.gz","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_source.tar.gz","type":"Source","extra":{"Format":"tar.gz"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip.sbom.json","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip.sbom.json","type":"SBOM","extra":{"ID":"archives"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz.sbom.json","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz.sbom.json","type":"SBOM","extra":{"ID":"archives"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip.sbom.json","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip.sbom.json","type":"SBOM","extra":{"ID":"archives"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz.sbom.json","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz.sbom.json","type":"SBOM","extra":{"ID":"archives"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz.sbom.json","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz.sbom.json","type":"SBOM","extra":{"ID":"archives"}},
+    {"name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz.sbom.json","path":"dist/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz.sbom.json","type":"SBOM","extra":{"ID":"archives"}},
+    {"name":"checksums.txt","path":"dist/checksums.txt","type":"Checksum","extra":{}}
+  ],
+  "checksum_names": [
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz.sbom.json",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz.sbom.json",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz.sbom.json",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz.sbom.json",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_source.tar.gz",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip.sbom.json",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip",
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip.sbom.json"
+  ],
+  "cyclonedx": {
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.7",
+    "version": 1,
+    "metadata": {
+      "component": {
+        "type": "file",
+        "name": "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip",
+        "version": "0.0.0-SNAPSHOT-1aa4eee"
+      }
+    },
+    "components": [
+      {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+      {"type":"file","name":"<syft-temp>/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64/unifi.exe","hashes":[{"alg":"SHA-256","content":"0000000000000000000000000000000000000000000000000000000000000000"}]}
+    ]
+  }
+}

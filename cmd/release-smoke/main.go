@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
@@ -316,9 +317,10 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	}
 
 	archives := make(map[target]artifact)
-	sboms := make(map[target]artifact)
+	sboms := make(map[string]artifact)
 	var sources []artifact
 	var checksumArtifacts []artifact
+	var metadataArtifacts []artifact
 	for _, current := range artifacts {
 		resolved, err := resolveArtifactPath(dist, current.Path)
 		if err != nil {
@@ -337,13 +339,14 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 		case "Source":
 			sources = append(sources, current)
 		case "SBOM":
-			t := target{goos: current.Goos, goarch: current.Goarch}
-			if _, exists := sboms[t]; exists {
-				return fmt.Errorf("duplicate SBOM for %s", t)
+			if _, exists := sboms[current.Name]; exists {
+				return fmt.Errorf("duplicate SBOM %q", current.Name)
 			}
-			sboms[t] = current
+			sboms[current.Name] = current
 		case "Checksum":
 			checksumArtifacts = append(checksumArtifacts, current)
+		case "Metadata":
+			metadataArtifacts = append(metadataArtifacts, current)
 		case "Binary":
 			// GoReleaser records intermediate binaries. Their target structure is
 			// verified through the corresponding release archive below.
@@ -364,6 +367,16 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	if len(checksumArtifacts) != 1 || checksumArtifacts[0].Name != "checksums.txt" {
 		return fmt.Errorf("checksum artifacts = %#v, want checksums.txt", checksumArtifacts)
 	}
+	if len(metadataArtifacts) != 1 || metadataArtifacts[0].Name != "metadata.json" {
+		return fmt.Errorf("metadata artifacts = %#v, want metadata.json", metadataArtifacts)
+	}
+	metadataPath, err := resolveNamedArtifact(dist, metadataArtifacts[0])
+	if err != nil {
+		return fmt.Errorf("metadata: %w", err)
+	}
+	if err := inspectGoReleaserMetadata(metadataPath, expectedVersion, expectedCommit); err != nil {
+		return fmt.Errorf("metadata: %w", err)
+	}
 	sourcePath, err := resolveNamedArtifact(dist, sources[0])
 	if err != nil {
 		return fmt.Errorf("source archive: %w", err)
@@ -382,7 +395,9 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	}
 	wantChecksums := map[string]struct{}{wantSourceName: {}}
 	for _, target := range targets {
-		wantChecksums[expectedArchiveName(expectedVersion, target)] = struct{}{}
+		archiveName := expectedArchiveName(expectedVersion, target)
+		wantChecksums[archiveName] = struct{}{}
+		wantChecksums[archiveName+".sbom.json"] = struct{}{}
 	}
 	if err := requireExactNames(checksums, wantChecksums, "checksum manifest"); err != nil {
 		return err
@@ -410,11 +425,11 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 		if err := verifyChecksum(archivePath, checksums[current.Name]); err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
-		sbom, ok := sboms[target]
+		wantSBOMName := wantName + ".sbom.json"
+		sbom, ok := sboms[wantSBOMName]
 		if !ok {
 			return fmt.Errorf("missing archive SBOM for %s", target)
 		}
-		wantSBOMName := wantName + ".sbom.json"
 		if sbom.Name != wantSBOMName {
 			return fmt.Errorf("%s SBOM name = %q, want %q", target, sbom.Name, wantSBOMName)
 		}
@@ -423,6 +438,9 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
 		if err := inspectCycloneDXSBOM(sbomPath, wantName, expectedVersion); err != nil {
+			return fmt.Errorf("%s SBOM: %w", target, err)
+		}
+		if err := verifyChecksum(sbomPath, checksums[sbom.Name]); err != nil {
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
 		expectedRoot := strings.TrimSuffix(strings.TrimSuffix(wantName, ".tar.gz"), ".zip")
@@ -841,6 +859,7 @@ func inspectSourceArchive(archivePath, expectedRoot string) error {
 		expectedRoot + "/go.mod":       false,
 	}
 	regularFiles := 0
+	globalHeaders := 0
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -848,6 +867,13 @@ func inspectSourceArchive(archivePath, expectedRoot string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
+		}
+		if header.Typeflag == tar.TypeXGlobalHeader {
+			globalHeaders++
+			if globalHeaders > 1 || header.Name == "" || archivepath.IsAbs(header.Name) || strings.ContainsAny(header.Name, "/\\") {
+				return fmt.Errorf("unsafe source PAX global header %q", header.Name)
+			}
+			continue
 		}
 		isDir := header.Typeflag == tar.TypeDir
 		if header.Typeflag != tar.TypeReg && !isDir {
@@ -910,13 +936,19 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
 		Version     int    `json:"version"`
 		Metadata    struct {
 			Component struct {
+				Type    string `json:"type"`
 				Name    string `json:"name"`
 				Version string `json:"version"`
 			} `json:"component"`
 		} `json:"metadata"`
 		Components []struct {
+			Type    string `json:"type"`
 			Name    string `json:"name"`
 			Version string `json:"version"`
+			Hashes  []struct {
+				Algorithm string `json:"alg"`
+				Content   string `json:"content"`
+			} `json:"hashes"`
 		} `json:"components"`
 	}
 	decoder := json.NewDecoder(io.LimitReader(file, 32<<20))
@@ -927,19 +959,65 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("CycloneDX JSON has trailing content")
 	}
-	if bom.BOMFormat != "CycloneDX" || bom.SpecVersion != "1.6" || bom.Version < 1 {
+	if bom.BOMFormat != "CycloneDX" || bom.SpecVersion != "1.7" || bom.Version < 1 {
 		return fmt.Errorf("invalid CycloneDX identity: format=%q spec=%q version=%d", bom.BOMFormat, bom.SpecVersion, bom.Version)
 	}
-	if bom.Metadata.Component.Name != archiveName || bom.Metadata.Component.Version != expectedVersion {
+	if bom.Metadata.Component.Type != "file" || bom.Metadata.Component.Name != archiveName || bom.Metadata.Component.Version != expectedVersion {
 		return fmt.Errorf("SBOM source = %q@%q, want %q@%q", bom.Metadata.Component.Name, bom.Metadata.Component.Version, archiveName, expectedVersion)
 	}
 	if len(bom.Components) == 0 {
 		return fmt.Errorf("SBOM components are empty")
 	}
 	for i, component := range bom.Components {
-		if component.Name == "" || component.Version == "" {
-			return fmt.Errorf("SBOM component %d has empty name or version", i)
+		if component.Name == "" {
+			return fmt.Errorf("SBOM component %d has empty name", i)
 		}
+		switch component.Type {
+		case "library", "application":
+			if component.Version == "" {
+				return fmt.Errorf("SBOM %s component %d has empty version", component.Type, i)
+			}
+		case "file":
+			if len(component.Hashes) == 0 {
+				return fmt.Errorf("SBOM file component %d has no hashes", i)
+			}
+			for _, hash := range component.Hashes {
+				wantBytes := 0
+				switch hash.Algorithm {
+				case "SHA-1":
+					wantBytes = sha1.Size
+				case "SHA-256":
+					wantBytes = sha256.Size
+				default:
+					return fmt.Errorf("SBOM file component %d has unsupported hash algorithm %q", i, hash.Algorithm)
+				}
+				decoded, err := hex.DecodeString(hash.Content)
+				if err != nil || len(decoded) != wantBytes {
+					return fmt.Errorf("SBOM file component %d has invalid %s hash", i, hash.Algorithm)
+				}
+			}
+		default:
+			return fmt.Errorf("SBOM component %d has unsupported type %q", i, component.Type)
+		}
+	}
+	return nil
+}
+
+func inspectGoReleaserMetadata(path, expectedVersion, expectedCommit string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var metadata struct {
+		ProjectName string `json:"project_name"`
+		Version     string `json:"version"`
+		Commit      string `json:"commit"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return fmt.Errorf("decode metadata.json: %w", err)
+	}
+	if metadata.ProjectName != "unifi-cli" || metadata.Version != expectedVersion || metadata.Commit != expectedCommit {
+		return fmt.Errorf("identity = %q %q %q, want unifi-cli %q %q", metadata.ProjectName, metadata.Version, metadata.Commit, expectedVersion, expectedCommit)
 	}
 	return nil
 }

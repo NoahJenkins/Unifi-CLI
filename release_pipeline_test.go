@@ -88,7 +88,8 @@ type goreleaserConfig struct {
 	Brews   []any `yaml:"brews"`
 	Scoops  []any `yaml:"scoops"`
 	Release struct {
-		Draft bool `yaml:"draft"`
+		Draft                bool `yaml:"draft"`
+		ReplaceExistingDraft bool `yaml:"replace_existing_draft"`
 	} `yaml:"release"`
 }
 
@@ -194,6 +195,9 @@ func TestGoReleaserConfigEnforcesReleaseContract(t *testing.T) {
 	}
 	if !cfg.Release.Draft {
 		t.Error("GoReleaser must upload a draft release so failed gates cannot publish it")
+	}
+	if !cfg.Release.ReplaceExistingDraft {
+		t.Error("GoReleaser must replace the exact existing tag draft so reruns are idempotent")
 	}
 }
 
