@@ -171,13 +171,20 @@ func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
 	svc := domain.NewPortService(rt.Client)
 	ctx := context.Background()
 
-	code := RunMutation(rt, "port", "update", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "port", "update",
+		func() (plan.PreparedMutation, error) {
 			p, cur, err := svc.Update(ctx, device, portIdx, in)
-			return p, cur, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, cur.DeviceID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, device, portIdx, in)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Update(ctx, target.ID(), portIdx, in)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyUpdate(ctx, target.ID(), portIdx, in)
 		},
 	)
 	return emittedExit(code)

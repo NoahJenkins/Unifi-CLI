@@ -237,12 +237,16 @@ func runDNSCreate(in domain.DNSInput) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "create", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "create",
+		func() (plan.PreparedMutation, error) {
 			p, err := svc.Create(ctx, in)
-			return p, nil, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Untargeted(p, plan.Routine, false), nil
 		},
-		func() (any, error) {
+		nil,
+		func(target plan.Target) (any, error) {
 			return svc.ApplyCreate(ctx, in)
 		},
 	)
@@ -256,13 +260,20 @@ func runDNSUpdate(id string, in domain.DNSInput) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "update", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "update",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Update(ctx, id, in)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, id, in)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Update(ctx, target.ID(), in)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyUpdate(ctx, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -275,13 +286,20 @@ func runDNSDelete(id string) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "delete", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "delete",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Delete(ctx, id)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyDelete(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Delete(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyDelete(ctx, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -328,13 +346,20 @@ func runDNSResolversSet(network string, servers []string) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "resolvers set", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "resolvers set",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.SetResolvers(ctx, network, servers)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.NetworkID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplySetResolvers(ctx, network, servers)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.SetResolvers(ctx, target.ID(), servers)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplySetResolvers(ctx, target.ID(), servers)
 		},
 	)
 	return emittedExit(code)

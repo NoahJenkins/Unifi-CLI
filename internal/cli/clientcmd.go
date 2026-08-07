@@ -158,32 +158,39 @@ func runClientMutation(action, id string) error {
 	}
 	svc := domain.NewClientService(rt.Client)
 	ctx := context.Background()
+	build := func(query string) (plan.Plan, domain.Client, error) {
+		switch action {
+		case "reconnect":
+			return svc.Reconnect(ctx, query)
+		case "block":
+			return svc.Block(ctx, query)
+		case "unblock":
+			return svc.Unblock(ctx, query)
+		default:
+			return plan.Plan{}, domain.Client{}, fmt.Errorf("unknown action %s", action)
+		}
+	}
 
-	code := RunMutation(rt, "client", action, false,
-		func() (plan.Plan, any, error) {
-			var p plan.Plan
-			var c domain.Client
-			var err error
-			switch action {
-			case "reconnect":
-				p, c, err = svc.Reconnect(ctx, id)
-			case "block":
-				p, c, err = svc.Block(ctx, id)
-			case "unblock":
-				p, c, err = svc.Unblock(ctx, id)
-			default:
-				return plan.Plan{}, nil, fmt.Errorf("unknown action %s", action)
+	code := RunPreparedMutation(rt, "client", action,
+		func() (plan.PreparedMutation, error) {
+			p, c, err := build(id)
+			if err != nil {
+				return plan.PreparedMutation{}, err
 			}
-			return p, c, err
+			return plan.Targeted(p, c.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
+		func(target plan.Target) (any, error) {
+			p, _, err := build(target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
 			switch action {
 			case "reconnect":
-				return svc.ApplyReconnect(ctx, id)
+				return svc.ApplyReconnect(ctx, target.ID())
 			case "block":
-				return svc.ApplyBlock(ctx, id)
+				return svc.ApplyBlock(ctx, target.ID())
 			case "unblock":
-				return svc.ApplyUnblock(ctx, id)
+				return svc.ApplyUnblock(ctx, target.ID())
 			default:
 				return nil, fmt.Errorf("unknown action %s", action)
 			}

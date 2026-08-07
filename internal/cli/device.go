@@ -201,44 +201,55 @@ func runDeviceMutation(action, id string, destructive bool, newName string) erro
 	}
 	svc := domain.NewDeviceService(rt.Client)
 	ctx := context.Background()
+	build := func(query string) (plan.Plan, domain.Device, error) {
+		switch action {
+		case "rename":
+			return svc.Rename(ctx, query, newName)
+		case "restart":
+			return svc.Restart(ctx, query)
+		case "locate":
+			return svc.Locate(ctx, query)
+		case "upgrade":
+			return svc.Upgrade(ctx, query)
+		case "adopt":
+			return svc.Adopt(ctx, query)
+		case "forget":
+			return svc.Forget(ctx, query)
+		default:
+			return plan.Plan{}, domain.Device{}, fmt.Errorf("unknown action %s", action)
+		}
+	}
 
-	code := RunMutation(rt, "device", action, destructive,
-		func() (plan.Plan, any, error) {
-			var p plan.Plan
-			var d domain.Device
-			var err error
-			switch action {
-			case "rename":
-				p, d, err = svc.Rename(ctx, id, newName)
-			case "restart":
-				p, d, err = svc.Restart(ctx, id)
-			case "locate":
-				p, d, err = svc.Locate(ctx, id)
-			case "upgrade":
-				p, d, err = svc.Upgrade(ctx, id)
-			case "adopt":
-				p, d, err = svc.Adopt(ctx, id)
-			case "forget":
-				p, d, err = svc.Forget(ctx, id)
-			default:
-				return plan.Plan{}, nil, fmt.Errorf("unknown action %s", action)
+	code := RunPreparedMutation(rt, "device", action,
+		func() (plan.PreparedMutation, error) {
+			p, d, err := build(id)
+			if err != nil {
+				return plan.PreparedMutation{}, err
 			}
-			return p, d, err
+			risk := plan.Routine
+			if destructive {
+				risk = plan.Destructive
+			}
+			return plan.Targeted(p, d.ID, p.Changes, risk, false)
 		},
-		func() (any, error) {
+		func(target plan.Target) (any, error) {
+			p, _, err := build(target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
 			switch action {
 			case "rename":
-				return svc.ApplyRename(ctx, id, newName)
+				return svc.ApplyRename(ctx, target.ID(), newName)
 			case "restart":
-				return svc.ApplyRestart(ctx, id)
+				return svc.ApplyRestart(ctx, target.ID())
 			case "locate":
-				return svc.ApplyLocate(ctx, id)
+				return svc.ApplyLocate(ctx, target.ID())
 			case "upgrade":
-				return svc.ApplyUpgrade(ctx, id)
+				return svc.ApplyUpgrade(ctx, target.ID())
 			case "adopt":
-				return svc.ApplyAdopt(ctx, id)
+				return svc.ApplyAdopt(ctx, target.ID())
 			case "forget":
-				return svc.ApplyForget(ctx, id)
+				return svc.ApplyForget(ctx, target.ID())
 			default:
 				return nil, fmt.Errorf("unknown action %s", action)
 			}

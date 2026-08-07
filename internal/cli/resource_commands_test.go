@@ -63,13 +63,13 @@ func useCommandTestRuntime(t *testing.T, srv *httptest.Server, jsonOutput bool) 
 	flagDryRun = false
 	flagForce = false
 	flagQuiet = false
-	flagRaw = false
+	flagExperimental = false
 	t.Cleanup(func() {
 		flagYes = false
 		flagDryRun = false
 		flagForce = false
 		flagQuiet = false
-		flagRaw = false
+		flagExperimental = false
 	})
 }
 

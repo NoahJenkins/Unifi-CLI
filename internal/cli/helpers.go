@@ -46,15 +46,15 @@ func loadRuntime(needClient bool) (*Runtime, error) {
 
 func baseRuntime() *Runtime {
 	return &Runtime{
-		JSON:   flagJSON,
-		Yes:    flagYes,
-		DryRun: flagDryRun,
-		Force:  flagForce,
-		Quiet:  flagQuiet,
-		Raw:    flagRaw,
-		Site:   flagSite,
-		Out:    os.Stdout,
-		Err:    os.Stderr,
+		JSON:         flagJSON,
+		Yes:          flagYes,
+		DryRun:       flagDryRun,
+		Force:        flagForce,
+		Quiet:        flagQuiet,
+		Experimental: flagExperimental,
+		Site:         flagSite,
+		Out:          os.Stdout,
+		Err:          os.Stderr,
 	}
 }
 
@@ -92,27 +92,63 @@ func exitStatus(err error) int {
 	return render.ExitCode(err)
 }
 
-// RunMutation builds a plan, and only applies when rt.Applying() (Yes && !DryRun).
-// Destructive ops also require !SafeMode or Force.
-func RunMutation(
+// RunPreparedMutation prepares a mutation once, preserving the immutable
+// target identity and snapshot through revalidation and apply. Targeted
+// mutations must provide observe; apply always receives the prepared target.
+func RunPreparedMutation(
 	rt *Runtime,
 	resource, action string,
-	destructive bool,
-	build func() (plan.Plan, any, error),
-	apply func() (any, error),
+	prepare func() (plan.PreparedMutation, error),
+	observe func(plan.Target) (any, error),
+	apply func(plan.Target) (any, error),
 ) int {
-	p, _, err := build()
+	prepared, err := prepare()
 	if err != nil {
 		return rt.Emit(resource, action, nil, nil, err)
 	}
+	p := prepared.Plan()
 	if !rt.Applying() {
 		return rt.Emit(resource, action, nil, &p, nil)
 	}
-	if destructive && rt.Cfg.SafeMode && !rt.Force {
+	if prepared.Experimental() && !rt.Experimental {
 		return rt.Emit(resource, action, nil, nil,
-			apperr.New(apperr.SafeModeBlocked, "destructive operation blocked by safe_mode; pass --force --yes"))
+			apperr.New(apperr.ValidationFailed, "experimental mutation requires --experimental --yes"))
 	}
-	result, err := apply()
+	if !prepared.Risk().Valid() {
+		return rt.Emit(resource, action, nil, nil,
+			apperr.Newf(apperr.ValidationFailed, "invalid mutation risk class %q", prepared.Risk()))
+	}
+	if prepared.Risk().RequiresForce() && rt.Cfg.SafeMode && !rt.Force {
+		return rt.Emit(resource, action, nil, nil,
+			apperr.Newf(apperr.SafeModeBlocked, "%s operation blocked by safe_mode; pass --force --yes", prepared.Risk()))
+	}
+
+	target, targeted := prepared.Target()
+	if targeted {
+		if observe == nil {
+			return rt.Emit(resource, action, nil, nil,
+				apperr.New(apperr.Internal, "targeted mutation is missing pre-apply revalidation"))
+		}
+		current, err := observe(target)
+		if err != nil {
+			return rt.Emit(resource, action, nil, nil, err)
+		}
+		matches, err := target.Matches(current)
+		if err != nil {
+			return rt.Emit(resource, action, nil, nil, apperr.WithCause(
+				apperr.New(apperr.Internal, "could not compare prepared target state"), err))
+		}
+		if !matches {
+			return rt.Emit(resource, action, nil, nil, apperr.WithHint(
+				apperr.New(apperr.Conflict, "target changed after the mutation plan was prepared"),
+				"rerun the command to inspect a fresh plan"))
+		}
+	}
+	if apply == nil {
+		return rt.Emit(resource, action, nil, nil,
+			apperr.New(apperr.Internal, "prepared mutation is missing apply"))
+	}
+	result, err := apply(target)
 	if err == nil && !rt.Quiet {
 		fmt.Fprintf(rt.Err, "audit: applied %s %s\n", resource, action)
 	}

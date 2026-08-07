@@ -11,17 +11,17 @@ import (
 )
 
 type Runtime struct {
-	Cfg    config.Config
-	Client *client.Client
-	JSON   bool
-	Yes    bool
-	DryRun bool
-	Force  bool
-	Quiet  bool
-	Raw    bool
-	Site   string
-	Out    io.Writer
-	Err    io.Writer
+	Cfg          config.Config
+	Client       *client.Client
+	JSON         bool
+	Yes          bool
+	DryRun       bool
+	Force        bool
+	Quiet        bool
+	Experimental bool
+	Site         string
+	Out          io.Writer
+	Err          io.Writer
 }
 
 func (rt *Runtime) Applying() bool {

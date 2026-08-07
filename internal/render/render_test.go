@@ -39,6 +39,9 @@ func TestWriteJSONSuccessShape(t *testing.T) {
 	if got["ok"] != true {
 		t.Fatalf("ok = %v", got["ok"])
 	}
+	if got["schema_version"] != "1" {
+		t.Fatalf("schema_version = %v, want %q", got["schema_version"], "1")
+	}
 	if got["resource"] != "device" || got["action"] != "list" {
 		t.Fatalf("resource/action = %v/%v", got["resource"], got["action"])
 	}
@@ -51,6 +54,28 @@ func TestWriteJSONSuccessShape(t *testing.T) {
 	}
 	if _, hasErr := got["error"]; hasErr {
 		t.Fatal("success envelope must omit error")
+	}
+	if _, hasPlan := got["plan"]; hasPlan {
+		t.Fatal("ordinary success envelope must omit plan")
+	}
+	if _, hasData := got["data"]; !hasData {
+		t.Fatal("success envelope must always include data")
+	}
+	wantKeys := map[string]bool{
+		"schema_version": true,
+		"ok":             true,
+		"resource":       true,
+		"action":         true,
+		"data":           true,
+		"meta":           true,
+	}
+	if len(got) != len(wantKeys) {
+		t.Fatalf("top-level keys = %v, want exactly %v", got, wantKeys)
+	}
+	for key := range got {
+		if !wantKeys[key] {
+			t.Fatalf("unexpected top-level key %q", key)
+		}
 	}
 }
 
@@ -68,9 +93,35 @@ func TestWriteJSONFailShape(t *testing.T) {
 	if got["ok"] != false {
 		t.Fatalf("ok = %v", got["ok"])
 	}
+	if got["schema_version"] != "1" {
+		t.Fatalf("schema_version = %v, want %q", got["schema_version"], "1")
+	}
 	eb, _ := got["error"].(map[string]any)
 	if eb["code"] != "not_found" || eb["message"] != "no device" || eb["hint"] != "use list" {
 		t.Fatalf("error body = %+v", eb)
+	}
+	if _, hasData := got["data"]; !hasData {
+		t.Fatal("failure envelope must always include data")
+	}
+	if _, hasPlan := got["plan"]; hasPlan {
+		t.Fatal("failure envelope must omit plan")
+	}
+	wantKeys := map[string]bool{
+		"schema_version": true,
+		"ok":             true,
+		"resource":       true,
+		"action":         true,
+		"data":           true,
+		"meta":           true,
+		"error":          true,
+	}
+	if len(got) != len(wantKeys) {
+		t.Fatalf("top-level keys = %v, want exactly %v", got, wantKeys)
+	}
+	for key := range got {
+		if !wantKeys[key] {
+			t.Fatalf("unexpected top-level key %q", key)
+		}
 	}
 }
 

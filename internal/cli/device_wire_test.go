@@ -35,7 +35,7 @@ func TestDeviceMutationDestructiveWiring(t *testing.T) {
 		}
 	}
 	if !deviceMutationDestructive["forget"] {
-		t.Fatal("forget must pass destructive=true to RunMutation")
+		t.Fatal("forget must prepare a destructive mutation")
 	}
 }
 
@@ -50,17 +50,18 @@ func TestEmittedExitPreservesValidationCode(t *testing.T) {
 		Site: "default",
 		Cfg:  config.Config{Site: "default"},
 	}
-	code := RunMutation(rt, "device", "rename", false,
-		func() (plan.Plan, any, error) {
-			return plan.Plan{}, nil, apperr.New(apperr.ValidationFailed, "name required")
+	code := RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) {
+			return plan.PreparedMutation{}, apperr.New(apperr.ValidationFailed, "name required")
 		},
-		func() (any, error) {
+		nil,
+		func(target plan.Target) (any, error) {
 			t.Fatal("apply must not run on build error")
 			return nil, nil
 		},
 	)
 	if code != 2 {
-		t.Fatalf("RunMutation exit = %d, want 2", code)
+		t.Fatalf("RunPreparedMutation exit = %d, want 2", code)
 	}
 	if got := exitStatus(emittedExit(code)); got != 2 {
 		t.Fatalf("emittedExit→exitStatus = %d, want 2", got)

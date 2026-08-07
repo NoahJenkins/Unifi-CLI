@@ -279,12 +279,16 @@ func runFirewallCreate(in domain.FirewallInput) error {
 	}
 	svc := domain.NewFirewallService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "firewall", "create", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "firewall", "create",
+		func() (plan.PreparedMutation, error) {
 			p, err := svc.Create(ctx, in)
-			return p, nil, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Untargeted(p, plan.Routine, false), nil
 		},
-		func() (any, error) {
+		nil,
+		func(target plan.Target) (any, error) {
 			return svc.ApplyCreate(ctx, in)
 		},
 	)
@@ -298,13 +302,20 @@ func runFirewallUpdate(id string, in domain.FirewallInput) error {
 	}
 	svc := domain.NewFirewallService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "firewall", "update", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "firewall", "update",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Update(ctx, id, in)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, id, in)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Update(ctx, target.ID(), in)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyUpdate(ctx, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -317,14 +328,21 @@ func runFirewallDelete(id string) error {
 	}
 	svc := domain.NewFirewallService(rt.Client)
 	ctx := context.Background()
-	// Requires --yes via RunMutation; safe_mode does NOT block (forget + WAN only).
-	code := RunMutation(rt, "firewall", "delete", false,
-		func() (plan.Plan, any, error) {
+	// Requires --yes; safe_mode does NOT block (forget + WAN only).
+	code := RunPreparedMutation(rt, "firewall", "delete",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Delete(ctx, id)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyDelete(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Delete(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyDelete(ctx, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -337,13 +355,39 @@ func runFirewallReorder(ro domain.FirewallReorder) error {
 	}
 	svc := domain.NewFirewallService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "firewall", "reorder", false,
-		func() (plan.Plan, any, error) {
+	const targetSeparator = "\x1f"
+	code := RunPreparedMutation(rt, "firewall", "reorder",
+		func() (plan.PreparedMutation, error) {
 			p, err := svc.Reorder(ctx, ro)
-			return p, nil, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			if len(p.Changes) != 1 {
+				return plan.PreparedMutation{}, fmt.Errorf("firewall reorder produced %d plan changes, want 1", len(p.Changes))
+			}
+			after, ok := p.Changes[0].After.(map[string]any)
+			if !ok {
+				return plan.PreparedMutation{}, fmt.Errorf("firewall reorder plan has invalid after snapshot")
+			}
+			order, ok := after["order"].([]string)
+			if !ok || len(order) == 0 {
+				return plan.PreparedMutation{}, fmt.Errorf("firewall reorder plan has invalid target order")
+			}
+			return plan.Targeted(p, strings.Join(order, targetSeparator), p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			if err := svc.ApplyReorder(ctx, ro); err != nil {
+		func(target plan.Target) (any, error) {
+			check, err := svc.Reorder(ctx, domain.FirewallReorder{IDs: strings.Split(target.ID(), targetSeparator)})
+			if err != nil {
+				return nil, err
+			}
+			if len(check.Changes) != 1 {
+				return nil, fmt.Errorf("firewall reorder revalidation produced %d plan changes, want 1", len(check.Changes))
+			}
+			return check.Changes, nil
+		},
+		func(target plan.Target) (any, error) {
+			resolved := domain.FirewallReorder{IDs: strings.Split(target.ID(), targetSeparator)}
+			if err := svc.ApplyReorder(ctx, resolved); err != nil {
 				return nil, err
 			}
 			return map[string]any{"reordered": true}, nil

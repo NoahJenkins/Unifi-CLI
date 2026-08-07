@@ -15,14 +15,14 @@ type Meta struct {
 }
 
 type Envelope struct {
-	OK       bool       `json:"ok"`
-	Resource string     `json:"resource"`
-	Action   string     `json:"action"`
-	Data     any        `json:"data"`
-	Meta     Meta       `json:"meta"`
-	Error    *ErrorBody `json:"error,omitempty"`
-	Plan     *plan.Plan `json:"plan,omitempty"`
-	Raw      any        `json:"raw,omitempty"`
+	SchemaVersion string     `json:"schema_version"`
+	OK            bool       `json:"ok"`
+	Resource      string     `json:"resource"`
+	Action        string     `json:"action"`
+	Data          any        `json:"data"`
+	Meta          Meta       `json:"meta"`
+	Error         *ErrorBody `json:"error,omitempty"`
+	Plan          *plan.Plan `json:"plan,omitempty"`
 }
 
 type ErrorBody struct {
@@ -33,7 +33,7 @@ type ErrorBody struct {
 
 func Success(resource, action, site string, data any, dryRun bool) Envelope {
 	env := Envelope{
-		OK: true, Resource: resource, Action: action,
+		SchemaVersion: "1", OK: true, Resource: resource, Action: action,
 		Data: data, Meta: Meta{Site: site, DryRun: dryRun},
 	}
 	switch t := data.(type) {
@@ -48,7 +48,7 @@ func Success(resource, action, site string, data any, dryRun bool) Envelope {
 
 func Fail(resource, action, site string, err error) Envelope {
 	env := Envelope{
-		OK: false, Resource: resource, Action: action,
+		SchemaVersion: "1", OK: false, Resource: resource, Action: action,
 		Data: nil, Meta: Meta{Site: site},
 	}
 	if e := apperr.As(err); e != nil {

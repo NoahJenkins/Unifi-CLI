@@ -259,12 +259,16 @@ func runWlanCreate(in domain.WlanInput) error {
 	}
 	svc := domain.NewWlanService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "wlan", "create", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "wlan", "create",
+		func() (plan.PreparedMutation, error) {
 			p, err := svc.Create(ctx, in)
-			return p, nil, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Untargeted(p, plan.Routine, false), nil
 		},
-		func() (any, error) {
+		nil,
+		func(target plan.Target) (any, error) {
 			return svc.ApplyCreate(ctx, in)
 		},
 	)
@@ -278,13 +282,20 @@ func runWlanUpdate(id string, in domain.WlanInput) error {
 	}
 	svc := domain.NewWlanService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "wlan", "update", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "wlan", "update",
+		func() (plan.PreparedMutation, error) {
 			p, w, err := svc.Update(ctx, id, in)
-			return p, w, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, id, in)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Update(ctx, target.ID(), in)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyUpdate(ctx, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -297,13 +308,20 @@ func runWlanDelete(id string) error {
 	}
 	svc := domain.NewWlanService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "wlan", "delete", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "wlan", "delete",
+		func() (plan.PreparedMutation, error) {
 			p, w, err := svc.Delete(ctx, id)
-			return p, w, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyDelete(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Delete(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyDelete(ctx, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -316,13 +334,20 @@ func runWlanEnable(id string) error {
 	}
 	svc := domain.NewWlanService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "wlan", "enable", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "wlan", "enable",
+		func() (plan.PreparedMutation, error) {
 			p, w, err := svc.Enable(ctx, id)
-			return p, w, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyEnable(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Enable(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyEnable(ctx, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -335,13 +360,20 @@ func runWlanDisable(id string) error {
 	}
 	svc := domain.NewWlanService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "wlan", "disable", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "wlan", "disable",
+		func() (plan.PreparedMutation, error) {
 			p, w, err := svc.Disable(ctx, id)
-			return p, w, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyDisable(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Disable(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyDisable(ctx, target.ID())
 		},
 	)
 	return emittedExit(code)
