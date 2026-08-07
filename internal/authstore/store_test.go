@@ -5,9 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/noahjenkins/unifi-cli/internal/privatefile/privatefiletest"
 )
 
 type memoryKeyring struct {
@@ -175,24 +176,8 @@ func TestFallbackUsesProtectedPermissionsAndAtomicReplacement(t *testing.T) {
 	}
 
 	path := store.fallbackPath(controller)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat fallback: %v", err)
-	}
-	if runtime.GOOS != "windows" {
-		if got := info.Mode().Perm(); got != 0o600 {
-			t.Fatalf("fallback file mode = %o, want 600", got)
-		}
-	}
-	dirInfo, err := os.Stat(filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("Stat fallback directory: %v", err)
-	}
-	if runtime.GOOS != "windows" {
-		if got := dirInfo.Mode().Perm(); got != 0o700 {
-			t.Fatalf("fallback directory mode = %o, want 700", got)
-		}
-	}
+	privatefiletest.AssertFile(t, path)
+	privatefiletest.AssertDir(t, filepath.Dir(path))
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("ReadDir fallback directory: %v", err)
@@ -203,6 +188,53 @@ func TestFallbackUsesProtectedPermissionsAndAtomicReplacement(t *testing.T) {
 	key, found, err := store.Load(controller)
 	if err != nil || !found || key != "new-api-key" {
 		t.Fatalf("Load replacement = key %q, found %t, err %v", key, found, err)
+	}
+}
+
+func TestLoadFallbackRepairsPrivatePermissions(t *testing.T) {
+	keyring := newMemoryKeyring()
+	keyring.getErr = ErrKeyringUnavailable
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	controller := "https://controller.example:443"
+	path := store.fallbackPath(controller)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"controller":"https://controller.example:443","api_key":"api-key-secret"}`
+	if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	key, found, err := store.Load(controller)
+	if err != nil || !found || key != "api-key-secret" {
+		t.Fatalf("Load fallback = key %q, found %t, err %v", key, found, err)
+	}
+	privatefiletest.AssertDir(t, filepath.Dir(path))
+	privatefiletest.AssertFile(t, path)
+}
+
+func TestFallbackProtectionFailureLeavesNoAPIKeyFile(t *testing.T) {
+	keyring := newMemoryKeyring()
+	keyring.setErr = ErrKeyringUnavailable
+	store := NewStore(Options{Keyring: keyring, StateHome: t.TempDir(), GOOS: "linux"})
+	store.protectFile = func(string) error { return errors.New("protect denied") }
+
+	err := store.Save("https://controller.example:443", "api-key-secret", true)
+	if err == nil || !strings.Contains(err.Error(), "protect fallback API-key file") {
+		t.Fatalf("Save error = %v, want protected-file failure", err)
+	}
+	entries, readErr := os.ReadDir(store.fallbackDir())
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("fallback directory contains files after protection failure: %#v", entries)
 	}
 }
 

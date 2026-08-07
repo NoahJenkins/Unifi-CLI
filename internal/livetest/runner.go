@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/noahjenkins/unifi-cli/internal/privatefile"
 )
 
 type DataShape uint8
@@ -304,10 +306,7 @@ func exitSummary(exitCode int, err error) string {
 }
 
 func WriteReport(dir string, report Report) (string, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := privatefile.EnsureDir(dir); err != nil {
 		return "", err
 	}
 	startedAt := report.StartedAt
@@ -319,7 +318,14 @@ func WriteReport(dir string, report Report) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	cleanup := func() {
+		file.Close()
+		os.Remove(path)
+	}
+	if err := privatefile.ProtectFile(path); err != nil {
+		cleanup()
+		return "", err
+	}
 
 	type outputResult struct {
 		Command    string `json:"command"`
@@ -337,6 +343,11 @@ func WriteReport(dir string, report Report) (string, error) {
 		})
 	}
 	if err := json.NewEncoder(file).Encode(output); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
 		return "", err
 	}
 	return path, nil
