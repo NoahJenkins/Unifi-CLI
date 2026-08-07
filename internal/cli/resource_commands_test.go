@@ -43,6 +43,11 @@ func newCommandTestServer(t *testing.T) *httptest.Server {
 			_, _ = io.WriteString(w, `{"data":{"id":"dns-new","type":"A_RECORD","domain":"service.example.test","ipv4Address":"192.0.2.20","enabled":true,"ttlSeconds":300,"metadata":{"origin":"USER"}}}`)
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/proxy/network/integration/v1/sites" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"offset":0,"limit":100,"count":1,"totalCount":1,"data":`+responses[r.URL.Path]+`}`)
+			return
+		}
 		data, ok := responses[r.URL.Path]
 		if !ok {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -27,6 +28,9 @@ type Client struct {
 	apiKey     string
 	store      authstore.Store
 	authMethod string
+
+	integrationSiteMu sync.Mutex
+	integrationSiteID string
 }
 
 const maxResponseBodyBytes = 16 << 20
@@ -138,10 +142,25 @@ func (c *Client) SitePath(parts ...string) string {
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
+	return c.doWithAuth(ctx, func() error {
+		return c.doJSON(ctx, method, path, in, out)
+	})
+}
+
+// DoOfficial performs a request without applying the legacy UniFi "data"
+// unwrapping behavior. Official Network API callers need the complete response
+// envelope so they can validate pagination metadata.
+func (c *Client) DoOfficial(ctx context.Context, method, path string, in, out any) error {
+	return c.doWithAuth(ctx, func() error {
+		return c.doOfficialJSON(ctx, method, path, in, out)
+	})
+}
+
+func (c *Client) doWithAuth(ctx context.Context, request func() error) error {
 	if err := c.ensureAuth(ctx); err != nil {
 		return err
 	}
-	err := c.doJSON(ctx, method, path, in, out)
+	err := request()
 	if !apperr.Is(err, apperr.AuthFailed) || c.authMethod != "saved_api_key" {
 		return err
 	}
@@ -166,6 +185,20 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) error {
+	return c.doJSONWithDecoder(ctx, method, path, in, out, DecodeData, "")
+}
+
+func (c *Client) doOfficialJSON(ctx context.Context, method, path string, in, out any) error {
+	return c.doJSONWithDecoder(ctx, method, path, in, out, json.Unmarshal, "official API ")
+}
+
+func (c *Client) doJSONWithDecoder(
+	ctx context.Context,
+	method, path string,
+	in, out any,
+	decode func([]byte, any) error,
+	decodeKind string,
+) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -205,8 +238,8 @@ func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) e
 	if out == nil || len(respBody) == 0 {
 		return nil
 	}
-	if err := DecodeData(respBody, out); err != nil {
-		return apperr.Newf(apperr.Internal, "decode response: %v", err)
+	if err := decode(respBody, out); err != nil {
+		return apperr.Newf(apperr.Internal, "decode %sresponse: %v", decodeKind, err)
 	}
 	return nil
 }

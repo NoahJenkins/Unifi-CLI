@@ -2,38 +2,169 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
-	"strings"
+	"net/url"
+	"strconv"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 )
 
-const integrationBasePath = "/proxy/network/integration/v1"
+const (
+	integrationBasePath = "/proxy/network/integration/v1"
+	officialPageSize    = 100
+)
+
+// OfficialPage is the complete pagination envelope returned by the official
+// local Network API.
+type OfficialPage[T any] struct {
+	Offset     int `json:"offset"`
+	Limit      int `json:"limit"`
+	Count      int `json:"count"`
+	TotalCount int `json:"totalCount"`
+	Data       []T `json:"data"`
+}
+
+type officialPageWire[T any] struct {
+	Offset     *int `json:"offset"`
+	Limit      *int `json:"limit"`
+	Count      *int `json:"count"`
+	TotalCount *int `json:"totalCount"`
+	Data       *[]T `json:"data"`
+}
 
 type integrationSite struct {
 	ID                string `json:"id"`
 	InternalReference string `json:"internalReference"`
+	Name              string `json:"name"`
 }
 
-// IntegrationSitePath resolves the configured legacy site reference to the
-// UUID required by the official local Network API.
-func (c *Client) IntegrationSitePath(ctx context.Context, parts ...string) (string, error) {
-	var sites []integrationSite
-	if err := c.Do(ctx, http.MethodGet, integrationBasePath+"/sites?offset=0&limit=100", nil, &sites); err != nil {
-		return "", err
-	}
-	for _, site := range sites {
-		if site.InternalReference != c.cfg.Site {
+// OfficialPath builds a local Network API path and escapes every supplied
+// dynamic segment independently.
+func OfficialPath(parts ...string) string {
+	path := integrationBasePath
+	for _, part := range parts {
+		if part == "" {
 			continue
 		}
-		path := integrationBasePath + "/sites/" + site.ID
-		for _, part := range parts {
-			part = strings.Trim(part, "/")
-			if part != "" {
-				path += "/" + part
-			}
-		}
-		return path, nil
+		path += "/" + url.PathEscape(part)
 	}
-	return "", apperr.Newf(apperr.NotFound, "site %q is unavailable through the official Network API", c.cfg.Site)
+	return path
+}
+
+// FetchOfficialAll fetches complete typed collections from the official local
+// Network API. It always requests 100 items and advances only by the metadata
+// returned by a well-formed, progressing page.
+func FetchOfficialAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	offset := 0
+	var all []T
+
+	for {
+		pagePath, err := officialPagePath(path, offset)
+		if err != nil {
+			return nil, apperr.Newf(apperr.Internal, "build official API page query: %v", err)
+		}
+		var page officialPageWire[T]
+		if err := c.DoOfficial(ctx, http.MethodGet, pagePath, nil, &page); err != nil {
+			return nil, err
+		}
+		if err := validateOfficialPage(page, offset); err != nil {
+			return nil, err
+		}
+
+		pageOffset := *page.Offset
+		pageCount := *page.Count
+		totalCount := *page.TotalCount
+		all = append(all, (*page.Data)...)
+
+		nextOffset := pageOffset + pageCount
+		if nextOffset >= totalCount {
+			return all, nil
+		}
+		if nextOffset <= offset {
+			return nil, apperr.Newf(apperr.Internal, "official API page at offset %d did not advance", offset)
+		}
+		offset = nextOffset
+	}
+}
+
+func officialPagePath(path string, offset int) (string, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", err
+	}
+	if u.IsAbs() || u.Host != "" || u.Path == "" {
+		return "", fmt.Errorf("path must be controller-relative")
+	}
+	query := u.Query()
+	query.Set("limit", strconv.Itoa(officialPageSize))
+	query.Set("offset", strconv.Itoa(offset))
+	u.RawQuery = query.Encode()
+	return u.String(), nil
+}
+
+func validateOfficialPage[T any](page officialPageWire[T], expectedOffset int) error {
+	if page.Offset == nil || page.Limit == nil || page.Count == nil || page.TotalCount == nil || page.Data == nil {
+		return apperr.New(apperr.Internal, "official API page is missing required pagination fields")
+	}
+	offset := *page.Offset
+	limit := *page.Limit
+	count := *page.Count
+	totalCount := *page.TotalCount
+	if offset < 0 || limit <= 0 || count < 0 || totalCount < 0 {
+		return apperr.New(apperr.Internal, "official API page contains invalid negative or zero pagination values")
+	}
+	if offset != expectedOffset {
+		return apperr.Newf(apperr.Internal, "official API page offset %d does not match requested offset %d", offset, expectedOffset)
+	}
+	if limit > officialPageSize || count > officialPageSize {
+		return apperr.Newf(apperr.Internal, "official API page exceeds requested limit %d", officialPageSize)
+	}
+	if count != len(*page.Data) {
+		return apperr.Newf(apperr.Internal, "official API page count %d does not match data length %d", count, len(*page.Data))
+	}
+	if offset+count < totalCount && count == 0 {
+		return apperr.Newf(apperr.Internal, "official API page at offset %d did not advance", offset)
+	}
+	return nil
+}
+
+// IntegrationSitePath resolves the configured site selector to the UUID
+// required by the official local Network API and caches successful resolution
+// for this Client instance.
+func (c *Client) IntegrationSitePath(ctx context.Context, parts ...string) (string, error) {
+	c.integrationSiteMu.Lock()
+	defer c.integrationSiteMu.Unlock()
+
+	if c.integrationSiteID == "" {
+		sites, err := FetchOfficialAll[integrationSite](ctx, c, OfficialPath("sites"))
+		if err != nil {
+			return "", err
+		}
+		matches := make(map[string]struct{})
+		for _, site := range sites {
+			if site.ID != c.cfg.Site && site.InternalReference != c.cfg.Site && site.Name != c.cfg.Site {
+				continue
+			}
+			if site.ID == "" {
+				return "", apperr.New(apperr.Internal, "official API site match has no ID")
+			}
+			matches[site.ID] = struct{}{}
+		}
+		switch len(matches) {
+		case 0:
+			return "", apperr.Newf(apperr.NotFound, "site %q is unavailable through the official Network API", c.cfg.Site)
+		case 1:
+			for id := range matches {
+				c.integrationSiteID = id
+			}
+		default:
+			return "", apperr.Newf(apperr.AmbiguousID, "site selector %q matches multiple sites", c.cfg.Site)
+		}
+	}
+
+	pathParts := make([]string, 0, len(parts)+2)
+	pathParts = append(pathParts, "sites", c.integrationSiteID)
+	pathParts = append(pathParts, parts...)
+	return OfficialPath(pathParts...), nil
 }
