@@ -456,6 +456,46 @@ func TestFirewallCreatePreservesExplicitZeroValueFields(t *testing.T) {
 	}
 }
 
+func TestFirewallMutationVerificationRejectsMismatchedObservedIdentity(t *testing.T) {
+	const wrongID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee8"
+	t.Run("create", func(t *testing.T) {
+		api := newModernFirewallAPI(t)
+		api.postResponse = map[string]any{"id": createdPolicyID}
+		observed := map[string]any{
+			"id": wrongID, "name": "Allow HTTPS", "enabled": true,
+			"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false},
+			"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
+			"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+			"loggingEnabled":  false,
+		}
+		api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+		_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), domain.FirewallInput{
+			Name: "Allow HTTPS", Action: "allow", SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		})
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "id") {
+			t.Fatalf("error = %v, want observed-ID conflict", err)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodPost)); got != 1 {
+			t.Fatalf("POST attempts = %d, want 1", got)
+		}
+	})
+
+	t.Run("update", func(t *testing.T) {
+		api := newModernFirewallAPI(t)
+		observed := cloneFirewallMap(t, api.policies[0])
+		observed["id"] = wrongID
+		observed["name"] = "Allow Secure DNS"
+		api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", allowDNSPolicyID)] = observed
+		_, err := domain.NewFirewallService(api).ApplyUpdate(context.Background(), allowDNSPolicyID, domain.FirewallInput{Name: "Allow Secure DNS", SetName: true})
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "id") {
+			t.Fatalf("error = %v, want observed-ID conflict", err)
+		}
+		if got := len(firewallCalls(api.calls, http.MethodPut)); got != 1 {
+			t.Fatalf("PUT attempts = %d, want 1", got)
+		}
+	})
+}
+
 func TestFirewallCreateRejectsRequiredEnumsAndZoneResolutionFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -583,6 +623,36 @@ func TestFirewallIPVersionUpdatePreservesUnmodifiedProtocolNumberFilter(t *testi
 	after := p.Changes[0].After.(map[string]any)
 	if after["protocol"] != "ipv6:not(132)" {
 		t.Fatalf("protocol snapshot = %#v, want preserved protocol-number filter", after["protocol"])
+	}
+}
+
+func TestFirewallIPVersionUpdateRejectsMalformedProtocolScopeWithoutPanic(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "missing", value: nil},
+		{name: "scalar", value: "IPV4"},
+		{name: "array", value: []any{"IPV4"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			if tt.value == nil {
+				delete(api.policies[0], "ipProtocolScope")
+			} else {
+				api.policies[0]["ipProtocolScope"] = tt.value
+			}
+			_, _, err := domain.NewFirewallService(api).Update(context.Background(), allowDNSPolicyID, domain.FirewallInput{
+				IPVersion: "ipv6", SetIPVersion: true,
+			})
+			if !apperr.Is(err, apperr.Internal) {
+				t.Fatalf("error = %v, want typed internal error", err)
+			}
+			if got := len(firewallCalls(api.calls, http.MethodPut)); got != 0 {
+				t.Fatalf("PUT attempts = %d, want 0", got)
+			}
+		})
 	}
 }
 

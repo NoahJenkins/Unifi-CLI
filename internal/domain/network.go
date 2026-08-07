@@ -406,6 +406,9 @@ func (s *NetworkService) applyOfficialCreate(ctx context.Context, in NetworkInpu
 	if err != nil {
 		return Network{}, verificationError("created network could not be verified", err)
 	}
+	if err := requireObservedResourceID(observed, id, "network create"); err != nil {
+		return Network{}, err
+	}
 	if !wireDocumentContains(networkWritableDocument(observed), body, nil) {
 		return Network{}, apperr.New(apperr.Conflict, "network create verification failed: observed writable document differs from requested state")
 	}
@@ -500,6 +503,9 @@ func (s *NetworkService) applyOfficialUpdate(ctx context.Context, query string, 
 	observed, err := fetchOfficialSiteDetail(s.api, ctx, doc.normalized.ID, "networks")
 	if err != nil {
 		return Network{}, verificationError("updated network could not be verified", err)
+	}
+	if err := requireObservedResourceID(observed, doc.normalized.ID, "network update"); err != nil {
+		return Network{}, err
 	}
 	if !wireDocumentsEqual(networkWritableDocument(observed), body) {
 		return Network{}, apperr.New(apperr.Conflict, "network update verification failed: observed writable document differs from requested state")

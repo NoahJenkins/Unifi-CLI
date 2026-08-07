@@ -514,6 +514,72 @@ func TestOfficialWlanUpdatePreservesCompleteWritableDocumentAndVerifies(t *testi
 	}
 }
 
+func TestOfficialMutationVerificationRejectsMismatchedObservedIdentity(t *testing.T) {
+	const (
+		createdID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+		wrongID   = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	)
+	t.Run("network create", func(t *testing.T) {
+		api := networkMutationAPI()
+		api.mutate = func(_ string, _ string, in, out any) error {
+			observed := cloneMutationTestValue(in).(map[string]any)
+			observed["id"] = wrongID
+			api.details[client.OfficialPath("sites", mutationSiteID, "networks", createdID)] = observed
+			return copyTestJSON(map[string]any{"id": createdID}, out)
+		}
+		_, err := domain.NewNetworkService(api).ApplyCreate(context.Background(), domain.NetworkInput{Name: "Lab", Purpose: "unmanaged", VLAN: intPtr(30)})
+		assertIdentityConflict(t, err, api.official)
+	})
+
+	t.Run("network update", func(t *testing.T) {
+		api := networkMutationAPI()
+		targetID := officialNetworkDocument()["id"].(string)
+		api.mutate = func(_ string, _ string, in, out any) error {
+			observed := cloneMutationTestValue(in).(map[string]any)
+			observed["id"] = wrongID
+			api.details[client.OfficialPath("sites", mutationSiteID, "networks", targetID)] = observed
+			return copyTestJSON(observed, out)
+		}
+		_, err := domain.NewNetworkService(api).ApplyUpdate(context.Background(), targetID, domain.NetworkInput{Name: "LAN Renamed", SetName: true})
+		assertIdentityConflict(t, err, api.official)
+	})
+
+	t.Run("WLAN create", func(t *testing.T) {
+		api := wlanMutationAPI()
+		api.mutate = func(_ string, _ string, in, out any) error {
+			observed := cloneMutationTestValue(in).(map[string]any)
+			observed["id"] = wrongID
+			api.details[client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", createdID)] = observed
+			return copyTestJSON(map[string]any{"id": createdID}, out)
+		}
+		_, err := domain.NewWlanService(api).ApplyCreate(context.Background(), domain.WlanInput{Name: "Lab", Security: "open"})
+		assertIdentityConflict(t, err, api.official)
+	})
+
+	t.Run("WLAN update", func(t *testing.T) {
+		api := wlanMutationAPI()
+		targetID := officialWlanDocument()["id"].(string)
+		api.mutate = func(_ string, _ string, in, out any) error {
+			observed := cloneMutationTestValue(in).(map[string]any)
+			observed["id"] = wrongID
+			api.details[client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", targetID)] = observed
+			return copyTestJSON(observed, out)
+		}
+		_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), targetID, domain.WlanInput{Name: "Main Renamed", SetName: true})
+		assertIdentityConflict(t, err, api.official)
+	})
+}
+
+func assertIdentityConflict(t *testing.T, err error, calls []officialMutationCall) {
+	t.Helper()
+	if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "id") {
+		t.Fatalf("error = %v, want observed-ID conflict", err)
+	}
+	if got := len(nonGetMutationCalls(calls)); got != 1 {
+		t.Fatalf("mutation attempts = %d, want 1", got)
+	}
+}
+
 func TestOfficialWlanCreateEmitsExactSupportedOpenAPISchema(t *testing.T) {
 	tests := []struct {
 		name string

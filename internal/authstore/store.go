@@ -15,11 +15,15 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/noahjenkins/unifi-cli/internal/fileutil"
 	"github.com/noahjenkins/unifi-cli/internal/privatefile"
 	"github.com/zalando/go-keyring"
 )
 
-const serviceName = "unifi-cli"
+const (
+	serviceName             = "unifi-cli"
+	maxFallbackAPIKeyRecord = 1 << 20
+)
 
 var (
 	// ErrNotFound indicates that no stored API key exists for a controller.
@@ -227,7 +231,7 @@ func (s *KeyringStore) readFallback(controller string) (string, bool, error) {
 	if err := s.protectFile(path); err != nil {
 		return "", false, fmt.Errorf("protect fallback API-key file: %w", err)
 	}
-	encoded, err := os.ReadFile(path)
+	encoded, err := fileutil.ReadRegularFile(path, maxFallbackAPIKeyRecord)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
 	}

@@ -184,6 +184,18 @@ func (c *Client) DoOfficial(ctx context.Context, method, path string, in, out an
 	})
 }
 
+// DoOfficialSized performs an official API request and returns the number of
+// response bytes consumed after all transport and decoding checks succeed.
+func (c *Client) DoOfficialSized(ctx context.Context, method, path string, in, out any) (int, error) {
+	var responseBytes int
+	err := c.doWithAuth(ctx, func() error {
+		var err error
+		responseBytes, err = c.doJSONWithDecoder(ctx, method, path, in, out, json.Unmarshal, "official API ")
+		return err
+	})
+	return responseBytes, err
+}
+
 func (c *Client) doWithAuth(ctx context.Context, request func() error) error {
 	if err := c.ensureAuth(ctx); err != nil {
 		return err
@@ -213,11 +225,13 @@ func (c *Client) doWithAuth(ctx context.Context, request func() error) error {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) error {
-	return c.doJSONWithDecoder(ctx, method, path, in, out, DecodeData, "")
+	_, err := c.doJSONWithDecoder(ctx, method, path, in, out, DecodeData, "")
+	return err
 }
 
 func (c *Client) doOfficialJSON(ctx context.Context, method, path string, in, out any) error {
-	return c.doJSONWithDecoder(ctx, method, path, in, out, json.Unmarshal, "official API ")
+	_, err := c.doJSONWithDecoder(ctx, method, path, in, out, json.Unmarshal, "official API ")
+	return err
 }
 
 func (c *Client) doJSONWithDecoder(
@@ -226,19 +240,19 @@ func (c *Client) doJSONWithDecoder(
 	in, out any,
 	decode func([]byte, any) error,
 	decodeKind string,
-) error {
+) (int, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
-			return apperr.Newf(apperr.Internal, "marshal request: %v", err)
+			return 0, apperr.Newf(apperr.Internal, "marshal request: %v", err)
 		}
 		body = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return apperr.Newf(apperr.Internal, "build request: %v", err)
+		return 0, apperr.Newf(apperr.Internal, "build request: %v", err)
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -248,28 +262,28 @@ func (c *Client) doJSONWithDecoder(
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return mapTransportError(err)
+		return 0, mapTransportError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
-		return apperr.Newf(apperr.ControllerUnreachable, "read response: %v", err)
+		return 0, apperr.Newf(apperr.ControllerUnreachable, "read response: %v", err)
 	}
 	if len(respBody) > maxResponseBodyBytes {
-		return apperr.New(apperr.Internal, "controller response is too large")
+		return 0, apperr.New(apperr.Internal, "controller response is too large")
 	}
 
 	if err := mapStatus(resp.StatusCode, respBody); err != nil {
-		return err
+		return 0, err
 	}
 	if out == nil || len(respBody) == 0 {
-		return nil
+		return len(respBody), nil
 	}
 	if err := decode(respBody, out); err != nil {
-		return apperr.Newf(apperr.Internal, "decode %sresponse: %v", decodeKind, err)
+		return 0, apperr.Newf(apperr.Internal, "decode %sresponse: %v", decodeKind, err)
 	}
-	return nil
+	return len(respBody), nil
 }
 
 func mapStatus(code int, _ []byte) error {

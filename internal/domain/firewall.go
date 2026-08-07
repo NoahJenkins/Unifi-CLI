@@ -237,6 +237,9 @@ func (s *FirewallService) ApplyCreate(ctx context.Context, in FirewallInput) (Fi
 	if err != nil {
 		return FirewallRule{}, verificationError("created firewall policy could not be verified", err)
 	}
+	if err := requireObservedResourceID(observedRaw, id, "firewall create"); err != nil {
+		return FirewallRule{}, err
+	}
 	if !reflect.DeepEqual(firewallWritableDocument(observedRaw), body) {
 		return FirewallRule{}, apperr.New(apperr.Conflict, "created firewall policy verification failed: observed writable document differs from requested state")
 	}
@@ -272,6 +275,9 @@ func (s *FirewallService) ApplyUpdate(ctx context.Context, query string, in Fire
 	observed, observedRaw, err := s.readPolicyDetail(ctx, doc.normalized.ID)
 	if err != nil {
 		return FirewallRule{}, verificationError("updated firewall policy could not be verified", err)
+	}
+	if err := requireObservedResourceID(observedRaw, doc.normalized.ID, "firewall update"); err != nil {
+		return FirewallRule{}, err
 	}
 	if !reflect.DeepEqual(firewallWritableDocument(observedRaw), body) {
 		return FirewallRule{}, apperr.New(apperr.Conflict, "updated firewall policy verification failed: observed writable document differs from requested state")
@@ -436,7 +442,11 @@ func (s *FirewallService) prepareUpdate(ctx context.Context, query string, in Fi
 			if err := validateFirewallIPProtocol(in.IPVersion, protocol); err != nil {
 				return firewallPolicyDocument{}, nil, err
 			}
-			scope := deepCloneFirewallMap(mapField(doc.wire, "ipProtocolScope"))
+			rawScope, ok := doc.wire["ipProtocolScope"].(map[string]any)
+			if !ok || rawScope == nil {
+				return firewallPolicyDocument{}, nil, apperr.New(apperr.Internal, "official firewall policy has malformed ipProtocolScope")
+			}
+			scope := deepCloneFirewallMap(rawScope)
 			scope["ipVersion"] = strings.ToUpper(in.IPVersion)
 			body["ipProtocolScope"] = scope
 		} else {

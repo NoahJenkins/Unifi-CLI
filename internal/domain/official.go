@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -115,7 +116,12 @@ type officialMutationAPI interface {
 	officialDetailAPI
 }
 
-const officialDetailConcurrencyLimit = 4
+const (
+	officialDetailConcurrencyLimit = 4
+	officialDetailRequestLimit     = 1000
+	officialDetailByteLimit        = 32 << 20
+	officialDetailOperationTimeout = 2 * time.Minute
+)
 
 func fetchOfficialGlobal(api any, ctx context.Context, parts ...string) ([]map[string]any, bool, error) {
 	fetcher, ok := api.(officialCollectionAPI)
@@ -161,6 +167,9 @@ func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[stri
 	if len(overviews) == 0 {
 		return []map[string]any{}, nil
 	}
+	if len(overviews) > officialDetailRequestLimit {
+		return nil, apperr.Newf(apperr.Internal, "official detail request count %d exceeds maximum of %d", len(overviews), officialDetailRequestLimit)
+	}
 	for _, overview := range overviews {
 		if strField(overview, "id") == "" {
 			return nil, apperr.New(apperr.Internal, "official resource overview is missing an ID")
@@ -178,13 +187,17 @@ func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[stri
 	if len(overviews) < workerCount {
 		workerCount = len(overviews)
 	}
-	workCtx, cancel := context.WithCancel(ctx)
+	operationCtx, operationCancel := context.WithTimeout(ctx, officialDetailOperationTimeout)
+	defer operationCancel()
+	workCtx, cancel := context.WithCancel(operationCtx)
 	defer cancel()
 	jobs := make(chan detailJob)
 	results := make([]map[string]any, len(overviews))
 	var workers sync.WaitGroup
 	var firstErr error
 	var errOnce sync.Once
+	var budgetMu sync.Mutex
+	aggregateBytes := 0
 
 	workers.Add(workerCount)
 	for range workerCount {
@@ -206,6 +219,32 @@ func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[stri
 						})
 						return
 					}
+					if strField(detail, "id") != job.id {
+						errOnce.Do(func() {
+							firstErr = apperr.New(apperr.Internal, "official resource detail ID does not match requested resource")
+							cancel()
+						})
+						return
+					}
+					encoded, err := json.Marshal(detail)
+					if err != nil {
+						errOnce.Do(func() {
+							firstErr = apperr.Newf(apperr.Internal, "encode official detail for aggregate budget: %v", err)
+							cancel()
+						})
+						return
+					}
+					budgetMu.Lock()
+					if aggregateBytes > officialDetailByteLimit-len(encoded) {
+						budgetMu.Unlock()
+						errOnce.Do(func() {
+							firstErr = apperr.Newf(apperr.Internal, "official detail aggregate bytes exceed maximum of %d", officialDetailByteLimit)
+							cancel()
+						})
+						return
+					}
+					aggregateBytes += len(encoded)
+					budgetMu.Unlock()
 					results[job.index] = detail
 				}
 			}
@@ -226,6 +265,9 @@ sendJobs:
 	if firstErr != nil {
 		return nil, firstErr
 	}
+	if err := operationCtx.Err(); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -244,6 +286,13 @@ func requireOfficialMutationAPI(api any) (officialMutationAPI, error) {
 		return nil, apperr.New(apperr.Internal, "official mutation transport is unavailable")
 	}
 	return transport, nil
+}
+
+func requireObservedResourceID(observed map[string]any, expectedID, resource string) error {
+	if strField(observed, "id") != expectedID {
+		return apperr.Newf(apperr.Conflict, "%s verification failed: observed ID does not match expected target", resource)
+	}
+	return nil
 }
 
 func deepCloneMap(in map[string]any) map[string]any {

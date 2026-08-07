@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 )
@@ -13,8 +15,10 @@ import (
 const (
 	integrationBasePath = "/proxy/network/integration/v1"
 	officialPageSize    = 100
-	maxOfficialItems    = 100000
+	maxOfficialItems    = 10000
 	maxOfficialPages    = maxOfficialItems / officialPageSize
+	maxOfficialBytes    = 32 << 20
+	maxOfficialDuration = 2 * time.Minute
 )
 
 // OfficialPage is the complete pagination envelope returned by the official
@@ -49,21 +53,33 @@ func OfficialPath(parts ...string) string {
 		if part == "" {
 			continue
 		}
-		path += "/" + url.PathEscape(part)
+		path += "/" + escapePathSegment(part)
 	}
 	return path
+}
+
+func escapePathSegment(value string) string {
+	if value == "." || value == ".." {
+		return strings.Repeat("%2E", len(value))
+	}
+	return url.PathEscape(value)
 }
 
 // FetchOfficialAll fetches complete typed collections from the official local
 // Network API. It always requests 100 items and advances only by the metadata
 // returned by a well-formed, progressing page.
 func FetchOfficialAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	timeout := c.cfg.Timeout
+	if timeout > maxOfficialDuration {
+		timeout = maxOfficialDuration
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	offset := 0
 	expectedTotal := -1
 	pages := 0
+	aggregateBytes := 0
 	var all []T
 
 	for {
@@ -76,9 +92,14 @@ func FetchOfficialAll[T any](ctx context.Context, c *Client, path string) ([]T, 
 			return nil, apperr.Newf(apperr.Internal, "build official API page query: %v", err)
 		}
 		var page officialPageWire[T]
-		if err := c.DoOfficial(ctx, http.MethodGet, pagePath, nil, &page); err != nil {
+		responseBytes, err := c.DoOfficialSized(ctx, http.MethodGet, pagePath, nil, &page)
+		if err != nil {
 			return nil, err
 		}
+		if aggregateBytes > maxOfficialBytes-responseBytes {
+			return nil, apperr.Newf(apperr.Internal, "official API aggregate response bytes exceed maximum of %d", maxOfficialBytes)
+		}
+		aggregateBytes += responseBytes
 		if err := validateOfficialPage(page, offset); err != nil {
 			return nil, err
 		}

@@ -461,6 +461,9 @@ func (s *WlanService) applyOfficialCreate(ctx context.Context, in WlanInput) (Wl
 	if err != nil {
 		return Wlan{}, verificationError("created WLAN could not be verified", err)
 	}
+	if err := requireObservedResourceID(observed, id, "WLAN create"); err != nil {
+		return Wlan{}, err
+	}
 	if !wlanWireDocumentsEqual(wlanWritableDocument(observed), body) {
 		return Wlan{}, apperr.New(apperr.Conflict, "WLAN create verification failed: observed writable document differs from requested state")
 	}
@@ -548,6 +551,9 @@ func (s *WlanService) applyOfficialUpdate(ctx context.Context, query string, in 
 	observed, err := fetchOfficialSiteDetail(s.api, ctx, doc.normalized.ID, "wifi", "broadcasts")
 	if err != nil {
 		return Wlan{}, verificationError("updated WLAN could not be verified", err)
+	}
+	if err := requireObservedResourceID(observed, doc.normalized.ID, "WLAN update"); err != nil {
+		return Wlan{}, err
 	}
 	if !wlanWireDocumentsEqual(wlanWritableDocument(observed), body) {
 		return Wlan{}, apperr.New(apperr.Conflict, "WLAN update verification failed: observed writable document differs from requested state")

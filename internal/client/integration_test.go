@@ -230,6 +230,32 @@ func TestFetchOfficialAllRejectsExcessiveTotalCountBeforeSecondRequest(t *testin
 	}
 }
 
+func TestFetchOfficialAllRejectsAggregateResponseBytes(t *testing.T) {
+	requests := 0
+	payload := strings.Repeat("x", 12<<20)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset := mustAtoi(t, r.URL.Query().Get("offset"))
+		requests++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"offset": offset, "limit": 100, "count": 1, "totalCount": 3,
+			"data": []map[string]any{{"id": fmt.Sprintf("resource-%d", offset), "payload": payload}},
+		})
+	}))
+	defer srv.Close()
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	_, err = client.FetchOfficialAll[map[string]any](context.Background(), c, "/proxy/network/integration/v1/resources")
+	if !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), "aggregate response bytes") {
+		t.Fatalf("error = %v, want aggregate-byte failure", err)
+	}
+	if requests != 3 {
+		t.Fatalf("requests = %d, want 3", requests)
+	}
+}
+
 func mustAtoi(t *testing.T, value string) int {
 	t.Helper()
 	if value == "" {
@@ -364,5 +390,13 @@ func TestOfficialPathEscapesEveryDynamicSegment(t *testing.T) {
 	}
 	if strings.Contains(got, "?") || strings.Contains(got, "#") {
 		t.Fatalf("OfficialPath contains unescaped query/fragment delimiters: %q", got)
+	}
+}
+
+func TestOfficialPathEscapesExactDotSegments(t *testing.T) {
+	got := client.OfficialPath("sites", ".", "devices", "..")
+	want := "/proxy/network/integration/v1/sites/%2E/devices/%2E%2E"
+	if got != want {
+		t.Fatalf("OfficialPath = %q, want %q", got, want)
 	}
 }
