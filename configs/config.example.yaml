@@ -1,6 +1,6 @@
 host: 192.168.1.1
 port: 443
-insecure: true          # local gateway often uses self-signed TLS
+insecure: false         # prefer certificate verification; opt in only on a trusted LAN
 site: default
 safe_mode: true
 timeout: 30s

@@ -1,5 +1,7 @@
 # Cross-Platform Session Persistence Implementation Plan
 
+> **Superseded.** Cookie-session and password authentication were removed by the 2026-07-29 API-key-only implementation. This file is retained only as decision history.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Reuse authenticated UniFi sessions securely across CLI processes on macOS, Windows, and Linux.

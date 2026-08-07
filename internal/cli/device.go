@@ -181,15 +181,15 @@ func runDeviceGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", d.ID)
-	fmt.Fprintf(rt.Out, "mac: %s\n", d.MAC)
-	fmt.Fprintf(rt.Out, "name: %s\n", d.Name)
-	fmt.Fprintf(rt.Out, "model: %s\n", d.Model)
-	fmt.Fprintf(rt.Out, "type: %s\n", d.Type)
-	fmt.Fprintf(rt.Out, "state: %s\n", d.State)
-	fmt.Fprintf(rt.Out, "ip: %s\n", d.IP)
-	fmt.Fprintf(rt.Out, "version: %s\n", d.Version)
-	fmt.Fprintf(rt.Out, "uplink: %s\n", d.Uplink)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(d.ID))
+	fmt.Fprintf(rt.Out, "mac: %s\n", render.SafeText(d.MAC))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(d.Name))
+	fmt.Fprintf(rt.Out, "model: %s\n", render.SafeText(d.Model))
+	fmt.Fprintf(rt.Out, "type: %s\n", render.SafeText(d.Type))
+	fmt.Fprintf(rt.Out, "state: %s\n", render.SafeText(d.State))
+	fmt.Fprintf(rt.Out, "ip: %s\n", render.SafeText(d.IP))
+	fmt.Fprintf(rt.Out, "version: %s\n", render.SafeText(d.Version))
+	fmt.Fprintf(rt.Out, "uplink: %s\n", render.SafeText(d.Uplink))
 	fmt.Fprintf(rt.Out, "adopted: %s\n", strconv.FormatBool(d.Adopted))
 	return nil
 }

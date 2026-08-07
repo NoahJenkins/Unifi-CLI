@@ -46,7 +46,7 @@ func TestClientReconnectPlanAndApply(t *testing.T) {
 	svc := domain.NewClientService(api)
 	ctx := context.Background()
 
-	p, c, err := svc.Reconnect(ctx, "Noah-Laptop")
+	p, c, err := svc.Reconnect(ctx, "example-laptop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestClientReconnectPlanAndApply(t *testing.T) {
 		t.Fatalf("change: %+v", p.Changes[0])
 	}
 
-	got, err := svc.ApplyReconnect(ctx, "Noah-Laptop")
+	got, err := svc.ApplyReconnect(ctx, "example-laptop")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -150,16 +150,16 @@ func runPortGet(device string, portIdx int) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "device_id: %s\n", p.DeviceID)
-	fmt.Fprintf(rt.Out, "device_name: %s\n", p.DeviceName)
+	fmt.Fprintf(rt.Out, "device_id: %s\n", render.SafeText(p.DeviceID))
+	fmt.Fprintf(rt.Out, "device_name: %s\n", render.SafeText(p.DeviceName))
 	fmt.Fprintf(rt.Out, "port_idx: %d\n", p.PortIdx)
-	fmt.Fprintf(rt.Out, "name: %s\n", p.Name)
-	fmt.Fprintf(rt.Out, "media: %s\n", p.Media)
-	fmt.Fprintf(rt.Out, "speed: %s\n", p.Speed)
-	fmt.Fprintf(rt.Out, "poe: %s\n", p.POE)
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(p.Name))
+	fmt.Fprintf(rt.Out, "media: %s\n", render.SafeText(p.Media))
+	fmt.Fprintf(rt.Out, "speed: %s\n", render.SafeText(p.Speed))
+	fmt.Fprintf(rt.Out, "poe: %s\n", render.SafeText(p.POE))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(p.Enabled))
-	fmt.Fprintf(rt.Out, "profile: %s\n", p.Profile)
-	fmt.Fprintf(rt.Out, "networks: %s\n", p.Networks)
+	fmt.Fprintf(rt.Out, "profile: %s\n", render.SafeText(p.Profile))
+	fmt.Fprintf(rt.Out, "networks: %s\n", render.SafeText(p.Networks))
 	return nil
 }
 

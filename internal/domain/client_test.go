@@ -42,7 +42,7 @@ func TestNormalizeClient(t *testing.T) {
 	if c0.ID != "sta1" || c0.MAC != "11:22:33:44:55:01" {
 		t.Fatalf("identity: %+v", c0)
 	}
-	if c0.Hostname != "laptop.local" || c0.Name != "Noah-Laptop" {
+	if c0.Hostname != "laptop.local" || c0.Name != "example-laptop" {
 		t.Fatalf("hostname/name: %+v", c0)
 	}
 	if c0.IP != "192.168.1.50" || c0.ESSID != "Home" || c0.Network != "LAN" {
@@ -135,7 +135,7 @@ func TestClientServiceGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if byID.Name != "Noah-Laptop" {
+	if byID.Name != "example-laptop" {
 		t.Fatalf("by id: %+v", byID)
 	}
 
@@ -147,7 +147,7 @@ func TestClientServiceGet(t *testing.T) {
 		t.Fatalf("by mac: %+v", byMAC)
 	}
 
-	byName, err := svc.Get(context.Background(), "Noah-Laptop")
+	byName, err := svc.Get(context.Background(), "example-laptop")
 	if err != nil {
 		t.Fatal(err)
 	}

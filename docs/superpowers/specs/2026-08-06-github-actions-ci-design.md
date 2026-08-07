@@ -1,7 +1,7 @@
 # GitHub Actions CI Design
 
 **Date:** 2026-08-06  
-**Status:** Approved for implementation planning  
+**Status:** Implemented; required-check enforcement remains pending in repository settings
 **Scope:** Automated build, vet, and unit-test checks on GitHub Actions
 
 ## Goal
@@ -81,8 +81,8 @@ CI actually fails — no speculative changes.
 ## Verification
 
 The change is implemented on a feature branch and opened as a PR, which is
-itself the first CI run. The work is complete when:
+itself the first CI run. The implementation target was:
 
 - the PR shows all three matrix checks green;
-- branch protection is active on `main` (verified with `gh`);
+- branch protection is active on `main` (currently unavailable while the repository is private on the present plan);
 - merging the PR leaves `main` green.

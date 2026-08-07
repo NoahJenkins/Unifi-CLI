@@ -108,3 +108,23 @@ func TestEnvOverridesFile(t *testing.T) {
 		t.Fatalf("env override failed: %+v", cfg)
 	}
 }
+
+func TestLoadRejectsInvalidBooleanEnvironmentOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("host: 10.0.0.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, env := range []string{"UNIFI_INSECURE", "UNIFI_SAFE_MODE"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, "definitely-not-a-boolean")
+			_, err := config.Load(path)
+			if err == nil {
+				t.Fatal("Load unexpectedly accepted an invalid boolean override")
+			}
+			if !strings.Contains(err.Error(), env) {
+				t.Fatalf("error %q does not identify %s", err, env)
+			}
+		})
+	}
+}

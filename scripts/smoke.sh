@@ -13,6 +13,14 @@ echo "==> build"
 mkdir -p "$(dirname "$BIN")"
 go build -o "$BIN" ./cmd/unifi
 
+echo "==> format"
+unformatted="$(git ls-files '*.go' | xargs gofmt -l)"
+if [[ -n "$unformatted" ]]; then
+  echo "Go files need gofmt:" >&2
+  echo "$unformatted" >&2
+  exit 1
+fi
+
 echo "==> vet"
 go vet ./...
 

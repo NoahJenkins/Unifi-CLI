@@ -105,16 +105,16 @@ func runClientGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", c.ID)
-	fmt.Fprintf(rt.Out, "mac: %s\n", c.MAC)
-	fmt.Fprintf(rt.Out, "hostname: %s\n", c.Hostname)
-	fmt.Fprintf(rt.Out, "name: %s\n", c.Name)
-	fmt.Fprintf(rt.Out, "ip: %s\n", c.IP)
-	fmt.Fprintf(rt.Out, "essid: %s\n", c.ESSID)
-	fmt.Fprintf(rt.Out, "network: %s\n", c.Network)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(c.ID))
+	fmt.Fprintf(rt.Out, "mac: %s\n", render.SafeText(c.MAC))
+	fmt.Fprintf(rt.Out, "hostname: %s\n", render.SafeText(c.Hostname))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(c.Name))
+	fmt.Fprintf(rt.Out, "ip: %s\n", render.SafeText(c.IP))
+	fmt.Fprintf(rt.Out, "essid: %s\n", render.SafeText(c.ESSID))
+	fmt.Fprintf(rt.Out, "network: %s\n", render.SafeText(c.Network))
 	fmt.Fprintf(rt.Out, "is_wired: %s\n", strconv.FormatBool(c.IsWired))
 	fmt.Fprintf(rt.Out, "blocked: %s\n", strconv.FormatBool(c.Blocked))
-	fmt.Fprintf(rt.Out, "last_seen: %s\n", c.LastSeen)
+	fmt.Fprintf(rt.Out, "last_seen: %s\n", render.SafeText(c.LastSeen))
 	return nil
 }
 

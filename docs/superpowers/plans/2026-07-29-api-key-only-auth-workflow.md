@@ -1,5 +1,7 @@
 # API-Key-Only Persistent Authentication Implementation Plan
 
+> **Implemented historical plan.** Use the root `README.md` for current commands and configuration.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace password and cookie-session authentication with persistent, controller-scoped API-key authentication that supports interactive login and non-interactive automation.

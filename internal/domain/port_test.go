@@ -18,13 +18,13 @@ func sampleSwitchDevice() map[string]any {
 		"type": "usw",
 		"port_table": []any{
 			map[string]any{
-				"port_idx":     float64(1),
-				"name":         "Port 1",
-				"media":        "GE",
-				"speed":        float64(1000),
-				"poe_mode":     "auto",
-				"enable":       true,
-				"portconf_id":  "prof-all",
+				"port_idx":              float64(1),
+				"name":                  "Port 1",
+				"media":                 "GE",
+				"speed":                 float64(1000),
+				"poe_mode":              "auto",
+				"enable":                true,
+				"portconf_id":           "prof-all",
 				"native_networkconf_id": "net-lan",
 			},
 			map[string]any{
@@ -39,9 +39,9 @@ func sampleSwitchDevice() map[string]any {
 		},
 		"port_overrides": []any{
 			map[string]any{
-				"port_idx":  float64(12),
-				"name":      "AP-Uplink",
-				"poe_mode":  "pasv24",
+				"port_idx":    float64(12),
+				"name":        "AP-Uplink",
+				"poe_mode":    "pasv24",
 				"portconf_id": "prof-ap",
 			},
 		},
@@ -380,9 +380,9 @@ func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
 	restSW := sampleSwitchDevice()
 	restSW["port_overrides"] = []any{
 		map[string]any{
-			"port_idx":  float64(5),
-			"name":      "Cam",
-			"poe_mode":  "auto",
+			"port_idx":    float64(5),
+			"name":        "Cam",
+			"poe_mode":    "auto",
 			"portconf_id": "prof-cam",
 		},
 		map[string]any{

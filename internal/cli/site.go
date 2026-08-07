@@ -89,9 +89,9 @@ func runSiteGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", s.ID)
-	fmt.Fprintf(rt.Out, "name: %s\n", s.Name)
-	fmt.Fprintf(rt.Out, "desc: %s\n", s.Desc)
-	fmt.Fprintf(rt.Out, "role: %s\n", s.Role)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(s.ID))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(s.Name))
+	fmt.Fprintf(rt.Out, "desc: %s\n", render.SafeText(s.Desc))
+	fmt.Fprintf(rt.Out, "role: %s\n", render.SafeText(s.Role))
 	return nil
 }

@@ -195,12 +195,12 @@ func runWlanGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", w.ID)
-	fmt.Fprintf(rt.Out, "name: %s\n", w.Name)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(w.ID))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(w.Name))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(w.Enabled))
-	fmt.Fprintf(rt.Out, "security: %s\n", w.Security)
-	fmt.Fprintf(rt.Out, "network_id: %s\n", w.NetworkID)
-	fmt.Fprintf(rt.Out, "band: %s\n", w.Band)
+	fmt.Fprintf(rt.Out, "security: %s\n", render.SafeText(w.Security))
+	fmt.Fprintf(rt.Out, "network_id: %s\n", render.SafeText(w.NetworkID))
+	fmt.Fprintf(rt.Out, "band: %s\n", render.SafeText(w.Band))
 	fmt.Fprintf(rt.Out, "guest: %s\n", strconv.FormatBool(w.Guest))
 	return nil
 }

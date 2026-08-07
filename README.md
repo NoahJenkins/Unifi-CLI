@@ -2,7 +2,9 @@
 
 Manage a **local** UniFi Network controller (Cloud Gateway, Express APs, switches) from the terminal. Built for humans and agents: tables by default, stable JSON envelopes with `--json`, and mutations that never apply without `--yes`.
 
-> **Local controller only.** This CLI talks to your on-network UniFi Network Application / Cloud Gateway API. It does **not** use UniFi Site Manager / cloud APIs. Local gateways often use self-signed TLS — set `insecure: true` (or `UNIFI_INSECURE=true`).
+> **Local controller only.** This CLI talks to your on-network UniFi Network Application / Cloud Gateway API. It does **not** use UniFi Site Manager or cloud APIs.
+
+This project is pre-1.0 and has no tagged release yet. Controller endpoints vary by UniFi Network version, so test plans before applying changes and report firmware-specific incompatibilities with the controller model and Network version.
 
 ## Install
 
@@ -34,7 +36,7 @@ Example (`configs/config.example.yaml`):
 ```yaml
 host: 192.168.1.1
 port: 443
-insecure: true          # local gateway often uses self-signed TLS
+insecure: false         # verify the controller certificate by default
 site: default
 safe_mode: true
 timeout: 30s
@@ -48,10 +50,16 @@ timeout: 30s
 | `UNIFI_PORT` | Port (default 443) |
 | `UNIFI_SITE` | Site name/id |
 | `UNIFI_API_KEY` | Process-only API-key override for CI and scripts |
-| `UNIFI_INSECURE` | Skip TLS verify (`true`/`1`) |
+| `UNIFI_INSECURE` | Skip TLS verification (`true`/`false`) |
 | `UNIFI_SAFE_MODE` | Extra guards on destructive ops |
 | `UNIFI_CONFIG` | Config file path |
 | `UNIFI_TIMEOUT` | Request timeout (e.g. `30s`) |
+
+Boolean environment values are parsed strictly. Invalid values fail configuration loading instead of silently changing a safety setting.
+
+### TLS verification
+
+Keep `insecure: false` whenever the controller certificate is trusted by the operating system. If a local gateway only presents a self-signed certificate, `insecure: true` is an explicit compatibility fallback for a trusted LAN: it encrypts traffic but does not authenticate the controller, so an active network attacker could impersonate it and capture the API key. Do not use TLS bypass across an untrusted network.
 
 The YAML config contains controller connection settings only. To authenticate
 interactively, run `unifi login`; it asks for an API key through a hidden
@@ -114,7 +122,10 @@ Identifiers resolve as: internal id → MAC (normalized) → exact name. Ambiguo
    - `device forget`
    - WAN / destructive network delete
 4. API keys are never printed (`auth status`, `config show`, and plans mask WLAN secrets).
-5. Successful applies emit an audit line on stderr (unless `--quiet`).
+5. Human-readable output escapes terminal control characters returned by the controller. JSON output preserves source data for machine consumers.
+6. Successful applies emit an audit line on stderr (unless `--quiet`).
+
+WLAN create/update currently accepts `--password`. Although plans and output mask it, command arguments can be retained in shell history or exposed by process inspection. Avoid shared shells and clear sensitive history until a hidden-input workflow replaces this flag.
 
 ```bash
 # plan only (default for mutations)
@@ -192,15 +203,18 @@ JSON success envelope shape:
 
 ```bash
 go build -o dist/unifi ./cmd/unifi
+test -z "$(gofmt -l $(git ls-files '*.go'))"
 go vet ./...
 go test ./...
+go test -race ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
 # optional live smoke against a real controller
 export UNIFI_HOST=... UNIFI_API_KEY=... UNIFI_INSECURE=true
 UNIFI_IT=1 ./scripts/smoke.sh
 ```
 
-Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary, runs `go vet`, and runs unit tests.
+Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary, verifies formatting, runs `go vet`, and runs unit tests.
 
 With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
 checks auth status, local configuration, every implemented list command,
@@ -212,3 +226,7 @@ apply/raw flag.
 Each live run writes a redacted report to `dist/test-reports/`. Reports contain
 only command names, statuses, durations, and fixed safe summaries; they do not
 contain controller payloads, identifiers, arguments, credentials, or stderr.
+
+## Security and contributions
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Development setup, testing expectations, and pull-request guidance are in [CONTRIBUTING.md](CONTRIBUTING.md). Historical design and implementation records under `docs/superpowers/` are indexed in [docs/README.md](docs/README.md) and are not the current user documentation.
