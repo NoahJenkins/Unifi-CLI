@@ -87,7 +87,7 @@ func (s *PortService) Get(ctx context.Context, deviceQuery string, portIdx int) 
 }
 
 func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (plan.Plan, Port, error) {
-	cur, err := s.Get(ctx, deviceQuery, portIdx)
+	cur, _, err := s.loadAuthoritativePort(ctx, deviceQuery, portIdx)
 	if err != nil {
 		return plan.Plan{}, Port{}, err
 	}
@@ -103,42 +103,14 @@ func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx in
 }
 
 func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (Port, error) {
-	raw, err := s.loadDevices(ctx)
-	if err != nil {
-		return Port{}, err
-	}
-	dev, err := resolveDeviceRaw(raw, deviceQuery)
-	if err != nil {
-		return Port{}, err
-	}
-	curPorts := ExtractPortsFromDevice(dev)
-	var cur Port
-	found := false
-	for _, p := range curPorts {
-		if p.PortIdx == portIdx {
-			cur = p
-			found = true
-			break
-		}
-	}
-	if !found {
-		return Port{}, apperr.WithHint(
-			apperr.Newf(apperr.NotFound, "port %d not found on %s", portIdx, deviceQuery),
-			"list ports with: unifi port list --device <device>",
-		)
-	}
-
-	devID := strField(dev, "_id", "id")
-	// Authoritative overrides come from rest/device/{id}; stat/device can be incomplete
-	// and merging only against stat would wipe other ports' overrides on PUT.
-	existing, err := s.loadRestPortOverrides(ctx, devID)
+	cur, existing, err := s.loadAuthoritativePort(ctx, deviceQuery, portIdx)
 	if err != nil {
 		return Port{}, err
 	}
 	patch := portInputOverride(portIdx, in)
 	merged := MergePortOverrides(existing, patch)
 
-	path := s.api.SitePath(client.PathRestDevice, devID)
+	path := s.api.SitePath(client.PathRestDevice, cur.DeviceID)
 	body := map[string]any{"port_overrides": merged}
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
 		return Port{}, err
@@ -158,6 +130,39 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 		cur.Profile = in.Profile
 	}
 	return cur, nil
+}
+
+func (s *PortService) loadAuthoritativePort(ctx context.Context, deviceQuery string, portIdx int) (Port, []map[string]any, error) {
+	raw, err := s.loadDevices(ctx)
+	if err != nil {
+		return Port{}, nil, err
+	}
+	dev, err := resolveDeviceRaw(raw, deviceQuery)
+	if err != nil {
+		return Port{}, nil, err
+	}
+	devID := strField(dev, "_id", "id")
+	// rest/device/{id} is authoritative for configured overrides. Merge those
+	// overrides onto stat/device's port table so plan, observation, and apply
+	// all derive the selected port from the same state source.
+	existing, err := s.loadRestPortOverrides(ctx, devID)
+	if err != nil {
+		return Port{}, nil, err
+	}
+	mergedDevice := cloneMap(dev)
+	mergedDevice["port_overrides"] = existing
+	curPorts := ExtractPortsFromDevice(mergedDevice)
+	var cur Port
+	for _, p := range curPorts {
+		if p.PortIdx == portIdx {
+			cur = p
+			return cur, existing, nil
+		}
+	}
+	return Port{}, nil, apperr.WithHint(
+		apperr.Newf(apperr.NotFound, "port %d not found on %s", portIdx, deviceQuery),
+		"list ports with: unifi port list --device <device>",
+	)
 }
 
 func (s *PortService) loadDevices(ctx context.Context) ([]map[string]any, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
@@ -173,19 +174,42 @@ func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
 
 	code := RunPreparedMutation(rt, "port", "update",
 		func() (plan.PreparedMutation, error) {
-			p, cur, err := svc.Update(ctx, device, portIdx, in)
+			p, _, err := svc.Update(ctx, device, portIdx, in)
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, cur.DeviceID, p.Changes, plan.Routine, false)
+			if len(p.Changes) != 1 || p.Changes[0].ID == "" {
+				return plan.PreparedMutation{}, fmt.Errorf("port update produced invalid target plan")
+			}
+			return plan.Targeted(p, p.Changes[0].ID, p.Changes, plan.Routine, false)
 		},
 		func(target plan.Target) (any, error) {
-			p, _, err := svc.Update(ctx, target.ID(), portIdx, in)
+			deviceID, targetPortIdx, err := parsePortTarget(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			p, _, err := svc.Update(ctx, deviceID, targetPortIdx, in)
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyUpdate(ctx, target.ID(), portIdx, in)
+			deviceID, targetPortIdx, err := parsePortTarget(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			return svc.ApplyUpdate(ctx, deviceID, targetPortIdx, in)
 		},
 	)
 	return emittedExit(code)
+}
+
+func parsePortTarget(targetID string) (string, int, error) {
+	separator := strings.LastIndexByte(targetID, '/')
+	if separator <= 0 || separator == len(targetID)-1 {
+		return "", 0, fmt.Errorf("invalid prepared port target %q", targetID)
+	}
+	portIdx, err := strconv.Atoi(targetID[separator+1:])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid prepared port target %q: %w", targetID, err)
+	}
+	return targetID[:separator], portIdx, nil
 }

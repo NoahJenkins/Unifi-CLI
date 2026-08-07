@@ -382,6 +382,51 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 	}
 }
 
+func TestPortServiceUpdatePlansFromAuthoritativeRestOverrides(t *testing.T) {
+	statSW := sampleSwitchDevice()
+	statSW["port_overrides"] = []any{
+		map[string]any{
+			"port_idx":    float64(12),
+			"name":        "Stat Name",
+			"poe_mode":    "pasv24",
+			"portconf_id": "prof-stat",
+		},
+	}
+	restSW := sampleSwitchDevice()
+	restSW["port_overrides"] = []any{
+		map[string]any{
+			"port_idx":    float64(12),
+			"name":        "Authoritative Name",
+			"poe_mode":    "auto",
+			"portconf_id": "prof-rest",
+		},
+	}
+
+	api := &fakePortAPI{
+		devices:     []map[string]any{statSW},
+		restDevices: map[string]map[string]any{"sw1": restSW},
+	}
+	svc := domain.NewPortService(api)
+
+	pl, cur, err := svc.Update(context.Background(), "Switch-Core", 12, domain.PortInput{POE: "off", SetPOE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.DeviceID != "sw1" || cur.PortIdx != 12 {
+		t.Fatalf("current identity = %s/%d, want sw1/12", cur.DeviceID, cur.PortIdx)
+	}
+	if cur.Name != "Authoritative Name" || cur.POE != "auto" || cur.Profile != "prof-rest" {
+		t.Fatalf("current port did not use REST overrides: %+v", cur)
+	}
+	before, _ := pl.Changes[0].Before.(map[string]any)
+	if before["name"] != "Authoritative Name" || before["poe"] != "auto" || before["profile"] != "prof-rest" {
+		t.Fatalf("plan before snapshot did not use REST overrides: %+v", before)
+	}
+	if got := pl.Changes[0].ID; got != "sw1/12" {
+		t.Fatalf("plan target ID = %q, want complete device/port identity sw1/12", got)
+	}
+}
+
 // TestPortServiceApplyUsesRestDeviceOverrides ensures apply merges against
 // GET rest/device/{id} overrides (authoritative), not incomplete stat/device data.
 func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
