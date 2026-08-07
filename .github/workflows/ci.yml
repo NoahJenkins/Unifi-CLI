@@ -41,6 +41,17 @@ jobs:
         shell: bash
         run: bash ./scripts/check-coverage.sh
 
+      - name: run race-enabled unit tests
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+
+      - name: smoke native release executable
+        run: go run ./cmd/release-smoke --native
+
+      - name: cross-build and inspect all release targets
+        if: runner.os == 'Linux'
+        run: go run ./cmd/release-smoke --all
+
   vulnerability-scan:
     name: govulncheck
     runs-on: ubuntu-latest

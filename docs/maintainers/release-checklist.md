@@ -12,6 +12,10 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       CLI help, and RC release notes.
 - [ ] Run formatting, vet, full unit, race, coverage, vulnerability, link,
       Markdown link/command, help, version, and schema checks.
+- [ ] Run `go test . -run Release -count=1` to lint the GoReleaser and release
+      workflow contract, then `go run ./cmd/release-smoke --all` to cross-build
+      and structurally inspect the exact six release targets. Non-native targets
+      are not executed by this command; their output states that limitation.
 - [ ] Verify searches find no exposed raw-payload flag, classic firewall
       `--ruleset`, network-write `--purpose`, or false stable non-DNS mutation
       claim.
@@ -23,6 +27,11 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
 - [ ] Rebase and ensure hosted CI passes on the unchanged candidate commit.
 - [ ] Run GoReleaser 2.17.1 checks and smoke every generated platform artifact.
+- [ ] In the tag workflow, confirm `go run ./cmd/release-smoke --artifacts dist`
+      verifies all six archives, their SHA-256 entries, per-archive SBOMs,
+      embedded build settings, and the native Linux executable before
+      provenance attestation. The macOS and Windows CI runners separately run
+      the same four-command native executable contract before release.
 - [ ] Verify SHA-256 checksums, SBOMs, source archive, and provenance.
 - [ ] Run the authenticated read-only live suite with verified TLS.
 - [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,

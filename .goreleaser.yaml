@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/v2.17.1/www/docs/static/schema.json
+version: 2
+
+project_name: unifi-cli
+
+builds:
+  - id: unifi
+    main: ./cmd/unifi
+    binary: unifi
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version={{ .Version }}
+        -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit={{ .Commit }}
+        -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate={{ .CommitDate }}
+
+archives:
+  - ids:
+      - unifi
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+  format: tar.gz
+  prefix_template: "{{ .ProjectName }}_{{ .Version }}/"
+
+sboms:
+  - id: archives
+    artifacts: archive
+    cmd: syft
+    documents:
+      - "{{ .ArtifactName }}.sbom.json"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
