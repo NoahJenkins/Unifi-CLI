@@ -1,0 +1,59 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    name: Enable auto-merge for safe dependency updates
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Enable squash auto-merge
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" == "true" ]]; then
+            echo "Auto-merge is already enabled for $PR_URL." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gh pr merge --auto --squash "$PR_URL"
+          echo "Enabled squash auto-merge for $UPDATE_TYPE update: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record manual-review decision
+        if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-patch' &&
+          steps.metadata.outputs.update-type != 'version-update:semver-minor'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          echo "Left $UPDATE_TYPE update for manual review: $PR_URL" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an improvement to unifi-cli.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to accomplish, and why is the current behavior insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the command, output, or workflow you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety considerations
+      description: Note any effect on mutation confirmation, dry-run behavior, credential handling, or controller compatibility.

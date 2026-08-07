@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible problem with unifi-cli.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Remove API keys, passwords, controller responses, device identifiers, and network inventory before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: unifi-cli version or commit
+      placeholder: v0.1.0 or 1a2b3c4
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the actual and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest safe command sequence that reproduces the problem. Redact all sensitive values.
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add sanitized logs or screenshots only if they do not expose credentials or network details.
