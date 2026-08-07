@@ -208,6 +208,42 @@ func TestDNSUpdateRejectsNoChangedFieldsAndInvalidChangedFields(t *testing.T) {
 	}
 }
 
+func TestDNSUpdateRejectsEffectiveNoOpBeforePUT(t *testing.T) {
+	record := map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 300}
+	tests := []struct {
+		name string
+		in   domain.DNSInput
+	}{
+		{name: "same name", in: domain.DNSInput{Name: "a.example.test", SetName: true}},
+		{name: "same IPv4", in: domain.DNSInput{IP: "192.0.2.1", SetIP: true}},
+		{name: "same TTL", in: domain.DNSInput{TTLSeconds: 300, SetTTL: true}},
+		{name: "same enabled", in: domain.DNSInput{Enabled: true, SetEnabled: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" plan", func(t *testing.T) {
+			api := &stableDNSAPI{records: []map[string]any{record}, byID: map[string]map[string]any{"dns-a": record}}
+			_, _, err := domain.NewDNSService(api).Update(context.Background(), "dns-a", tt.in)
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("err = %v, want validation_failed", err)
+			}
+			if countMethod(api.calls, http.MethodPut) != 0 {
+				t.Fatalf("effective no-op reached PUT: %#v", api.calls)
+			}
+		})
+
+		t.Run(tt.name+" apply", func(t *testing.T) {
+			api := &stableDNSAPI{records: []map[string]any{record}, byID: map[string]map[string]any{"dns-a": record}}
+			_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), "dns-a", tt.in)
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("err = %v, want validation_failed", err)
+			}
+			if countMethod(api.calls, http.MethodPut) != 0 {
+				t.Fatalf("effective no-op reached PUT: %#v", api.calls)
+			}
+		})
+	}
+}
+
 func TestDNSUpdateAndDeleteRejectNonARecordsBeforeMutation(t *testing.T) {
 	record := map[string]any{"id": "dns-aaaa", "type": "AAAA_RECORD", "domain": "aaaa.example.test", "ipv6Address": "2001:db8::1", "enabled": true, "ttlSeconds": 300}
 	for _, operation := range []struct {
@@ -358,4 +394,14 @@ func methods(calls []dnsCall) []string {
 		out[i] = call.method
 	}
 	return out
+}
+
+func countMethod(calls []dnsCall, method string) int {
+	count := 0
+	for _, call := range calls {
+		if call.method == method {
+			count++
+		}
+	}
+	return count
 }

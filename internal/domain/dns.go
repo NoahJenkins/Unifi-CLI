@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"reflect"
 	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -233,18 +234,10 @@ func (s *DNSService) ApplyCreate(ctx context.Context, in DNSInput) (DNSRecord, e
 }
 
 func (s *DNSService) Update(ctx context.Context, id string, in DNSInput) (plan.Plan, DNSRecord, error) {
-	if err := validateDNSUpdateInput(in); err != nil {
-		return plan.Plan{}, DNSRecord{}, err
-	}
-	rec, err := s.Get(ctx, id)
+	rec, before, after, err := s.prepareUpdate(ctx, id, in)
 	if err != nil {
 		return plan.Plan{}, DNSRecord{}, err
 	}
-	if err := requireARecord(rec, "update"); err != nil {
-		return plan.Plan{}, DNSRecord{}, err
-	}
-	before := dnsRecordSnapshot(rec)
-	after := mergeDNSAfter(rec, in)
 	p := plan.Update("dns", rec.ID, rec.Name,
 		fmt.Sprintf("update dns record %s", rec.Name),
 		before,
@@ -254,14 +247,8 @@ func (s *DNSService) Update(ctx context.Context, id string, in DNSInput) (plan.P
 }
 
 func (s *DNSService) ApplyUpdate(ctx context.Context, id string, in DNSInput) (DNSRecord, error) {
-	if err := validateDNSUpdateInput(in); err != nil {
-		return DNSRecord{}, err
-	}
-	rec, err := s.Get(ctx, id)
+	rec, _, _, err := s.prepareUpdate(ctx, id, in)
 	if err != nil {
-		return DNSRecord{}, err
-	}
-	if err := requireARecord(rec, "update"); err != nil {
 		return DNSRecord{}, err
 	}
 	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies", rec.ID)
@@ -280,6 +267,25 @@ func (s *DNSService) ApplyUpdate(ctx context.Context, id string, in DNSInput) (D
 		return DNSRecord{}, apperr.New(apperr.Conflict, "updated DNS policy does not match the requested fields")
 	}
 	return updated, nil
+}
+
+func (s *DNSService) prepareUpdate(ctx context.Context, id string, in DNSInput) (DNSRecord, map[string]any, map[string]any, error) {
+	if err := validateDNSUpdateInput(in); err != nil {
+		return DNSRecord{}, nil, nil, err
+	}
+	rec, err := s.Get(ctx, id)
+	if err != nil {
+		return DNSRecord{}, nil, nil, err
+	}
+	if err := requireARecord(rec, "update"); err != nil {
+		return DNSRecord{}, nil, nil, err
+	}
+	before := dnsRecordSnapshot(rec)
+	after := mergeDNSAfter(rec, in)
+	if reflect.DeepEqual(before, after) {
+		return DNSRecord{}, nil, nil, apperr.New(apperr.ValidationFailed, "DNS update does not change the current policy")
+	}
+	return rec, before, after, nil
 }
 
 func (s *DNSService) Delete(ctx context.Context, id string) (plan.Plan, DNSRecord, error) {
