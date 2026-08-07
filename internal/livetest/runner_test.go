@@ -220,6 +220,22 @@ func TestRunnerDerivesPortGetArguments(t *testing.T) {
 	}
 }
 
+func TestReadOnlyRunnerKeepsUnfilteredPortListRegistryContract(t *testing.T) {
+	for _, command := range livetest.ReadOnlyCommands() {
+		if command.Name != "port list" {
+			continue
+		}
+		if !reflect.DeepEqual(command.Args, []string{"port", "list"}) {
+			t.Fatalf("port list args = %v, want unfiltered registry command", command.Args)
+		}
+		if command.GetFrom == nil || command.GetFrom.PortDeviceField != "device_id" || command.GetFrom.PortIndexField != "port_idx" {
+			t.Fatalf("port list dependent get contract = %+v", command.GetFrom)
+		}
+		return
+	}
+	t.Fatal("read-only registry is missing port list")
+}
+
 func TestRunnerMarksEmptyOptionalListNotConfigured(t *testing.T) {
 	fake := validExecutor(t)
 	fake.responses["firewall list --json"] = fakeResponse{stdout: `{"ok":true,"resource":"firewall","action":"list","data":[],"meta":{"count":0}}`}

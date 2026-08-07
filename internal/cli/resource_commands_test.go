@@ -28,7 +28,6 @@ const (
 type commandServerOptions struct {
 	officialCollections map[string]string
 	officialStatuses    map[string]int
-	legacyResponses     map[string]string
 	dnsPolicies         []map[string]any
 }
 
@@ -68,9 +67,6 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 	officialDetails := map[string]string{
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1":  `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","configurationId":"config-1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":{"switching":{"lags":[]}},"interfaces":{"ports":[{"idx":1,"connector":"RJ45","maxSpeedMbps":1000,"speedMbps":1000,"state":"UP","poe":{"enabled":false,"standard":"802.3at","state":"DOWN","type":2}}]},"firmwareUpdatable":false,"supported":true}`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc1": `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"},"cellularBackupEnabled":false,"internetAccessEnabled":true,"isolationEnabled":false,"mdnsForwardingEnabled":true,"ipv4Configuration":{"hostIpAddress":"192.0.2.1","prefixLength":24,"autoScaleEnabled":false,"dhcpConfiguration":{"mode":"SERVER","domainName":"example.test","dnsServerIpAddressesOverride":["192.0.2.53"],"ipAddressRange":{"start":"192.0.2.10","stop":"192.0.2.200"},"leaseTimeSeconds":86400,"pingConflictDetectionEnabled":true}}}`,
-	}
-	for path, body := range opts.legacyResponses {
-		responses[path] = body
 	}
 	for path, body := range opts.officialCollections {
 		officialCollections[path] = body
@@ -235,7 +231,7 @@ func TestResourceReadCommandsRenderHumanAndJSONOutput(t *testing.T) {
 		{name: "network get", resource: "network", action: "get", humanMarker: "id: " + commandNetworkID, run: func() error { return runNetworkGet(commandNetworkID) }},
 		{name: "wlan list", resource: "wlan", action: "list", humanMarker: "Main", run: runWlanList},
 		{name: "wlan get", resource: "wlan", action: "get", humanMarker: "id: " + commandWlanID, run: func() error { return runWlanGet(commandWlanID) }},
-		{name: "port list", resource: "port", action: "list", humanMarker: "RJ45", run: func() error { return runPortList(commandDeviceID) }},
+		{name: "port list", resource: "port", action: "list", humanMarker: "RJ45", run: func() error { return runPortList("") }},
 		{name: "port get", resource: "port", action: "get", humanMarker: "port_idx: 1", run: func() error { return runPortGet(commandDeviceID, 1) }},
 		{name: "firewall list", resource: "firewall", action: "list", humanMarker: "Allow DNS", run: runFirewallList},
 		{name: "firewall get", resource: "firewall", action: "get", humanMarker: "id: " + commandFirewallID, run: func() error { return runFirewallGet(commandFirewallID) }},
@@ -392,7 +388,7 @@ func TestStableReadEmptyOutputExactHumanAndJSONEnvelopes(t *testing.T) {
 		{name: "ports", resource: "port", action: "list", run: func() error { return runPortList("") }, humanWant: "DEVICE  PORT  NAME  MEDIA  SPEED  POE  ENABLED  PROFILE\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`}}},
 		{name: "firewall", resource: "firewall", action: "list", run: runFirewallList, humanWant: "INDEX  NAME  ACTION  RULESET  SRC  DST  PROTO  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/firewall/policies": `[]`}}},
 		{name: "dns", resource: "dns", action: "list", run: runDNSList, humanWant: "TYPE  DOMAIN  VALUE  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{dnsPolicies: []map[string]any{}}},
-		{name: "resolvers", resource: "dns", action: "resolvers list", run: runDNSResolversList, humanWant: "NETWORK  DNS  WAN  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}, legacyResponses: map[string]string{"/proxy/network/api/s/default/rest/networkconf": `[]`}}},
+		{name: "resolvers", resource: "dns", action: "resolvers list", run: runDNSResolversList, humanWant: "NETWORK  DNS  WAN  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}}},
 		{name: "health", resource: "system", action: "health", run: runSystemHealth, humanWant: "status: ok\ndevice_total: 0\ndevice_connected: 0\nclient_total: 0\n", jsonData: `{"status":"ok","device_total":0,"device_connected":0,"client_total":0}`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`, sitePath + "/clients": `[]`}}},
 	}
 	for _, tt := range tests {
@@ -463,32 +459,6 @@ func TestStableReadPermissionErrorsUseExactHumanAndJSONEnvelopes(t *testing.T) {
 				t.Fatalf("JSON error wrote stderr %q", stderr)
 			}
 			want := `{"schema_version":"1","ok":false,"resource":` + strconv.Quote(tt.resource) + `,"action":` + strconv.Quote(tt.action) + `,"data":null,"meta":{"site":"default","dry_run":false},"error":{"code":"permission_denied","message":"controller returned HTTP status 403: permission denied"}}`
-			assertDecodedJSONEqual(t, stdout, want)
-		})
-	}
-}
-
-func TestOfficialPortListWithoutDeviceHasActionableExactErrorEnvelope(t *testing.T) {
-	const humanWant = "validation_failed: official port list requires --device (rerun with --device <id|mac|exact-name>)\n"
-	for _, jsonOutput := range []bool{false, true} {
-		t.Run(map[bool]string{false: "human", true: "json"}[jsonOutput], func(t *testing.T) {
-			srv := newCommandTestServer(t)
-			defer srv.Close()
-			useCommandTestRuntime(t, srv, jsonOutput)
-			stdout, stderr, err := captureProcessOutput(t, func() error { return runPortList("") })
-			if err == nil {
-				t.Fatalf("missing validation error; stdout=%q stderr=%q", stdout, stderr)
-			}
-			if !jsonOutput {
-				if stdout != "" || stderr != humanWant {
-					t.Fatalf("human stdout=%q stderr=%q", stdout, stderr)
-				}
-				return
-			}
-			if stderr != "" {
-				t.Fatalf("JSON error wrote stderr %q", stderr)
-			}
-			want := `{"schema_version":"1","ok":false,"resource":"port","action":"list","data":null,"meta":{"site":"default","dry_run":false},"error":{"code":"validation_failed","message":"official port list requires --device","hint":"rerun with --device <id|mac|exact-name>"}}`
 			assertDecodedJSONEqual(t, stdout, want)
 		})
 	}

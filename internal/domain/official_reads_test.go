@@ -3,12 +3,16 @@ package domain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -16,11 +20,22 @@ import (
 )
 
 type officialReadAPI struct {
+	mu          sync.Mutex
 	collections map[string][]map[string]any
 	details     map[string]map[string]any
 	legacy      map[string][]map[string]any
 	errs        map[string]error
 	calls       []string
+	requests    []officialTestRequest
+	detailDelay time.Duration
+	active      int
+	maxActive   int
+}
+
+type officialTestRequest struct {
+	method string
+	path   string
+	body   any
 }
 
 const (
@@ -33,8 +48,11 @@ const (
 	officialFirewallPolicyID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1"
 )
 
-func (f *officialReadAPI) Do(_ context.Context, method, path string, _ any, out any) error {
+func (f *officialReadAPI) Do(_ context.Context, method, path string, in any, out any) error {
+	f.mu.Lock()
 	f.calls = append(f.calls, "LEGACY "+method+" "+path)
+	f.requests = append(f.requests, officialTestRequest{method: method, path: path, body: cloneTestValue(in)})
+	f.mu.Unlock()
 	if method != "GET" {
 		return nil
 	}
@@ -57,7 +75,9 @@ func (f *officialReadAPI) IntegrationSitePath(_ context.Context, parts ...string
 }
 
 func (f *officialReadAPI) FetchOfficialObjects(_ context.Context, path string) ([]map[string]any, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, "OFFICIAL LIST "+path)
+	f.mu.Unlock()
 	if err := f.errs[path]; err != nil {
 		return nil, err
 	}
@@ -65,8 +85,29 @@ func (f *officialReadAPI) FetchOfficialObjects(_ context.Context, path string) (
 	return append([]map[string]any(nil), items...), nil
 }
 
-func (f *officialReadAPI) DoOfficial(_ context.Context, method, path string, _ any, out any) error {
+func (f *officialReadAPI) DoOfficial(ctx context.Context, method, path string, _ any, out any) error {
+	f.mu.Lock()
 	f.calls = append(f.calls, "OFFICIAL "+method+" "+path)
+	f.active++
+	if f.active > f.maxActive {
+		f.maxActive = f.active
+	}
+	delay := f.detailDelay
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.active--
+		f.mu.Unlock()
+	}()
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if err := f.errs[path]; err != nil {
 		return err
 	}
@@ -79,6 +120,45 @@ func (f *officialReadAPI) DoOfficial(_ context.Context, method, path string, _ a
 		return err
 	}
 	return json.Unmarshal(b, out)
+}
+
+func cloneTestValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	var cloned any
+	if err := json.Unmarshal(b, &cloned); err != nil {
+		panic(err)
+	}
+	return cloned
+}
+
+func (f *officialReadAPI) maxDetailConcurrency() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxActive
+}
+
+func (f *officialReadAPI) activeDetailCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.active
+}
+
+func (f *officialReadAPI) legacyRequests(method string) []officialTestRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]officialTestRequest, 0, len(f.requests))
+	for _, request := range f.requests {
+		if request.method == method {
+			out = append(out, request)
+		}
+	}
+	return out
 }
 
 func officialFixtureData(t *testing.T, name string) []map[string]any {
@@ -404,16 +484,290 @@ func TestTargetGetDoesNotFetchOrFailOnUnrelatedOfficialDetails(t *testing.T) {
 	assertCallCount(t, api.calls, "OFFICIAL GET "+iotPath, 0)
 }
 
-func TestOfficialPortListRequiresADeviceToKeepDetailReadsBounded(t *testing.T) {
+func TestOfficialPortListFansOutBoundedAndDeterministically(t *testing.T) {
 	api := newOfficialReadAPI(t)
-	_, err := domain.NewPortService(api).List(context.Background(), "")
-	if !apperr.Is(err, apperr.ValidationFailed) {
-		t.Fatalf("unfiltered official port list error = %v", err)
+	configureOfficialPortFanout(t, api, 9)
+	api.detailDelay = 20 * time.Millisecond
+
+	ports, err := domain.NewPortService(api).List(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 9 {
+		t.Fatalf("ports = %d, want 9", len(ports))
+	}
+	for i, port := range ports {
+		wantName := fmt.Sprintf("Switch %02d", i+1)
+		if port.DeviceName != wantName || port.PortIdx != i+1 {
+			t.Fatalf("ports[%d] = %+v, want device %q port %d", i, port, wantName, i+1)
+		}
+	}
+	if got := api.maxDetailConcurrency(); got < 2 || got > 4 {
+		t.Fatalf("max detail concurrency = %d, want 2..4", got)
+	}
+	if got := api.activeDetailCalls(); got != 0 {
+		t.Fatalf("active detail calls after return = %d", got)
+	}
+	for _, call := range api.calls {
+		if strings.HasPrefix(call, "LEGACY ") {
+			t.Fatalf("official port list made legacy call %q", call)
+		}
+	}
+}
+
+func TestOfficialPortListFailsWholeResultOnAnyDetailError(t *testing.T) {
+	api := newOfficialReadAPI(t)
+	configureOfficialPortFanout(t, api, 6)
+	failedID := fanoutTestUUID(3)
+	failedPath := client.OfficialPath("sites", officialSiteID, "devices", failedID)
+	api.errs[failedPath] = apperr.New(apperr.PermissionDenied, "device detail forbidden")
+
+	ports, err := domain.NewPortService(api).List(context.Background(), "")
+	if !apperr.Is(err, apperr.PermissionDenied) {
+		t.Fatalf("detail error = %v", err)
+	}
+	if ports != nil {
+		t.Fatalf("partial ports returned on detail error: %+v", ports)
+	}
+	if got := api.activeDetailCalls(); got != 0 {
+		t.Fatalf("active detail calls after error = %d", got)
+	}
+}
+
+func TestOfficialPortListFetchesNoDetailsForEmptyOrNonPortDevices(t *testing.T) {
+	api := newOfficialReadAPI(t)
+	path := client.OfficialPath("sites", officialSiteID, "devices")
+	api.collections[path] = []map[string]any{}
+	ports, err := domain.NewPortService(api).List(context.Background(), "")
+	if err != nil || len(ports) != 0 {
+		t.Fatalf("empty ports = %+v, err=%v", ports, err)
+	}
+
+	api = newOfficialReadAPI(t)
+	overview := cloneTestMap(officialFixtureData(t, "devices.json")[0])
+	overview["interfaces"] = []any{"radios"}
+	api.collections[path] = []map[string]any{overview}
+	ports, err = domain.NewPortService(api).List(context.Background(), "")
+	if err != nil || len(ports) != 0 {
+		t.Fatalf("non-port ports = %+v, err=%v", ports, err)
 	}
 	for _, call := range api.calls {
 		if strings.HasPrefix(call, "OFFICIAL GET ") {
-			t.Fatalf("unfiltered port list made detail call %q", call)
+			t.Fatalf("non-port inventory made detail call %q", call)
 		}
+	}
+}
+
+func TestOfficialDNSResolverListFansOutBoundedAndDeterministically(t *testing.T) {
+	api := newOfficialReadAPI(t)
+	configureOfficialNetworkFanout(t, api, 9)
+	api.detailDelay = 20 * time.Millisecond
+
+	resolvers, err := domain.NewDNSService(api).ListResolvers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolvers) != 9 {
+		t.Fatalf("resolvers = %d, want 9", len(resolvers))
+	}
+	for i, resolver := range resolvers {
+		wantName := fmt.Sprintf("Network %02d", i+1)
+		wantDNS := fmt.Sprintf("192.0.2.%d", i+1)
+		if resolver.NetworkName != wantName || len(resolver.DNS) != 1 || resolver.DNS[0] != wantDNS {
+			t.Fatalf("resolvers[%d] = %+v, want name=%q dns=%q", i, resolver, wantName, wantDNS)
+		}
+	}
+	if got := api.maxDetailConcurrency(); got < 2 || got > 4 {
+		t.Fatalf("max detail concurrency = %d, want 2..4", got)
+	}
+	if got := api.activeDetailCalls(); got != 0 {
+		t.Fatalf("active detail calls after return = %d", got)
+	}
+	for _, call := range api.calls {
+		if strings.HasPrefix(call, "LEGACY ") {
+			t.Fatalf("official resolver list made legacy call %q", call)
+		}
+	}
+}
+
+func TestOfficialDNSResolverListFailsWholeResultOnAnyDetailError(t *testing.T) {
+	api := newOfficialReadAPI(t)
+	configureOfficialNetworkFanout(t, api, 6)
+	failedPath := client.OfficialPath("sites", officialSiteID, "networks", fanoutTestUUID(4))
+	api.errs[failedPath] = apperr.New(apperr.PermissionDenied, "network detail forbidden")
+
+	resolvers, err := domain.NewDNSService(api).ListResolvers(context.Background())
+	if !apperr.Is(err, apperr.PermissionDenied) {
+		t.Fatalf("detail error = %v", err)
+	}
+	if resolvers != nil {
+		t.Fatalf("partial resolvers returned on detail error: %+v", resolvers)
+	}
+	if got := api.activeDetailCalls(); got != 0 {
+		t.Fatalf("active detail calls after error = %d", got)
+	}
+}
+
+func TestOfficialDNSResolverListEmptyMakesNoDetailOrLegacyCalls(t *testing.T) {
+	api := newOfficialReadAPI(t)
+	path := client.OfficialPath("sites", officialSiteID, "networks")
+	api.collections[path] = []map[string]any{}
+
+	resolvers, err := domain.NewDNSService(api).ListResolvers(context.Background())
+	if err != nil || len(resolvers) != 0 {
+		t.Fatalf("empty resolvers = %+v, err=%v", resolvers, err)
+	}
+	assertExactCalls(t, api.calls, "OFFICIAL LIST "+path)
+}
+
+func TestOfficialDNSResolverReadIDTranslatesToLegacyMutation(t *testing.T) {
+	ctx := context.Background()
+	api := newOfficialReadAPI(t)
+	legacyPath := api.SitePath(client.PathRestNetwork)
+	api.legacy[legacyPath] = []map[string]any{{
+		"_id": "legacy-network", "name": "LAN", "purpose": "corporate",
+		"dhcpd_dns_1": "192.0.2.53", "dhcpd_dns_enabled": true,
+	}}
+
+	resolvers, err := domain.NewDNSService(api).ListResolvers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read domain.DNSResolver
+	for _, resolver := range resolvers {
+		if resolver.NetworkName == "LAN" {
+			read = resolver
+			break
+		}
+	}
+	if read.NetworkID != officialLANID {
+		t.Fatalf("official resolver read = %+v", read)
+	}
+
+	servers := []string{"1.1.1.1", "8.8.8.8"}
+	p, before, err := domain.NewDNSService(api).SetResolvers(ctx, read.NetworkID, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.NetworkID != "legacy-network" || p.Changes[0].ID != "legacy-network" {
+		t.Fatalf("resolver plan target: before=%+v plan=%+v", before, p)
+	}
+	got, err := domain.NewDNSService(api).ApplySetResolvers(ctx, read.NetworkID, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NetworkID != "legacy-network" {
+		t.Fatalf("resolver apply target = %+v", got)
+	}
+	puts := api.legacyRequests(http.MethodPut)
+	if len(puts) != 1 || puts[0].path != api.SitePath(client.PathRestNetwork, "legacy-network") {
+		t.Fatalf("resolver PUTs = %+v", puts)
+	}
+	body, ok := puts[0].body.(map[string]any)
+	if !ok || body["dhcpd_dns_1"] != "1.1.1.1" || body["dhcpd_dns_2"] != "8.8.8.8" {
+		t.Fatalf("resolver PUT body = %#v", puts[0].body)
+	}
+	encoded, _ := json.Marshal(puts)
+	if strings.Contains(string(encoded), officialLANID) {
+		t.Fatalf("official network UUID reached legacy resolver request: %s", encoded)
+	}
+}
+
+func TestOfficialFirewallReadIDsTranslateForBothReorderModes(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		reorder   func([]domain.FirewallRule) domain.FirewallReorder
+		wantOrder []string
+		wantPUTs  []officialTestRequest
+	}{
+		{
+			name: "ids",
+			reorder: func(read []domain.FirewallRule) domain.FirewallReorder {
+				return domain.FirewallReorder{IDs: []string{read[1].ID, read[0].ID}}
+			},
+			wantOrder: []string{"legacy-fw2", "legacy-fw1", "legacy-fw3"},
+			wantPUTs: []officialTestRequest{
+				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw2", body: map[string]any{"name": "Block Web", "enabled": true, "action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": float64(100)}},
+				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw1", body: map[string]any{"name": "Allow DNS", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": float64(110)}},
+			},
+		},
+		{
+			name: "id and index",
+			reorder: func(read []domain.FirewallRule) domain.FirewallReorder {
+				return domain.FirewallReorder{ID: read[1].ID, Index: 2, SetIndex: true}
+			},
+			wantOrder: []string{"legacy-fw1", "legacy-fw3", "legacy-fw2"},
+			wantPUTs: []officialTestRequest{
+				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw3", body: map[string]any{"name": "Allow NTP", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": float64(110)}},
+				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw2", body: map[string]any{"name": "Block Web", "enabled": true, "action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": float64(120)}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newOfficialReorderAPI(t)
+			service := domain.NewFirewallService(api)
+			read, err := service.List(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(read) != 2 {
+				t.Fatalf("official firewall read = %+v", read)
+			}
+			ro := tt.reorder(read)
+			p, err := service.Reorder(ctx, ro)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := p.Changes[0].After.(map[string]any)
+			if got := after["order"].([]string); !reflect.DeepEqual(got, tt.wantOrder) {
+				t.Fatalf("plan order = %v, want %v", got, tt.wantOrder)
+			}
+
+			api.mu.Lock()
+			api.requests = nil
+			api.calls = nil
+			api.mu.Unlock()
+			if err := service.ApplyReorder(ctx, ro); err != nil {
+				t.Fatal(err)
+			}
+			if got := api.legacyRequests(http.MethodPut); !reflect.DeepEqual(got, tt.wantPUTs) {
+				t.Fatalf("legacy reorder PUTs = %#v, want %#v", got, tt.wantPUTs)
+			}
+			encoded, _ := json.Marshal(api.legacyRequests(http.MethodPut))
+			for _, rule := range read {
+				if strings.Contains(string(encoded), rule.ID) {
+					t.Fatalf("official firewall UUID reached legacy reorder request: %s", encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestOfficialFirewallReorderTranslationRejectsAmbiguousMissingAndDuplicateTargets(t *testing.T) {
+	ctx := context.Background()
+
+	api := newOfficialReorderAPI(t)
+	legacyPath := api.SitePath(client.PathRestFirewall)
+	api.legacy[legacyPath] = append(api.legacy[legacyPath], map[string]any{
+		"_id": "legacy-fw2-duplicate", "name": "Block Web", "enabled": true,
+		"action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": 130,
+	})
+	if _, err := domain.NewFirewallService(api).Reorder(ctx, domain.FirewallReorder{ID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2", Index: 0, SetIndex: true}); !apperr.Is(err, apperr.AmbiguousID) {
+		t.Fatalf("ambiguous reorder translation error = %v", err)
+	}
+
+	api = newOfficialReorderAPI(t)
+	api.legacy[legacyPath] = []map[string]any{{"_id": "other", "name": "Other", "rule_index": 100}}
+	if _, err := domain.NewFirewallService(api).Reorder(ctx, domain.FirewallReorder{ID: officialFirewallPolicyID, Index: 0, SetIndex: true}); !apperr.Is(err, apperr.NotFound) {
+		t.Fatalf("missing reorder translation error = %v", err)
+	}
+
+	api = newOfficialReorderAPI(t)
+	if _, err := domain.NewFirewallService(api).Reorder(ctx, domain.FirewallReorder{IDs: []string{"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2", "legacy-fw2"}}); !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("translated duplicate reorder error = %v", err)
 	}
 }
 
@@ -602,6 +956,19 @@ func TestOfficialMutationIdentityTranslationRejectsAmbiguousAndMissingLegacyMatc
 			},
 		},
 		{
+			name:       "dns resolver network",
+			legacyPath: func(api *officialReadAPI) string { return api.SitePath(client.PathRestNetwork) },
+			ambiguous: []map[string]any{
+				{"_id": "legacy-resolver-1", "name": "LAN", "purpose": "corporate"},
+				{"_id": "legacy-resolver-2", "name": "LAN", "purpose": "corporate"},
+			},
+			missing: []map[string]any{{"_id": "other", "name": "Other", "purpose": "corporate"}},
+			mutate: func(api *officialReadAPI) error {
+				_, _, err := domain.NewDNSService(api).SetResolvers(ctx, officialLANID, []string{"1.1.1.1"})
+				return err
+			},
+		},
+		{
 			name:       "WLAN",
 			legacyPath: func(api *officialReadAPI) string { return api.SitePath(client.PathRestWlan) },
 			ambiguous: []map[string]any{
@@ -680,6 +1047,101 @@ func TestLegacyUUIDMutationIDDoesNotRequireOfficialRead(t *testing.T) {
 			t.Fatalf("legacy UUID resolution made official call %q", call)
 		}
 	}
+}
+
+func configureOfficialPortFanout(t *testing.T, api *officialReadAPI, count int) {
+	t.Helper()
+	sitePath := client.OfficialPath("sites", officialSiteID)
+	overviewTemplate := officialFixtureData(t, "devices.json")[1]
+	detailTemplate := officialFixtureObject(t, "device-switch.json")
+	overviews := make([]map[string]any, 0, count+1)
+	for i := count; i >= 1; i-- {
+		id := fanoutTestUUID(i)
+		name := fmt.Sprintf("Switch %02d", i)
+		overview := cloneTestMap(overviewTemplate)
+		overview["id"] = id
+		overview["name"] = name
+		overview["macAddress"] = fmt.Sprintf("02:00:00:00:%02x:%02x", i/256, i%256)
+		overviews = append(overviews, overview)
+
+		detail := cloneTestMap(detailTemplate)
+		detail["id"] = id
+		detail["name"] = name
+		detail["macAddress"] = overview["macAddress"]
+		interfaces := detail["interfaces"].(map[string]any)
+		ports := interfaces["ports"].([]any)
+		ports = ports[:1]
+		ports[0].(map[string]any)["idx"] = float64(i)
+		interfaces["ports"] = ports
+		api.details[sitePath+"/devices/"+id] = detail
+	}
+	nonPort := cloneTestMap(overviewTemplate)
+	nonPort["id"] = "30000000-0000-4000-8000-000000000001"
+	nonPort["name"] = "Access Point"
+	nonPort["interfaces"] = []any{"radios"}
+	overviews = append(overviews, nonPort)
+	api.collections[sitePath+"/devices"] = overviews
+}
+
+func configureOfficialNetworkFanout(t *testing.T, api *officialReadAPI, count int) {
+	t.Helper()
+	sitePath := client.OfficialPath("sites", officialSiteID)
+	overviewTemplate := officialFixtureData(t, "networks.json")[0]
+	detailTemplate := officialFixtureObject(t, "network-lan.json")
+	overviews := make([]map[string]any, 0, count)
+	for i := count; i >= 1; i-- {
+		id := fanoutTestUUID(i)
+		name := fmt.Sprintf("Network %02d", i)
+		overview := cloneTestMap(overviewTemplate)
+		overview["id"] = id
+		overview["name"] = name
+		overview["vlanId"] = float64(i)
+		overview["default"] = i == 1
+		overviews = append(overviews, overview)
+
+		detail := cloneTestMap(detailTemplate)
+		detail["id"] = id
+		detail["name"] = name
+		detail["vlanId"] = float64(i)
+		detail["default"] = i == 1
+		ipv4 := detail["ipv4Configuration"].(map[string]any)
+		dhcp := ipv4["dhcpConfiguration"].(map[string]any)
+		dhcp["dnsServerIpAddressesOverride"] = []any{fmt.Sprintf("192.0.2.%d", i)}
+		api.details[sitePath+"/networks/"+id] = detail
+	}
+	api.collections[sitePath+"/networks"] = overviews
+}
+
+func newOfficialReorderAPI(t *testing.T) *officialReadAPI {
+	t.Helper()
+	api := newOfficialReadAPI(t)
+	path := client.OfficialPath("sites", officialSiteID, "firewall", "policies")
+	second := cloneTestMap(api.collections[path][0])
+	second["id"] = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2"
+	second["name"] = "Block Web"
+	second["index"] = float64(110)
+	second["action"] = map[string]any{"type": "BLOCK"}
+	second["ipProtocolScope"] = map[string]any{
+		"ipVersion": "IPV4",
+		"protocolFilter": map[string]any{
+			"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
+		},
+	}
+	api.collections[path] = append(api.collections[path], second)
+	api.legacy[api.SitePath(client.PathRestFirewall)] = []map[string]any{
+		{"_id": "legacy-fw1", "name": "Allow DNS", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": 100},
+		{"_id": "legacy-fw2", "name": "Block Web", "enabled": true, "action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": 110},
+		{"_id": "legacy-fw3", "name": "Allow NTP", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": 120},
+	}
+	return api
+}
+
+func fanoutTestUUID(index int) string {
+	return fmt.Sprintf("20000000-0000-4000-8000-%012d", index)
+}
+
+func cloneTestMap(value map[string]any) map[string]any {
+	return cloneTestValue(value).(map[string]any)
 }
 
 func assertOnlyOfficialCalls(t *testing.T, calls []string, required ...string) {

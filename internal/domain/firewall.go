@@ -311,6 +311,33 @@ func (s *FirewallService) resolveReorder(ctx context.Context, ro FirewallReorder
 	for _, r := range items {
 		before = append(before, r.ID)
 	}
+	var officialItems []FirewallRule
+	officialLoaded := false
+	resolveRule := func(query string) (FirewallRule, error) {
+		if hit, ok := findExactID(items, query); ok {
+			return hit, nil
+		}
+		if !looksLikeUUID(query) {
+			return resolve.One(items, query)
+		}
+		if !officialLoaded {
+			raw, official, err := fetchOfficialSite(s.api, ctx, "firewall", "policies")
+			if err != nil {
+				return FirewallRule{}, err
+			}
+			officialLoaded = true
+			if !official {
+				return resolve.One(items, query)
+			}
+			officialItems = make([]FirewallRule, 0, len(raw))
+			for _, item := range raw {
+				officialItems = append(officialItems, NormalizeFirewallRule(item))
+			}
+		}
+		return resolveLegacyMutationTarget(items, officialItems, query, "firewall policy", func(a, b FirewallRule) bool {
+			return sameName(a, b)
+		})
+	}
 
 	switch {
 	case len(ro.IDs) > 0:
@@ -318,23 +345,16 @@ func (s *FirewallService) resolveReorder(ctx context.Context, ro FirewallReorder
 			return nil, nil, apperr.New(apperr.ValidationFailed, "use either --ids or --id/--index, not both")
 		}
 		seen := make(map[string]struct{}, len(ro.IDs))
-		byID := make(map[string]struct{}, len(items))
-		for _, r := range items {
-			byID[r.ID] = struct{}{}
-		}
 		for _, id := range ro.IDs {
 			id = strings.TrimSpace(id)
 			if id == "" {
 				continue
 			}
-			if _, ok := byID[id]; !ok {
-				// allow resolve by name
-				hit, err := resolve.One(items, id)
-				if err != nil {
-					return nil, nil, err
-				}
-				id = hit.ID
+			hit, err := resolveRule(id)
+			if err != nil {
+				return nil, nil, err
 			}
+			id = hit.ID
 			if _, dup := seen[id]; dup {
 				return nil, nil, apperr.Newf(apperr.ValidationFailed, "duplicate id in --ids: %s", id)
 			}
@@ -356,7 +376,7 @@ func (s *FirewallService) resolveReorder(ctx context.Context, ro FirewallReorder
 		if ro.Index < 0 {
 			return nil, nil, apperr.New(apperr.ValidationFailed, "--index must be >= 0")
 		}
-		hit, err := resolve.One(items, ro.ID)
+		hit, err := resolveRule(ro.ID)
 		if err != nil {
 			return nil, nil, err
 		}

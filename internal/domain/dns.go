@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -15,8 +16,8 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
 )
 
-// DNSAPI is the transport for official DNS policies and legacy networkconf
-// resolvers.
+// DNSAPI is the transport for official DNS/network reads and legacy
+// networkconf resolver mutations.
 type DNSAPI interface {
 	Do(ctx context.Context, method, path string, in, out any) error
 	SitePath(parts ...string) string
@@ -336,15 +337,27 @@ func (s *DNSService) ApplyDelete(ctx context.Context, id string) (DNSRecord, err
 }
 
 func (s *DNSService) ListResolvers(ctx context.Context) ([]DNSResolver, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(client.PathRestNetwork)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+	overviews, official, err := fetchOfficialSite(s.api, ctx, "networks")
+	if err != nil {
 		return nil, err
 	}
-	out := make([]DNSResolver, 0, len(raw))
-	for _, m := range raw {
+	if !official {
+		return nil, apperr.New(apperr.Internal, "official network transport is required to list DNS resolvers")
+	}
+	details, err := fetchOfficialSiteDetails(ctx, s.api, overviews, "networks")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DNSResolver, 0, len(details))
+	for _, m := range details {
 		out = append(out, NormalizeDNSResolver(m))
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].NetworkName != out[j].NetworkName {
+			return out[i].NetworkName < out[j].NetworkName
+		}
+		return out[i].NetworkID < out[j].NetworkID
+	})
 	return out, nil
 }
 
@@ -397,7 +410,7 @@ func (r resolverIdent) GetMAC() string  { return "" }
 func (r resolverIdent) GetName() string { return r.NetworkName }
 
 func (s *DNSService) getResolver(ctx context.Context, networkQuery string) (DNSResolver, error) {
-	items, err := s.ListResolvers(ctx)
+	items, err := s.listLegacyResolvers(ctx)
 	if err != nil {
 		return DNSResolver{}, err
 	}
@@ -405,11 +418,52 @@ func (s *DNSService) getResolver(ctx context.Context, networkQuery string) (DNSR
 	for i, it := range items {
 		idents[i] = resolverIdent{it}
 	}
-	hit, err := resolve.One(idents, networkQuery)
+	if hit, ok := findExactID(idents, networkQuery); ok {
+		return hit.DNSResolver, nil
+	}
+	if !looksLikeUUID(networkQuery) {
+		hit, err := resolve.One(idents, networkQuery)
+		if err != nil {
+			return DNSResolver{}, err
+		}
+		return hit.DNSResolver, nil
+	}
+
+	raw, official, err := fetchOfficialSite(s.api, ctx, "networks")
+	if err != nil {
+		return DNSResolver{}, err
+	}
+	if !official {
+		hit, err := resolve.One(idents, networkQuery)
+		if err != nil {
+			return DNSResolver{}, err
+		}
+		return hit.DNSResolver, nil
+	}
+	officialIdents := make([]resolverIdent, 0, len(raw))
+	for _, item := range raw {
+		officialIdents = append(officialIdents, resolverIdent{NormalizeDNSResolver(item)})
+	}
+	hit, err := resolveLegacyMutationTarget(idents, officialIdents, networkQuery, "DNS resolver network", func(a, b resolverIdent) bool {
+		return sameName(a, b)
+	})
 	if err != nil {
 		return DNSResolver{}, err
 	}
 	return hit.DNSResolver, nil
+}
+
+func (s *DNSService) listLegacyResolvers(ctx context.Context) ([]DNSResolver, error) {
+	var raw []map[string]any
+	path := s.api.SitePath(client.PathRestNetwork)
+	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]DNSResolver, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, NormalizeDNSResolver(item))
+	}
+	return out, nil
 }
 
 func (s *DNSService) fetchRecords(ctx context.Context) ([]map[string]any, error) {

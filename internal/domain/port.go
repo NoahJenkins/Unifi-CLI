@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -109,32 +110,37 @@ func (s *PortService) listOfficial(ctx context.Context, raw []map[string]any, de
 	if len(raw) == 0 {
 		return []Port{}, nil
 	}
-	if deviceQuery == "" {
-		return nil, apperr.WithHint(
-			apperr.New(apperr.ValidationFailed, "official port list requires --device"),
-			"rerun with --device <id|mac|exact-name>",
-		)
-	}
-	selected := raw
+	selected := make([]map[string]any, 0, len(raw))
 	if deviceQuery != "" {
 		dev, err := resolveDeviceRaw(raw, deviceQuery)
 		if err != nil {
 			return nil, err
 		}
 		selected = []map[string]any{dev}
+	} else {
+		for _, overview := range raw {
+			if officialDeviceHasPorts(overview) {
+				selected = append(selected, overview)
+			}
+		}
+	}
+	details, err := fetchOfficialSiteDetails(ctx, s.api, selected, "devices")
+	if err != nil {
+		return nil, err
 	}
 	out := make([]Port, 0)
-	for _, overview := range selected {
-		id := strField(overview, "id")
-		if id == "" {
-			continue
-		}
-		detail, err := fetchOfficialSiteDetail(s.api, ctx, id, "devices")
-		if err != nil {
-			return nil, err
-		}
+	for _, detail := range details {
 		out = append(out, ExtractOfficialPortsFromDevice(detail)...)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].DeviceName != out[j].DeviceName {
+			return out[i].DeviceName < out[j].DeviceName
+		}
+		if out[i].DeviceID != out[j].DeviceID {
+			return out[i].DeviceID < out[j].DeviceID
+		}
+		return out[i].PortIdx < out[j].PortIdx
+	})
 	return out, nil
 }
 
@@ -439,6 +445,15 @@ func indexOverrides(ovs []map[string]any) map[int]map[string]any {
 func deviceHasPorts(m map[string]any) bool {
 	table := sliceOfMaps(m["port_table"])
 	return len(table) > 0
+}
+
+func officialDeviceHasPorts(m map[string]any) bool {
+	for _, name := range anyStringSlice(m["interfaces"]) {
+		if name == "ports" {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveDeviceRaw(raw []map[string]any, query string) (map[string]any, error) {

@@ -486,45 +486,6 @@ func TestDNSDeleteUsesOfficialDNSPolicyPath(t *testing.T) {
 	}
 }
 
-func TestDNSResolversList(t *testing.T) {
-	api := &fakeDNSAPI{networks: fixtureNetworks(t)}
-	svc := domain.NewDNSService(api)
-	got, err := svc.ListResolvers(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(api.calls) != 1 || !strings.Contains(api.calls[0].path, "rest/networkconf") {
-		t.Fatalf("calls: %+v", api.calls)
-	}
-	if len(got) != 4 {
-		t.Fatalf("len = %d, want 4", len(got))
-	}
-
-	lan := got[0]
-	if lan.NetworkName != "LAN" || lan.NetworkID != "net1" {
-		t.Fatalf("lan: %+v", lan)
-	}
-	if len(lan.DNS) != 2 || lan.DNS[0] != "1.1.1.1" || lan.DNS[1] != "8.8.8.8" {
-		t.Fatalf("lan dns: %+v", lan.DNS)
-	}
-	if lan.WAN {
-		t.Fatal("LAN should not be WAN")
-	}
-
-	iot := got[1]
-	if len(iot.DNS) != 2 || iot.DNS[0] != "9.9.9.9" {
-		t.Fatalf("iot dns: %+v", iot.DNS)
-	}
-
-	wan := got[3]
-	if !wan.WAN {
-		t.Fatalf("wan flag: %+v", wan)
-	}
-	if len(wan.DNS) != 2 || wan.DNS[0] != "1.0.0.1" {
-		t.Fatalf("wan dns: %+v", wan.DNS)
-	}
-}
-
 func TestDNSResolversSetPlanAndApply(t *testing.T) {
 	api := &fakeDNSAPI{networks: fixtureNetworks(t)}
 	svc := domain.NewDNSService(api)
@@ -633,19 +594,9 @@ func TestDNSResolversSetClearsDNSNameserversOnIoT(t *testing.T) {
 			api.networks[i] = n
 		}
 	}
-	listed, err := svc.ListResolvers(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var iot domain.DNSResolver
-	for _, r := range listed {
-		if r.NetworkName == "IoT" {
-			iot = r
-			break
-		}
-	}
+	iot := domain.NormalizeDNSResolver(api.networks[1])
 	if len(iot.DNS) != 2 || iot.DNS[0] != "1.1.1.1" || iot.DNS[1] != "8.8.8.8" {
-		t.Fatalf("list after set still shows old/stale dns: %+v", iot.DNS)
+		t.Fatalf("updated legacy resolver still shows old/stale dns: %+v", iot.DNS)
 	}
 }
 
