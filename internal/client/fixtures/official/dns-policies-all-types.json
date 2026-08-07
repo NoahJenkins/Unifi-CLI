@@ -1,0 +1,70 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 7,
+  "totalCount": 7,
+  "data": [
+    {
+      "id": "dns-a",
+      "type": "A_RECORD",
+      "domain": "a.example.test",
+      "enabled": true,
+      "ipv4Address": "192.0.2.10",
+      "ttlSeconds": 300
+    },
+    {
+      "id": "dns-aaaa",
+      "type": "AAAA_RECORD",
+      "domain": "aaaa.example.test",
+      "enabled": true,
+      "ipv6Address": "2001:db8::10",
+      "ttlSeconds": 600
+    },
+    {
+      "id": "dns-cname",
+      "type": "CNAME_RECORD",
+      "domain": "alias.example.test",
+      "enabled": true,
+      "targetDomain": "target.example.test",
+      "ttlSeconds": 900
+    },
+    {
+      "id": "dns-mx",
+      "type": "MX_RECORD",
+      "domain": "example.test",
+      "enabled": true,
+      "mailServerDomain": "mail.example.test",
+      "ttlSeconds": 1200,
+      "priority": 10
+    },
+    {
+      "id": "dns-txt",
+      "type": "TXT_RECORD",
+      "domain": "txt.example.test",
+      "enabled": false,
+      "text": "verification=value",
+      "ttlSeconds": 1800
+    },
+    {
+      "id": "dns-srv",
+      "type": "SRV_RECORD",
+      "domain": "_sip._tcp.example.test",
+      "enabled": true,
+      "serverDomain": "sip.example.test",
+      "ttlSeconds": 2400,
+      "priority": 20,
+      "service": "_sip",
+      "protocol": "_tcp",
+      "port": 5060,
+      "weight": 5
+    },
+    {
+      "id": "dns-forward",
+      "type": "FORWARD_DOMAIN",
+      "domain": "forward.example.test",
+      "enabled": true,
+      "serverDomain": "resolver.example.test",
+      "ipAddress": "198.51.100.53"
+    }
+  ]
+}

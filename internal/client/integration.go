@@ -88,6 +88,12 @@ func FetchOfficialAll[T any](ctx context.Context, c *Client, path string) ([]T, 
 	}
 }
 
+// FetchOfficialObjects exposes the paginated official collection reader to
+// domain services that normalize API objects into their public DTOs.
+func (c *Client) FetchOfficialObjects(ctx context.Context, path string) ([]map[string]any, error) {
+	return FetchOfficialAll[map[string]any](ctx, c, path)
+}
+
 func officialPagePath(path string, offset int) (string, error) {
 	u, err := url.Parse(path)
 	if err != nil {

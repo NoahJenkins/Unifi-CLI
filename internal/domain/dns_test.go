@@ -96,8 +96,16 @@ func (f *fakeDNSAPI) Do(ctx context.Context, method, path string, in, out any) e
 		}
 	}
 	switch {
-	case method == http.MethodGet && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies"):
+	case method == http.MethodGet && strings.HasSuffix(path, "/dns/policies"):
 		return decodeInto(f.integrationRecords, out)
+	case method == http.MethodGet && strings.Contains(path, "/dns/policies/"):
+		id := path[strings.LastIndex(path, "/")+1:]
+		for _, record := range f.integrationRecords {
+			if strFieldTest(record, "id", "_id") == id {
+				return decodeInto(record, out)
+			}
+		}
+		return apperr.New(apperr.NotFound, "dns policy not found")
 	case method == http.MethodPost && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies"):
 		created := map[string]any{"id": "dns-policy-new"}
 		if body, ok := in.(map[string]any); ok {
@@ -105,16 +113,32 @@ func (f *fakeDNSAPI) Do(ctx context.Context, method, path string, in, out any) e
 				created[k] = v
 			}
 		}
+		f.integrationRecords = append(f.integrationRecords, created)
 		return decodeInto(created, out)
 	case method == http.MethodPut && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies/"):
-		updated := map[string]any{"id": path[strings.LastIndex(path, "/")+1:]}
+		id := path[strings.LastIndex(path, "/")+1:]
+		updated := map[string]any{"id": id}
 		if body, ok := in.(map[string]any); ok {
 			for k, v := range body {
 				updated[k] = v
 			}
 		}
+		for i, record := range f.integrationRecords {
+			if strFieldTest(record, "id", "_id") == id {
+				f.integrationRecords[i] = updated
+				break
+			}
+		}
 		return decodeInto(updated, out)
 	case method == http.MethodDelete && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies/"):
+		id := path[strings.LastIndex(path, "/")+1:]
+		filtered := f.integrationRecords[:0]
+		for _, record := range f.integrationRecords {
+			if strFieldTest(record, "id", "_id") != id {
+				filtered = append(filtered, record)
+			}
+		}
+		f.integrationRecords = filtered
 		return nil
 	case method == http.MethodGet && strings.Contains(path, "rest/networkconf"):
 		return decodeInto(f.networks, out)
@@ -147,6 +171,17 @@ func decodeInto(src any, out any) error {
 		return err
 	}
 	return json.Unmarshal(b, out)
+}
+
+func dnsCallWithMethod(t *testing.T, calls []dnsCall, method string) dnsCall {
+	t.Helper()
+	for _, call := range calls {
+		if call.method == method {
+			return call
+		}
+	}
+	t.Fatalf("calls contain no %s: %+v", method, calls)
+	return dnsCall{}
 }
 
 func TestDNSServiceList(t *testing.T) {
@@ -275,14 +310,11 @@ func TestDNSCreatePlanAndApply(t *testing.T) {
 			t.Fatalf("created: %+v", got)
 		}
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPost {
-		t.Fatalf("method = %q", last.method)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodPost)
+	if mutation.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
+		t.Fatalf("path = %q", mutation.path)
 	}
-	if last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
-		t.Fatalf("path = %q", last.path)
-	}
-	body, _ := last.body.(map[string]any)
+	body, _ := mutation.body.(map[string]any)
 	if body["domain"] != "media.lan" {
 		t.Fatalf("body name field: %+v", body)
 	}
@@ -303,7 +335,7 @@ func TestDNSCreateUsesOfficialDNSPolicyShape(t *testing.T) {
 	if got.ID != "dns-policy-new" || got.Name != in.Name || got.IP != in.IP || got.Enabled || got.TTLSeconds != 300 {
 		t.Fatalf("created = %+v", got)
 	}
-	if len(api.calls) != 1 {
+	if len(api.calls) != 2 || api.calls[1].method != http.MethodGet {
 		t.Fatalf("calls = %+v", api.calls)
 	}
 	call := api.calls[0]
@@ -355,12 +387,9 @@ func TestDNSUpdatePlanAndApply(t *testing.T) {
 	if got.ID != "dns1" {
 		t.Fatalf("updated: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("method = %q", last.method)
-	}
-	if last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns1" {
-		t.Fatalf("path = %q", last.path)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodPut)
+	if mutation.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns1" {
+		t.Fatalf("path = %q", mutation.path)
 	}
 }
 
@@ -383,13 +412,13 @@ func TestDNSUpdateUsesOfficialDNSPolicyShape(t *testing.T) {
 	if got.ID != "dns-policy-1" || got.Name != "service.example.test" || got.IP != "192.0.2.21" || got.Enabled {
 		t.Fatalf("updated = %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut || last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns-policy-1" {
-		t.Fatalf("last call = %+v", last)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodPut)
+	if mutation.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns-policy-1" {
+		t.Fatalf("mutation call = %+v", mutation)
 	}
-	body, ok := last.body.(map[string]any)
+	body, ok := mutation.body.(map[string]any)
 	if !ok {
-		t.Fatalf("body type = %T", last.body)
+		t.Fatalf("body type = %T", mutation.body)
 	}
 	want := map[string]any{
 		"type":        "A_RECORD",
@@ -426,12 +455,9 @@ func TestDNSDeletePlanAndApply(t *testing.T) {
 	if got.ID != "dns1" {
 		t.Fatalf("deleted: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodDelete {
-		t.Fatalf("method = %q", last.method)
-	}
-	if last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns1" {
-		t.Fatalf("path = %q", last.path)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodDelete)
+	if mutation.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns1" {
+		t.Fatalf("path = %q", mutation.path)
 	}
 }
 
@@ -454,9 +480,9 @@ func TestDNSDeleteUsesOfficialDNSPolicyPath(t *testing.T) {
 	if got.ID != "dns-policy-1" || got.Name != "service.example.test" {
 		t.Fatalf("deleted = %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodDelete || last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns-policy-1" {
-		t.Fatalf("last call = %+v", last)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodDelete)
+	if mutation.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns-policy-1" {
+		t.Fatalf("mutation call = %+v", mutation)
 	}
 }
 

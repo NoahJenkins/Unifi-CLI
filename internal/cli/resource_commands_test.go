@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,22 +16,25 @@ const commandTestAPIKey = "command-test-api-key-not-for-output"
 
 func newCommandTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	dnsPolicies := []map[string]any{{
+		"id": "dns-1", "type": "A_RECORD", "domain": "router.example.test",
+		"ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": float64(300),
+	}}
 	responses := map[string]string{
-		"/proxy/network/api/self/sites":                              `[{"_id":"site-1","name":"default","desc":"Primary","role":"admin"}]`,
-		"/proxy/network/integration/v1/sites":                        `[{"id":"site-uuid","internalReference":"default","name":"Default"}]`,
-		"/proxy/network/integration/v1/sites/site-uuid/dns/policies": `[{"id":"dns-1","type":"A_RECORD","domain":"router.example.test","ipv4Address":"192.0.2.1","enabled":true,"ttlSeconds":300,"metadata":{"origin":"USER"}}]`,
-		"/proxy/network/api/s/default/stat/device":                   `[{"_id":"dev-1","mac":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","type":"ugw","state":1,"adopted":true,"ip":"192.0.2.1","version":"1.0","port_table":[{"port_idx":1,"name":"LAN 1","media":"GE","speed":1000,"poe_mode":"off","enable":true,"portconf_id":"profile-1"}]}]`,
-		"/proxy/network/api/s/default/rest/device/dev-1":             `[{"_id":"dev-1","name":"Gateway","port_overrides":[]}]`,
-		"/proxy/network/api/s/default/stat/sta":                      `[{"_id":"client-1","mac":"aa:bb:cc:dd:ee:02","hostname":"Laptop","name":"Laptop","ip":"192.0.2.2","essid":"Main","network":"LAN","is_wired":false,"blocked":false,"last_seen":"now"}]`,
-		"/proxy/network/api/s/default/rest/networkconf":              `[{"_id":"network-1","name":"LAN","purpose":"corporate","vlan":10,"ip_subnet":"192.0.2.1/24","dhcpd_enabled":true}]`,
-		"/proxy/network/api/s/default/rest/wlanconf":                 `[{"_id":"wlan-1","name":"Main","enabled":true,"security":"wpapsk","networkconf_id":"network-1","wlan_band":"both","is_guest":false}]`,
-		"/proxy/network/api/s/default/rest/firewallrule":             `[{"_id":"rule-1","name":"Allow DNS","enabled":true,"action":"accept","ruleset":"LAN_IN","src_firewallgroup_ids":[],"dst_firewallgroup_ids":[],"protocol":"udp","rule_index":1}]`,
-		"/proxy/network/api/s/default/stat/health":                   `[{"subsystem":"www","status":"ok"}]`,
-		"/proxy/network/api/s/default/cmd/devmgr":                    `[]`,
-		"/proxy/network/api/s/default/cmd/stamgr":                    `[]`,
-		"/proxy/network/api/s/default/rest/networkconf/network-1":    `[]`,
-		"/proxy/network/api/s/default/rest/wlanconf/wlan-1":          `[]`,
-		"/proxy/network/api/s/default/rest/firewallrule/rule-1":      `[]`,
+		"/proxy/network/api/self/sites":                           `[{"_id":"site-1","name":"default","desc":"Primary","role":"admin"}]`,
+		"/proxy/network/integration/v1/sites":                     `[{"id":"site-uuid","internalReference":"default","name":"Default"}]`,
+		"/proxy/network/api/s/default/stat/device":                `[{"_id":"dev-1","mac":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","type":"ugw","state":1,"adopted":true,"ip":"192.0.2.1","version":"1.0","port_table":[{"port_idx":1,"name":"LAN 1","media":"GE","speed":1000,"poe_mode":"off","enable":true,"portconf_id":"profile-1"}]}]`,
+		"/proxy/network/api/s/default/rest/device/dev-1":          `[{"_id":"dev-1","name":"Gateway","port_overrides":[]}]`,
+		"/proxy/network/api/s/default/stat/sta":                   `[{"_id":"client-1","mac":"aa:bb:cc:dd:ee:02","hostname":"Laptop","name":"Laptop","ip":"192.0.2.2","essid":"Main","network":"LAN","is_wired":false,"blocked":false,"last_seen":"now"}]`,
+		"/proxy/network/api/s/default/rest/networkconf":           `[{"_id":"network-1","name":"LAN","purpose":"corporate","vlan":10,"ip_subnet":"192.0.2.1/24","dhcpd_enabled":true}]`,
+		"/proxy/network/api/s/default/rest/wlanconf":              `[{"_id":"wlan-1","name":"Main","enabled":true,"security":"wpapsk","networkconf_id":"network-1","wlan_band":"both","is_guest":false}]`,
+		"/proxy/network/api/s/default/rest/firewallrule":          `[{"_id":"rule-1","name":"Allow DNS","enabled":true,"action":"accept","ruleset":"LAN_IN","src_firewallgroup_ids":[],"dst_firewallgroup_ids":[],"protocol":"udp","rule_index":1}]`,
+		"/proxy/network/api/s/default/stat/health":                `[{"subsystem":"www","status":"ok"}]`,
+		"/proxy/network/api/s/default/cmd/devmgr":                 `[]`,
+		"/proxy/network/api/s/default/cmd/stamgr":                 `[]`,
+		"/proxy/network/api/s/default/rest/networkconf/network-1": `[]`,
+		"/proxy/network/api/s/default/rest/wlanconf/wlan-1":       `[]`,
+		"/proxy/network/api/s/default/rest/firewallrule/rule-1":   `[]`,
 	}
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-API-KEY"); got != commandTestAPIKey {
@@ -38,9 +42,61 @@ func newCommandTestServer(t *testing.T) *httptest.Server {
 			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
+		const dnsPath = "/proxy/network/integration/v1/sites/site-uuid/dns/policies"
+		if r.Method == http.MethodGet && r.URL.Path == dnsPath {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"data":{"id":"dns-new","type":"A_RECORD","domain":"service.example.test","ipv4Address":"192.0.2.20","enabled":true,"ttlSeconds":300,"metadata":{"origin":"USER"}}}`)
+			body, _ := json.Marshal(dnsPolicies)
+			_, _ = io.WriteString(w, `{"offset":0,"limit":100,"count":`+strconv.Itoa(len(dnsPolicies))+`,"totalCount":`+strconv.Itoa(len(dnsPolicies))+`,"data":`+string(body)+`}`)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, dnsPath+"/") {
+			id := strings.TrimPrefix(r.URL.Path, dnsPath+"/")
+			switch r.Method {
+			case http.MethodGet:
+				for _, policy := range dnsPolicies {
+					if policy["id"] == id {
+						_ = json.NewEncoder(w).Encode(policy)
+						return
+					}
+				}
+				http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
+				return
+			case http.MethodPut:
+				var policy map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+					http.Error(w, `{"message":"bad request"}`, http.StatusBadRequest)
+					return
+				}
+				policy["id"] = id
+				for i := range dnsPolicies {
+					if dnsPolicies[i]["id"] == id {
+						dnsPolicies[i] = policy
+					}
+				}
+				_ = json.NewEncoder(w).Encode(policy)
+				return
+			case http.MethodDelete:
+				filtered := dnsPolicies[:0]
+				for _, policy := range dnsPolicies {
+					if policy["id"] != id {
+						filtered = append(filtered, policy)
+					}
+				}
+				dnsPolicies = filtered
+				_, _ = io.WriteString(w, `{}`)
+				return
+			}
+		}
+		if r.Method == http.MethodPost && r.URL.Path == dnsPath {
+			var policy map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+				http.Error(w, `{"message":"bad request"}`, http.StatusBadRequest)
+				return
+			}
+			policy["id"] = "dns-new"
+			dnsPolicies = append(dnsPolicies, policy)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(policy)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/proxy/network/integration/v1/sites" {
@@ -57,6 +113,32 @@ func newCommandTestServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"data":`+data+`}`)
 	}))
+}
+
+func TestDNSMutationRiskWiring(t *testing.T) {
+	t.Run("update is routine", func(t *testing.T) {
+		srv := newCommandTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes = true
+		_, _, err := captureProcessOutput(t, func() error {
+			return runDNSUpdate("dns-1", domain.DNSInput{IP: "192.0.2.2", SetIP: true})
+		})
+		if err != nil {
+			t.Fatalf("routine update was blocked without --force: %v", err)
+		}
+	})
+
+	t.Run("delete is destructive", func(t *testing.T) {
+		srv := newCommandTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes = true
+		stdout, _, err := captureProcessOutput(t, func() error { return runDNSDelete("dns-1") })
+		if err == nil || !strings.Contains(stdout, "safe_mode_blocked") {
+			t.Fatalf("delete without --force: err=%v stdout=%q, want safe_mode_blocked", err, stdout)
+		}
+	})
 }
 
 func useCommandTestRuntime(t *testing.T, srv *httptest.Server, jsonOutput bool) {
