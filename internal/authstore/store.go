@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/noahjenkins/unifi-cli/internal/privatefile"
 	"github.com/zalando/go-keyring"
 )
 
@@ -84,10 +85,12 @@ type Store interface {
 // KeyringStore implements Store using the native keyring and an opt-in
 // protected-file fallback.
 type KeyringStore struct {
-	keyring   Keyring
-	stateHome string
-	homeDir   string
-	goos      string
+	keyring     Keyring
+	stateHome   string
+	homeDir     string
+	goos        string
+	ensureDir   func(string) error
+	protectFile func(string) error
 }
 
 type apiKeyRecord struct {
@@ -110,10 +113,12 @@ func NewStore(options Options) *KeyringStore {
 		home, _ = os.UserHomeDir()
 	}
 	return &KeyringStore{
-		keyring:   kr,
-		stateHome: options.StateHome,
-		homeDir:   home,
-		goos:      goos,
+		keyring:     kr,
+		stateHome:   options.StateHome,
+		homeDir:     home,
+		goos:        goos,
+		ensureDir:   privatefile.EnsureDir,
+		protectFile: privatefile.ProtectFile,
 	}
 }
 
@@ -210,7 +215,19 @@ func (s *KeyringStore) Delete(controller string) error {
 }
 
 func (s *KeyringStore) readFallback(controller string) (string, bool, error) {
-	encoded, err := os.ReadFile(s.fallbackPath(controller))
+	path := s.fallbackPath(controller)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	} else if err != nil {
+		return "", false, fmt.Errorf("stat fallback API key: %w", err)
+	}
+	if err := s.ensureDir(filepath.Dir(path)); err != nil {
+		return "", false, fmt.Errorf("protect fallback API-key directory: %w", err)
+	}
+	if err := s.protectFile(path); err != nil {
+		return "", false, fmt.Errorf("protect fallback API-key file: %w", err)
+	}
+	encoded, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
 	}
@@ -222,10 +239,7 @@ func (s *KeyringStore) readFallback(controller string) (string, bool, error) {
 
 func (s *KeyringStore) writeFallback(record apiKeyRecord) error {
 	directory := s.fallbackDir()
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create fallback API-key directory: %w", err)
-	}
-	if err := os.Chmod(directory, 0o700); err != nil {
+	if err := s.ensureDir(directory); err != nil {
 		return fmt.Errorf("protect fallback API-key directory: %w", err)
 	}
 	encoded, err := json.Marshal(record)
@@ -238,7 +252,7 @@ func (s *KeyringStore) writeFallback(record apiKeyRecord) error {
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
+	if err := s.protectFile(temporaryPath); err != nil {
 		temporary.Close()
 		return fmt.Errorf("protect fallback API-key file: %w", err)
 	}

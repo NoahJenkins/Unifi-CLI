@@ -5,13 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/livetest"
+	"github.com/noahjenkins/unifi-cli/internal/privatefile/privatefiletest"
 )
 
 type fakeResponse struct {
@@ -237,15 +237,8 @@ func TestWriteReportRedactsUntrustedSummaryAndUsesPrivatePermissions(t *testing.
 	if strings.Contains(string(data), "api_key") || strings.Contains(string(data), "s3cret") {
 		t.Fatalf("report leaked protected content: %s", data)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" {
-		if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
-			t.Fatalf("file mode = %o, want %o", got, want)
-		}
-	}
+	privatefiletest.AssertDir(t, dir)
+	privatefiletest.AssertFile(t, path)
 	if filepath.Dir(path) != dir {
 		t.Fatalf("report dir = %q, want %q", filepath.Dir(path), dir)
 	}
