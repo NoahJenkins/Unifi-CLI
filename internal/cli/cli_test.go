@@ -48,6 +48,23 @@ func TestRootHelpShowsPublicCommandsOnly(t *testing.T) {
 	}
 }
 
+func TestRootHelpShowsExactUnofficialProjectDisclaimer(t *testing.T) {
+	const disclaimer = "**Unofficial project.** unifi-cli is an independent community tool and is not affiliated with, endorsed by, or sponsored by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc."
+
+	root := cli.NewRoot()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	out := buf.String()
+	if strings.Count(out, disclaimer) != 1 {
+		t.Fatalf("root help must contain the exact disclaimer once:\n%s", out)
+	}
+}
+
 func TestRootFlagsRemoveRawAndExposeExperimental(t *testing.T) {
 	root := cli.NewRoot()
 	if root.PersistentFlags().Lookup("raw") != nil {

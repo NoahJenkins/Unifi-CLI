@@ -1,264 +1,318 @@
 # unifi-cli
 
-Manage a **local** UniFi Network controller (Cloud Gateway, Express APs, switches) from the terminal. Built for humans and agents: tables by default, stable JSON envelopes with `--json`, and mutations that never apply without `--yes`.
+> **Unofficial project.** unifi-cli is an independent community tool and is not affiliated with, endorsed by, or sponsored by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc.
 
-> **Local controller only.** This CLI talks to your on-network UniFi Network Application / Cloud Gateway API. It does **not** use UniFi Site Manager or cloud APIs.
+Neither the author nor users of this project own the UniFi brand; Ubiquiti Inc. owns it.
 
-This project is pre-1.0 and has no tagged release yet. Controller endpoints vary by UniFi Network version, so test plans before applying changes and report firmware-specific incompatibilities with the controller model and Network version.
+Manage a **local** UniFi Network controller from the terminal. The
+`v1.0.0-rc.1` release candidate uses the official local Network integration API
+for its stable surface, emits a versioned JSON contract for automation, and
+plans every mutation before it can apply.
 
-## Install
+> **Local controller only.** This CLI talks directly to the on-network UniFi
+> Network Application or Cloud Gateway. It does not use UniFi Site Manager,
+> UniFi cloud APIs, or the remote Connector examples shown in the upstream API
+> reference.
+
+The compatibility target is UniFi Network **10.3.58 and newer**. The current
+implementation is schema- and fixture-validated against the official 10.3.58
+API. Fresh live proof for this RC, including 10.4.57, is a release gate and has
+not yet been completed. See [Compatibility](docs/compatibility.md) for the
+exact status.
+
+## Install `v1.0.0-rc.1`
+
+After the RC tag is published:
 
 ```bash
-# build from source
-go build -o unifi ./cmd/unifi
-
-# or install into GOPATH/bin
-go install github.com/noahjenkins/unifi-cli/cmd/unifi@latest
+go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.1
+unifi --version
+unifi version --json
 ```
 
-Requires Go 1.26.5.
+Release archives will also be attached to the GitHub release during the Task 9
+delivery workflow. Until then, build the reviewed source checkout with the Go
+version declared in `go.mod`:
 
-## Configuration
+```bash
+go build -o dist/unifi ./cmd/unifi
+./dist/unifi --help
+./dist/unifi version
+```
 
-Default config path: `~/.config/unifi-cli/config.yaml`  
-Overrides: `--config`, `UNIFI_CONFIG`
+Do not treat a locally built `dev` version as the published RC. Release builds
+populate the version, commit, and build date through linker metadata.
 
-Copy the example:
+## Quick start
+
+Copy and edit the non-secret controller configuration:
 
 ```bash
 mkdir -p ~/.config/unifi-cli
 cp configs/config.example.yaml ~/.config/unifi-cli/config.yaml
-# edit the controller connection settings
+$EDITOR ~/.config/unifi-cli/config.yaml
 ```
 
-Example (`configs/config.example.yaml`):
-
 ```yaml
-host: 192.168.1.1
+host: controller.lan
 port: 443
-insecure: false         # verify the controller certificate by default
+# ca_cert: /path/to/controller-ca.pem
+insecure: false
 site: default
 safe_mode: true
 timeout: 30s
 ```
 
-### Environment variables
-
-| Variable | Purpose |
-|----------|---------|
-| `UNIFI_HOST` | Controller host |
-| `UNIFI_PORT` | Port (default 443) |
-| `UNIFI_SITE` | Site name/id |
-| `UNIFI_API_KEY` | Process-only API-key override for CI and scripts |
-| `UNIFI_INSECURE` | Skip TLS verification (`true`/`false`) |
-| `UNIFI_SAFE_MODE` | Extra guards on destructive ops |
-| `UNIFI_CONFIG` | Config file path |
-| `UNIFI_TIMEOUT` | Request timeout (e.g. `30s`) |
-
-Boolean environment values are parsed strictly. Invalid values fail configuration loading instead of silently changing a safety setting.
-
-### TLS verification
-
-Keep `insecure: false` whenever the controller certificate is trusted by the operating system. If a local gateway only presents a self-signed certificate, `insecure: true` is an explicit compatibility fallback for a trusted LAN: it encrypts traffic but does not authenticate the controller, so an active network attacker could impersonate it and capture the API key. Do not use TLS bypass across an untrusted network.
-
-The YAML config contains controller connection settings only. To authenticate
-interactively, run `unifi login`; it asks for an API key through a hidden
-prompt, validates it with the controller, and saves it for later CLI runs.
-`UNIFI_API_KEY` overrides that saved key for the current process, making it
-appropriate for CI and scripts without writing the key locally.
+Then save an API key and verify read access:
 
 ```bash
 unifi login
 unifi auth status --json
-unifi logout
-unifi config show          # effective non-secret controller configuration
-unifi config path          # print default config path
+unifi site list
+unifi system health --json
 ```
 
-### Saved API keys
-
-After a successful login, the CLI saves the API key in the operating system's
-native credential store, so it remains available after restarting the CLI:
+`unifi login` reads the key from a hidden prompt, validates it with the
+controller, and saves it in the native credential store:
 
 - macOS: Keychain
 - Windows: Credential Manager
-- Linux: Secret Service
+- Linux: Secret Service, such as GNOME Keyring or KWallet
 
-Linux requires an available Secret Service provider, such as GNOME Keyring or
-KWallet. On a headless Linux machine without one, explicitly opt in to the
-protected local-state fallback:
+On headless Linux without Secret Service, `unifi login --file-fallback`
+explicitly opts in to a protected local-state file. The fallback is never
+automatic. `UNIFI_API_KEY` is a process-only override for CI or scripts and is
+not persisted. `unifi logout` removes only the saved local key for the selected
+controller; it does not call a remote logout endpoint.
+
+API keys never belong in YAML, command arguments, logs, reports, or issue
+attachments.
+
+## Controller configuration
+
+The default path is `~/.config/unifi-cli/config.yaml`; override it with
+`--config` or `UNIFI_CONFIG`.
+
+| YAML | Environment | Contract |
+|---|---|---|
+| `host` | `UNIFI_HOST` | Required bare hostname, IPv4, or IPv6 address; no scheme, path, query, userinfo, brackets, whitespace, or embedded port |
+| `port` | `UNIFI_PORT` | Integer `1..65535`; default `443` |
+| `ca_cert` | `UNIFI_CA_CERT` | PEM file appended to system roots for verified private-CA TLS |
+| `insecure` | `UNIFI_INSECURE` | Explicit boolean TLS-verification bypass; default `false` |
+| `site` | `UNIFI_SITE` | Exact site UUID, exact `internalReference`, or exact display name |
+| `safe_mode` | `UNIFI_SAFE_MODE` | Requires `--force` for high-impact and destructive applies; default `true` |
+| `timeout` | `UNIFI_TIMEOUT` | Positive Go duration such as `30s` |
+
+`--site` and `--timeout` override the loaded values for one invocation.
+Boolean environment values are parsed strictly.
+
+### TLS
+
+TLS certificate verification is enabled by default. Prefer `ca_cert` or
+`UNIFI_CA_CERT` for a controller signed by a private CA. `ca_cert` and
+`insecure: true` conflict and fail configuration loading; the same applies to
+`UNIFI_CA_CERT` with `UNIFI_INSECURE=true`.
+
+`insecure: true` is a last-resort trusted-LAN compatibility option. Traffic is
+encrypted but the controller is not authenticated, so an active network
+attacker can impersonate it and capture the API key. The client also rejects
+all HTTP redirects so credentials and mutation bodies cannot be forwarded to a
+different origin.
+
+### Site resolution
+
+The configured site selector must exactly match a site UUID,
+`internalReference`, or display name. Distinct matching UUIDs fail with
+`ambiguous_id`; there is no fuzzy match. The resolved UUID is cached for the
+remainder of that CLI invocation and is used in official API paths.
+
+## Commands and support status
+
+All controller inventory and health reads below use the official local
+`/proxy/network/integration/v1` API.
+“Experimental” means a plan can be inspected normally, but applying it also
+requires `--experimental`.
+
+| Surface | Status | Commands |
+|---|---|---|
+| Local auth/config/version | Local | `login`, `logout`, `auth status`, `config path`, `config show`, `version` |
+| Inventory and health reads | Stable official | `site`, `device`, `client`, `network`, `wlan`, `port`, `firewall`, `firewall zone`, `dns`, `dns resolvers`, and `system health` list/get operations as exposed by help |
+| Local DNS A-record writes | Stable official | `dns create`, `dns update`, `dns delete` |
+| Network and WiFi writes | Experimental official | Network CRUD; WLAN CRUD, enable, and disable |
+| Device lifecycle writes | Experimental official | `device restart`, `device adopt`, `device forget` |
+| Firewall policy writes | Experimental official | Policy create, update, delete, and atomic reorder |
+| Legacy device/client/port/resolver writes | Experimental legacy | Device rename/locate/upgrade; client reconnect/block/unblock; port update; resolver set |
+
+The legacy-experimental rows are deliberately isolated compatibility paths;
+they are not described as stable official API support. There are no stable
+non-DNS mutations in this RC.
+
+## Mutation safety
+
+Every mutation first resolves its target, validates input, and emits a plan.
+It applies only when `--yes` is present. `--dry-run` always wins over `--yes`.
+Experimental plans do not need opt-in, but experimental applies require both
+`--experimental` and `--yes`. With `safe_mode: true`, high-impact and
+destructive applies also require `--force`. `--force` never implies `--yes` or
+`--experimental`.
+
+Targeted operations bind the plan to an immutable ID and observed snapshot,
+revalidate immediately before one apply attempt, and fail on drift. Verified
+operations re-read controller state afterward; they do not retry an ambiguous
+write.
+
+### Exact risk and support classification
+
+| Risk | Support/API | Commands | Apply flags with default `safe_mode` |
+|---|---|---|---|
+| `routine` | Stable official | `dns create`, `dns update` | `--yes` |
+| `routine` | Experimental official | `device adopt`; `network create`; `wlan create/update/enable/disable` | `--experimental --yes` |
+| `routine` | Experimental legacy | `device rename/locate`; `client reconnect/block/unblock` | `--experimental --yes` |
+| `high_impact` | Experimental official | `device restart`; `network update`; `firewall create/update/reorder` | `--experimental --force --yes` |
+| `high_impact` | Experimental legacy | `device upgrade`; `port update`; `dns resolvers set` | `--experimental --force --yes` |
+| `destructive` | Stable official | `dns delete` | `--force --yes` |
+| `destructive` | Experimental official | `device forget`; `network delete`; `wlan delete`; `firewall delete` | `--experimental --force --yes` |
+
+If `safe_mode` is explicitly disabled, `--force` is not required; all other
+gates remain. Successful applies emit `audit: applied <resource> <action>` on
+stderr unless `--quiet` is set.
 
 ```bash
-unifi login --file-fallback
+# Plan only: no write
+unifi network update LAN --name Users
+
+# Experimental high-impact apply
+unifi network update LAN --name Users --experimental --force --yes
+
+# Explicit dry-run still wins
+unifi network update LAN --name Users --experimental --force --yes --dry-run
 ```
 
-The fallback is never enabled implicitly and writes protected local API-key
-state only. `unifi logout` removes the locally saved key for the configured
-controller; it does not make a remote logout request. Saved keys are scoped to
-one controller and are not transferable between machines. If the controller
-returns `401`, run `unifi login` again with a valid API key.
+## Resource contracts and limits
 
-## Global flags
+### DNS
 
-| Flag | Description |
-|------|-------------|
-| `--json` | Machine-readable envelope on stdout |
-| `--site` | Override configured site |
-| `--dry-run` | Plan only; never apply (wins over `--yes`) |
-| `--yes` | Apply mutation |
-| `--force` | Override `safe_mode` blocks (still needs `--yes`) |
-| `--timeout` | Per-command timeout |
-| `--config` | Config path |
-| `--quiet` | Suppress audit stderr |
-| `--raw` | Include upstream UniFi payload under `raw` in JSON |
+Reads normalize official A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain
+policies. Stable writes are intentionally limited to **A records only** and
+validate the DNS name, IPv4 address, and positive TTL locally. Updating or
+deleting any other policy type fails before a write. Create/update re-read by
+ID; delete verifies both ID absence and exact-domain absence.
 
-Identifiers resolve as: internal id → MAC (normalized) → exact name. Ambiguous matches exit with `ambiguous_id`.
+### Networks
 
-## Safety model
+Network writes use the official `--management gateway|switch|unmanaged`
+discriminator. The removed legacy `--purpose` vocabulary (`corporate`,
+`guest`, `wan`) is not accepted for official writes.
 
-1. **Reads** are live and unguarded.
-2. **Writes** always build a change plan first. Nothing is applied unless `--yes` is set **and** `--dry-run` is not set. If both are set, **`--dry-run` wins**.
-3. **`safe_mode`** (default `true`) blocks highest-impact ops unless `--force --yes`:
-   - `device forget`
-   - WAN / destructive network delete
-4. API keys and WLAN passwords are never printed (`auth status`, `config show`, and plans mask WLAN secrets).
-5. Human-readable output escapes terminal control characters returned by the controller. JSON output preserves source data for machine consumers.
-6. Successful applies emit an audit line on stderr (unless `--quiet`).
+Creation fails closed when the CLI cannot construct the required official
+document:
 
-WLAN passwords never belong in command arguments. Use `--password` as a boolean
-flag to open a hidden terminal prompt, or pipe exactly one non-empty line to
-`--password-stdin` for automation. The two flags are mutually exclusive, stdin
-input is bounded to 4 KiB, and neither source is written to plans or output.
+- every create needs an explicit VLAN ID in `1..4009`;
+- `unmanaged` rejects subnet and DHCP/domain fields;
+- `switch` creation is rejected because the command does not expose the
+  required device ID;
+- `gateway` requires an IPv4 subnet with prefix `8..30` and rejects DHCP/domain
+  creation because the CLI cannot safely infer the required range, lease, and
+  conflict-detection fields;
+- updates cannot transition between management variants because the CLI cannot
+  construct every required target-mode field.
 
-```bash
-# hidden interactive prompt
-unifi wlan create --name Main --security wpapsk --network LAN --password
+### WiFi
 
-# automation (the secret is read from stdin, not argv)
-printf '%s\n' "$WLAN_PASSWORD" | \
-  unifi wlan update Main --security wpapsk --password-stdin --yes
-```
+Official create supports OPEN and WPA2 Personal (`wpapsk`/`wpa2_personal`)
+STANDARD broadcasts. Personal passphrases must be 8–63 characters and enter
+through the hidden `--password` prompt or bounded `--password-stdin`, never as
+an argument value. WPA3 Personal and mixed WPA2/WPA3 creation are rejected
+because required SAE/PMF/fast-roaming inputs are not exposed. Enterprise modes
+are rejected because RADIUS inputs are not exposed. Existing complete WPA3 or
+mixed documents can be preserved during unrelated full-document updates.
 
-Secured WLAN creation requires one of these password sources. Changing an open
-WLAN to a secured mode also requires a source; other updates preserve the
-existing password when neither flag is supplied. Because this project is
-pre-1.0, the former string form `--password value` is intentionally unsupported
-and must be migrated to one of the safe forms above.
+### Firewall
 
-```bash
-# plan only (default for mutations)
-unifi device rename office-ap --name office-ap-2
+Firewall reads and writes use modern official zones and policies; classic
+rulesets are not supported. Resolve zones with `firewall zone list/get`, then
+use `--source-zone` and `--destination-zone` for policies.
 
-# apply
-unifi device rename office-ap --name office-ap-2 --yes
+`firewall reorder` requires one source/destination zone pair plus the **complete**
+user-defined order split between `--before-system-ids` and
+`--after-system-ids`. It rejects duplicates, omissions, no-ops, and system
+policy injection, sends one atomic official ordering request, and verifies the
+complete final order. It never falls back to per-rule updates.
 
-# dry-run always wins
-unifi device rename office-ap --name office-ap-2 --yes --dry-run
+### Action acceptance
 
-# destructive under safe_mode
-unifi device forget <id> --force --yes
-```
+`device restart/adopt/forget/locate/upgrade` and `client reconnect` return
+`data: {"accepted": true}`. This does not claim that an asynchronous action
+such as restart, locate, upgrade, or reconnect has completed. Adoption first
+validates the returned ID and MAC; forget reports acceptance only after the
+device is absent. Observable rename, block/unblock, port, resolver, and CRUD
+mutations return verified observed state instead.
 
-## Command index
+### Bounded detail reads
 
-| Resource | Commands |
-|----------|----------|
-| `auth` | `status` |
-| `login` | Validate and save an API key |
-| `logout` | Remove the saved API key for the configured controller |
-| `config` | `path`, `show` |
-| `site` | `list`, `get` |
-| `device` | `list`, `get`, `rename`, `restart`, `locate`, `upgrade`, `adopt`, `forget` |
-| `client` | `list`, `get`, `reconnect`, `block`, `unblock` |
-| `network` | `list`, `get`, `create`, `update`, `delete` |
-| `wlan` | `list`, `get`, `create`, `update`, `delete`, `enable`, `disable` |
-| `port` | `list`, `get`, `update` |
-| `firewall` | `list`, `get`, `create`, `update`, `delete`, `reorder` |
-| `dns` | `list`, `get`, `create`, `update`, `delete` |
-| `dns resolvers` | `list`, `set` |
-| `system` | `health` |
+Unfiltered `port list` and `dns resolvers list` use official overview results
+and at most four concurrent official detail requests. Results remain
+deterministic. If any required detail request fails, the whole command fails
+rather than returning partial data. `port list --device <id|mac|exact-name>`
+and `port get` resolve one device and make one detail request.
 
-## Agent usage examples
+## JSON and version contract
 
-```bash
-# Inventory
-unifi device list --json
-unifi client list --json
-unifi system health --json
-
-# Wireless
-unifi wlan list --json
-unifi wlan disable Guest --yes --json
-
-# DNS
-unifi dns list --json
-unifi dns create --name nas.lan --ip 192.168.1.50 --yes --json
-unifi dns resolvers list --json
-
-# Switching
-unifi port list --device office-sw --json
-unifi port update office-sw 12 --poe off --yes --json
-
-# Firewall (always plan first)
-unifi firewall list --json
-unifi firewall delete <id>          # prints plan, no apply
-unifi firewall delete <id> --yes    # applies
-```
-
-JSON success envelope shape:
+`--json` emits schema version `"1"`:
 
 ```json
 {
+  "schema_version": "1",
   "ok": true,
-  "data": {},
-  "meta": { "site": "default", "dry_run": false },
-  "plan": null,
-  "error": null
+  "resource": "device",
+  "action": "list",
+  "data": [],
+  "meta": {
+    "site": "default",
+    "count": 0,
+    "dry_run": false
+  }
 }
 ```
 
-## Development
+Top-level `schema_version`, `ok`, `resource`, `action`, `data`, and `meta` are
+always present. `data` remains present on failures (as `null`). `error` is
+present only for failures and `plan` only for plan output. List responses may
+include `meta.count`. The v1 surface has no `--raw` flag and never embeds
+upstream controller payloads.
+
+Version interfaces are:
 
 ```bash
-go build -o dist/unifi ./cmd/unifi
-test -z "$(gofmt -l $(git ls-files '*.go'))"
-go vet ./...
-go test ./...
+unifi --version
+unifi version
+unifi version --json
+```
+
+`version --json` uses the same envelope and returns exactly `version`,
+`commit`, `build_date`, and `go_version` in `data`.
+
+## Development and verification
+
+```bash
+./scripts/smoke.sh
 go test -race ./...
 ./scripts/check-coverage.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-
-# optional live smoke against a real controller
-export UNIFI_HOST=... UNIFI_API_KEY=... UNIFI_INSECURE=true
-UNIFI_IT=1 ./scripts/smoke.sh
 ```
 
-Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary, verifies formatting,
-runs `go vet`, and runs unit tests. `scripts/check-coverage.sh` separately
-enforces at least 50% statement coverage for `internal/cli`; CI runs that gate
-inside the Ubuntu matrix job.
+The default smoke run builds, checks formatting, vets, and runs all unit tests;
+it does not contact a controller. The authenticated live suite is opt-in with
+`UNIFI_IT=1` and is read-only. Non-DNS live mutations require a dedicated
+sacrificial controller and are never run against a production-like network.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[RC release checklist](docs/maintainers/release-checklist.md).
 
-With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
-checks auth status, local configuration, every implemented list command,
-system health, and a derived `get` for each populated resource
-list. Empty firewall-rule and local-DNS lists are reported as `not_configured`
-rather than failures. It never calls `login`, a mutation command, or an
-apply/raw flag.
+## Security and release information
 
-Each live run writes a private, collision-resistant redacted report to
-`dist/test-reports/`. Reports contain only command names, statuses, durations,
-fixed safe summaries, and a numeric exit code when a command process fails.
-They do not contain stdout, stderr, process errors, controller payloads,
-identifiers, arguments, or credentials.
-
-Local DNS commands use the official Network DNS Policies API available in
-recent UniFi Network releases. Network 10.4.57 is verified. Events and alerts
-are not exposed as CLI commands because that Network release provides neither
-an official API-key endpoint nor a working legacy endpoint for them.
-
-## Security and contributions
-
-Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Development setup, testing expectations, and pull-request guidance are in [CONTRIBUTING.md](CONTRIBUTING.md). Historical design and implementation records under `docs/superpowers/` are indexed in [docs/README.md](docs/README.md) and are not the current user documentation.
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+See [CHANGELOG.md](CHANGELOG.md), [Compatibility](docs/compatibility.md), and
+the [`v1.0.0-rc.1` release notes](docs/releases/v1.0.0-rc.1.md).
 
 ## License
 

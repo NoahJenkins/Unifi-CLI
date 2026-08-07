@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const unofficialProjectDisclaimer = "**Unofficial project.** unifi-cli is an independent community tool and is not affiliated with, endorsed by, or sponsored by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc."
+
 var (
 	flagConfig       string
 	flagJSON         bool
@@ -24,6 +26,7 @@ func NewRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "unifi",
 		Short:         "Manage a UniFi network via the local controller API",
+		Long:          "Manage a UniFi network via the local controller API.\n\n" + unofficialProjectDisclaimer,
 		Version:       buildinfo.Version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
