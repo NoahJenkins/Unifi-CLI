@@ -48,13 +48,11 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 		"/proxy/network/api/s/default/stat/sta":                   `[{"_id":"client-1","mac":"aa:bb:cc:dd:ee:02","hostname":"Laptop","name":"Laptop","ip":"192.0.2.2","essid":"Main","network":"LAN","is_wired":false,"blocked":false,"last_seen":"now"}]`,
 		"/proxy/network/api/s/default/rest/networkconf":           `[{"_id":"network-1","name":"LAN","purpose":"corporate","vlan":10,"ip_subnet":"192.0.2.1/24","dhcpd_enabled":true}]`,
 		"/proxy/network/api/s/default/rest/wlanconf":              `[{"_id":"wlan-1","name":"Main","enabled":true,"security":"wpapsk","networkconf_id":"network-1","wlan_band":"both","is_guest":false}]`,
-		"/proxy/network/api/s/default/rest/firewallrule":          `[{"_id":"rule-1","name":"Allow DNS","enabled":true,"action":"accept","ruleset":"LAN_IN","src_firewallgroup_ids":[],"dst_firewallgroup_ids":[],"protocol":"udp","rule_index":1}]`,
 		"/proxy/network/api/s/default/stat/health":                `[{"subsystem":"www","status":"ok"}]`,
 		"/proxy/network/api/s/default/cmd/devmgr":                 `[]`,
 		"/proxy/network/api/s/default/cmd/stamgr":                 `[]`,
 		"/proxy/network/api/s/default/rest/networkconf/network-1": `[]`,
 		"/proxy/network/api/s/default/rest/wlanconf/wlan-1":       `[]`,
-		"/proxy/network/api/s/default/rest/firewallrule/rule-1":   `[]`,
 	}
 	officialCollections := map[string]string{
 		"/proxy/network/integration/v1/sites":                                                        `[{"id":"11111111-1111-4111-8111-111111111111","internalReference":"default","name":"Default"}]`,
@@ -63,10 +61,12 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks":          `[{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"}}]`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts":   `[{"type":"STANDARD","id":"dddddddd-dddd-4ddd-8ddd-ddddddddddd1","name":"Main","enabled":true,"metadata":{"origin":"USER"},"network":{"type":"SPECIFIC","networkId":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},"securityConfiguration":{"type":"WPA2_PERSONAL"},"broadcastingFrequenciesGHz":[2.4,6]}]`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/policies": `[{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","description":"Permit DNS","enabled":true,"action":{"type":"ALLOW","allowReturnTraffic":false},"source":{"zoneId":"ffffffff-ffff-4fff-8fff-fffffffffff1"},"destination":{"zoneId":"ffffffff-ffff-4fff-8fff-fffffffffff2"},"ipProtocolScope":{"ipVersion":"IPV4","protocolFilter":{"type":"NAMED_PROTOCOL","protocol":{"name":"udp"},"matchOpposite":false}},"loggingEnabled":false,"index":1,"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones":    `[{"id":"ffffffff-ffff-4fff-8fff-fffffffffff2","name":"External","networkIds":[],"metadata":{"origin":"SYSTEM_DEFINED","configurable":false}},{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}]`,
 	}
 	officialDetails := map[string]string{
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1":  `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","configurationId":"config-1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":{"switching":{"lags":[]}},"interfaces":{"ports":[{"idx":1,"connector":"RJ45","maxSpeedMbps":1000,"speedMbps":1000,"state":"UP","poe":{"enabled":false,"standard":"802.3at","state":"DOWN","type":2}}]},"firmwareUpdatable":false,"supported":true}`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc1": `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"},"cellularBackupEnabled":false,"internetAccessEnabled":true,"isolationEnabled":false,"mdnsForwardingEnabled":true,"ipv4Configuration":{"hostIpAddress":"192.0.2.1","prefixLength":24,"autoScaleEnabled":false,"dhcpConfiguration":{"mode":"SERVER","domainName":"example.test","dnsServerIpAddressesOverride":["192.0.2.53"],"ipAddressRange":{"start":"192.0.2.10","stop":"192.0.2.200"},"leaseTimeSeconds":86400,"pingConflictDetectionEnabled":true}}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1":        `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","configurationId":"config-1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":{"switching":{"lags":[]}},"interfaces":{"ports":[{"idx":1,"connector":"RJ45","maxSpeedMbps":1000,"speedMbps":1000,"state":"UP","poe":{"enabled":false,"standard":"802.3at","state":"DOWN","type":2}}]},"firmwareUpdatable":false,"supported":true}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc1":       `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"},"cellularBackupEnabled":false,"internetAccessEnabled":true,"isolationEnabled":false,"mdnsForwardingEnabled":true,"ipv4Configuration":{"hostIpAddress":"192.0.2.1","prefixLength":24,"autoScaleEnabled":false,"dhcpConfiguration":{"mode":"SERVER","domainName":"example.test","dnsServerIpAddressesOverride":["192.0.2.53"],"ipAddressRange":{"start":"192.0.2.10","stop":"192.0.2.200"},"leaseTimeSeconds":86400,"pingConflictDetectionEnabled":true}}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones/ffffffff-ffff-4fff-8fff-fffffffffff1": `{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}`,
 	}
 	for path, body := range opts.officialCollections {
 		officialCollections[path] = body
@@ -322,8 +322,8 @@ func TestOfficialStableReadGoldenOutput(t *testing.T) {
 		},
 		{
 			name: "firewall", run: func() error { return runFirewallGet(commandFirewallID) },
-			humanWant: "id: " + commandFirewallID + "\nname: Allow DNS\nenabled: true\naction: accept\nruleset: \nsrc: \ndst: \nprotocol: ipv4:udp\nindex: 1\n",
-			jsonWant:  `{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","enabled":true,"action":"accept","ruleset":"","src":"","dst":"","protocol":"ipv4:udp","index":1}`,
+			humanWant: "id: " + commandFirewallID + "\nname: Allow DNS\ndescription: Permit DNS\nenabled: true\naction: allow\nsource_zone_id: ffffffff-ffff-4fff-8fff-fffffffffff1\ndestination_zone_id: ffffffff-ffff-4fff-8fff-fffffffffff2\nprotocol: ipv4:udp\nlogging_enabled: false\nindex: 1\norigin: USER\n",
+			jsonWant:  `{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","description":"Permit DNS","enabled":true,"action":"allow","source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:udp","logging_enabled":false,"index":1,"origin":"USER"}`,
 		},
 		{
 			name: "dns", run: func() error { return runDNSGet(commandDNSID) },
@@ -386,7 +386,7 @@ func TestStableReadEmptyOutputExactHumanAndJSONEnvelopes(t *testing.T) {
 		{name: "networks", resource: "network", action: "list", run: runNetworkList, humanWant: "NAME  PURPOSE  VLAN  SUBNET  DHCP  WAN\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}}},
 		{name: "wlans", resource: "wlan", action: "list", run: runWlanList, humanWant: "NAME  ENABLED  SECURITY  NETWORK  BAND  GUEST\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/wifi/broadcasts": `[]`}}},
 		{name: "ports", resource: "port", action: "list", run: func() error { return runPortList("") }, humanWant: "DEVICE  PORT  NAME  MEDIA  SPEED  POE  ENABLED  PROFILE\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`}}},
-		{name: "firewall", resource: "firewall", action: "list", run: runFirewallList, humanWant: "INDEX  NAME  ACTION  RULESET  SRC  DST  PROTO  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/firewall/policies": `[]`}}},
+		{name: "firewall", resource: "firewall", action: "list", run: runFirewallList, humanWant: "INDEX  NAME  ACTION  SOURCE ZONE  DESTINATION ZONE  PROTOCOL  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/firewall/policies": `[]`}}},
 		{name: "dns", resource: "dns", action: "list", run: runDNSList, humanWant: "TYPE  DOMAIN  VALUE  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{dnsPolicies: []map[string]any{}}},
 		{name: "resolvers", resource: "dns", action: "resolvers list", run: runDNSResolversList, humanWant: "NETWORK  DNS  WAN  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}}},
 		{name: "health", resource: "system", action: "health", run: runSystemHealth, humanWant: "status: ok\ndevice_total: 0\ndevice_connected: 0\nclient_total: 0\n", jsonData: `{"status":"ok","device_total":0,"device_connected":0,"client_total":0}`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`, sitePath + "/clients": `[]`}}},
@@ -552,9 +552,6 @@ func TestResourceMutationCommandsRenderPlansAndApply(t *testing.T) {
 		}},
 		{name: "port update", run: func() error {
 			return runPortUpdate("dev-1", 1, domain.PortInput{Name: "Uplink"})
-		}},
-		{name: "firewall create", run: func() error {
-			return runFirewallCreate(domain.FirewallInput{Name: "Allow HTTPS", Action: "accept", Ruleset: "LAN_IN", Protocol: "tcp"})
 		}},
 		{name: "dns create", run: func() error {
 			return runDNSCreate(domain.DNSInput{Name: "service.example.test", IP: "192.0.2.20"})

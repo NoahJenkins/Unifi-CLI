@@ -343,7 +343,7 @@ func TestStableReadServicesUseOfficialNetworkAPI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(items) != 1 || items[0].ID != officialFirewallPolicyID || items[0].Action != "accept" || items[0].Index != 100 {
+		if len(items) != 1 || items[0].ID != officialFirewallPolicyID || items[0].Action != "allow" || items[0].Index != 100 {
 			t.Fatalf("firewall policies = %+v", items)
 		}
 		if items[0].Protocol != "ipv4:udp" {
@@ -673,104 +673,6 @@ func TestOfficialDNSResolverReadIDTranslatesToLegacyMutation(t *testing.T) {
 	}
 }
 
-func TestOfficialFirewallReadIDsTranslateForBothReorderModes(t *testing.T) {
-	ctx := context.Background()
-	tests := []struct {
-		name      string
-		reorder   func([]domain.FirewallRule) domain.FirewallReorder
-		wantOrder []string
-		wantPUTs  []officialTestRequest
-	}{
-		{
-			name: "ids",
-			reorder: func(read []domain.FirewallRule) domain.FirewallReorder {
-				return domain.FirewallReorder{IDs: []string{read[1].ID, read[0].ID}}
-			},
-			wantOrder: []string{"legacy-fw2", "legacy-fw1", "legacy-fw3"},
-			wantPUTs: []officialTestRequest{
-				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw2", body: map[string]any{"name": "Block Web", "enabled": true, "action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": float64(100)}},
-				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw1", body: map[string]any{"name": "Allow DNS", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": float64(110)}},
-			},
-		},
-		{
-			name: "id and index",
-			reorder: func(read []domain.FirewallRule) domain.FirewallReorder {
-				return domain.FirewallReorder{ID: read[1].ID, Index: 2, SetIndex: true}
-			},
-			wantOrder: []string{"legacy-fw1", "legacy-fw3", "legacy-fw2"},
-			wantPUTs: []officialTestRequest{
-				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw3", body: map[string]any{"name": "Allow NTP", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": float64(110)}},
-				{method: http.MethodPut, path: "/proxy/network/api/s/default/rest/firewallrule/legacy-fw2", body: map[string]any{"name": "Block Web", "enabled": true, "action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": float64(120)}},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			api := newOfficialReorderAPI(t)
-			service := domain.NewFirewallService(api)
-			read, err := service.List(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(read) != 2 {
-				t.Fatalf("official firewall read = %+v", read)
-			}
-			ro := tt.reorder(read)
-			p, err := service.Reorder(ctx, ro)
-			if err != nil {
-				t.Fatal(err)
-			}
-			after := p.Changes[0].After.(map[string]any)
-			if got := after["order"].([]string); !reflect.DeepEqual(got, tt.wantOrder) {
-				t.Fatalf("plan order = %v, want %v", got, tt.wantOrder)
-			}
-
-			api.mu.Lock()
-			api.requests = nil
-			api.calls = nil
-			api.mu.Unlock()
-			if err := service.ApplyReorder(ctx, ro); err != nil {
-				t.Fatal(err)
-			}
-			if got := api.legacyRequests(http.MethodPut); !reflect.DeepEqual(got, tt.wantPUTs) {
-				t.Fatalf("legacy reorder PUTs = %#v, want %#v", got, tt.wantPUTs)
-			}
-			encoded, _ := json.Marshal(api.legacyRequests(http.MethodPut))
-			for _, rule := range read {
-				if strings.Contains(string(encoded), rule.ID) {
-					t.Fatalf("official firewall UUID reached legacy reorder request: %s", encoded)
-				}
-			}
-		})
-	}
-}
-
-func TestOfficialFirewallReorderTranslationRejectsAmbiguousMissingAndDuplicateTargets(t *testing.T) {
-	ctx := context.Background()
-
-	api := newOfficialReorderAPI(t)
-	legacyPath := api.SitePath(client.PathRestFirewall)
-	api.legacy[legacyPath] = append(api.legacy[legacyPath], map[string]any{
-		"_id": "legacy-fw2-duplicate", "name": "Block Web", "enabled": true,
-		"action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": 130,
-	})
-	if _, err := domain.NewFirewallService(api).Reorder(ctx, domain.FirewallReorder{ID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2", Index: 0, SetIndex: true}); !apperr.Is(err, apperr.AmbiguousID) {
-		t.Fatalf("ambiguous reorder translation error = %v", err)
-	}
-
-	api = newOfficialReorderAPI(t)
-	api.legacy[legacyPath] = []map[string]any{{"_id": "other", "name": "Other", "rule_index": 100}}
-	if _, err := domain.NewFirewallService(api).Reorder(ctx, domain.FirewallReorder{ID: officialFirewallPolicyID, Index: 0, SetIndex: true}); !apperr.Is(err, apperr.NotFound) {
-		t.Fatalf("missing reorder translation error = %v", err)
-	}
-
-	api = newOfficialReorderAPI(t)
-	if _, err := domain.NewFirewallService(api).Reorder(ctx, domain.FirewallReorder{IDs: []string{"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2", "legacy-fw2"}}); !apperr.Is(err, apperr.ValidationFailed) {
-		t.Fatalf("translated duplicate reorder error = %v", err)
-	}
-}
-
 func TestOfficialFirewallProtocolUnionNormalization(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -821,7 +723,6 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 	api.legacy[api.SitePath(client.PathStatSta)] = []map[string]any{{"_id": "legacy-client", "name": "Laptop", "mac": "11:22:33:44:55:01"}}
 	api.legacy[api.SitePath(client.PathRestNetwork)] = []map[string]any{{"_id": "legacy-network", "name": "LAN", "purpose": "corporate"}}
 	api.legacy[api.SitePath(client.PathRestWlan)] = []map[string]any{{"_id": "legacy-wlan", "name": "Main", "security": "wpapsk"}}
-	api.legacy[api.SitePath(client.PathRestFirewall)] = []map[string]any{{"_id": "legacy-firewall", "name": "Allow DNS", "action": "accept", "ruleset": "LAN_IN"}}
 
 	deviceRead, err := domain.NewDeviceService(api).Get(ctx, "Gateway")
 	if err != nil {
@@ -836,10 +737,6 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	wlanRead, err := domain.NewWlanService(api).Get(ctx, "Main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	firewallRead, err := domain.NewFirewallService(api).Get(ctx, "Allow DNS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -872,12 +769,6 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 	if item, err := domain.NewWlanService(api).ApplyUpdate(ctx, wlanRead.ID, domain.WlanInput{Name: "Renamed"}); err != nil || item.ID != "legacy-wlan" {
 		t.Fatalf("WLAN apply target: item=%+v err=%v", item, err)
 	}
-	if p, item, err := domain.NewFirewallService(api).Update(ctx, firewallRead.ID, domain.FirewallInput{Name: "Renamed"}); err != nil || item.ID != "legacy-firewall" || p.Changes[0].ID != "legacy-firewall" {
-		t.Fatalf("firewall mutation target: item=%+v plan=%+v err=%v", item, p, err)
-	}
-	if item, err := domain.NewFirewallService(api).ApplyUpdate(ctx, firewallRead.ID, domain.FirewallInput{Name: "Renamed"}); err != nil || item.ID != "legacy-firewall" {
-		t.Fatalf("firewall apply target: item=%+v err=%v", item, err)
-	}
 	if p, item, err := domain.NewPortService(api).Update(ctx, portRead.DeviceID, 1, domain.PortInput{Name: "Uplink"}); err != nil || item.DeviceID != "legacy-switch" || p.Changes[0].ID != "legacy-switch/1" {
 		t.Fatalf("port mutation target: item=%+v plan=%+v err=%v", item, p, err)
 	}
@@ -889,7 +780,7 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 		if !strings.HasPrefix(call, "LEGACY ") {
 			continue
 		}
-		for _, officialID := range []string{officialGatewayID, officialWirelessID, officialLANID, officialMainWifiID, officialFirewallPolicyID, officialSwitchID} {
+		for _, officialID := range []string{officialGatewayID, officialWirelessID, officialLANID, officialMainWifiID, officialSwitchID} {
 			if strings.Contains(call, officialID) {
 				t.Fatalf("official UUID reached legacy request: %s", call)
 			}
@@ -900,7 +791,6 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 		"LEGACY POST " + api.SitePath(client.PathCmdStaMgr),
 		"LEGACY PUT " + api.SitePath(client.PathRestNetwork, "legacy-network"),
 		"LEGACY PUT " + api.SitePath(client.PathRestWlan, "legacy-wlan"),
-		"LEGACY PUT " + api.SitePath(client.PathRestFirewall, "legacy-firewall"),
 		"LEGACY PUT " + api.SitePath(client.PathRestDevice, "legacy-switch"),
 	} {
 		assertCallCount(t, api.calls, want, 1)
@@ -978,19 +868,6 @@ func TestOfficialMutationIdentityTranslationRejectsAmbiguousAndMissingLegacyMatc
 			missing: []map[string]any{{"_id": "other", "name": "Other", "security": "wpapsk"}},
 			mutate: func(api *officialReadAPI) error {
 				_, _, err := domain.NewWlanService(api).Update(ctx, officialMainWifiID, domain.WlanInput{Name: "Renamed"})
-				return err
-			},
-		},
-		{
-			name:       "firewall",
-			legacyPath: func(api *officialReadAPI) string { return api.SitePath(client.PathRestFirewall) },
-			ambiguous: []map[string]any{
-				{"_id": "legacy-firewall-1", "name": "Allow DNS", "action": "accept", "ruleset": "LAN_IN"},
-				{"_id": "legacy-firewall-2", "name": "Allow DNS", "action": "accept", "ruleset": "LAN_IN"},
-			},
-			missing: []map[string]any{{"_id": "other", "name": "Other", "action": "accept", "ruleset": "LAN_IN"}},
-			mutate: func(api *officialReadAPI) error {
-				_, _, err := domain.NewFirewallService(api).Update(ctx, officialFirewallPolicyID, domain.FirewallInput{Name: "Renamed"})
 				return err
 			},
 		},
@@ -1110,30 +987,6 @@ func configureOfficialNetworkFanout(t *testing.T, api *officialReadAPI, count in
 		api.details[sitePath+"/networks/"+id] = detail
 	}
 	api.collections[sitePath+"/networks"] = overviews
-}
-
-func newOfficialReorderAPI(t *testing.T) *officialReadAPI {
-	t.Helper()
-	api := newOfficialReadAPI(t)
-	path := client.OfficialPath("sites", officialSiteID, "firewall", "policies")
-	second := cloneTestMap(api.collections[path][0])
-	second["id"] = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2"
-	second["name"] = "Block Web"
-	second["index"] = float64(110)
-	second["action"] = map[string]any{"type": "BLOCK"}
-	second["ipProtocolScope"] = map[string]any{
-		"ipVersion": "IPV4",
-		"protocolFilter": map[string]any{
-			"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
-		},
-	}
-	api.collections[path] = append(api.collections[path], second)
-	api.legacy[api.SitePath(client.PathRestFirewall)] = []map[string]any{
-		{"_id": "legacy-fw1", "name": "Allow DNS", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": 100},
-		{"_id": "legacy-fw2", "name": "Block Web", "enabled": true, "action": "drop", "ruleset": "LAN_IN", "protocol": "tcp", "rule_index": 110},
-		{"_id": "legacy-fw3", "name": "Allow NTP", "enabled": true, "action": "accept", "ruleset": "LAN_IN", "protocol": "udp", "rule_index": 120},
-	}
-	return api
 }
 
 func fanoutTestUUID(index int) string {

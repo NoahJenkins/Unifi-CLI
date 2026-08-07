@@ -69,26 +69,6 @@ func TestPortInputValidation(t *testing.T) {
 	}
 }
 
-func TestFirewallInputValidation(t *testing.T) {
-	ctx := context.Background()
-	svc := domain.NewFirewallService(&fakeFirewallAPI{rules: fixtureFirewallRules(t)})
-
-	for _, input := range []domain.FirewallInput{
-		{Name: "", Action: "accept", Ruleset: "LAN_IN"},
-		{Name: "Bad action", Action: "permit", Ruleset: "LAN_IN"},
-		{Name: "Bad protocol", Action: "accept", Ruleset: "LAN_IN", Protocol: "smtp"},
-		{Name: "Bad source", Action: "accept", Ruleset: "LAN_IN", Src: "192.0.2.1/99"},
-	} {
-		if _, err := svc.Create(ctx, input); !apperr.Is(err, apperr.ValidationFailed) {
-			t.Errorf("Create(%+v) error = %v, want validation_failed", input, err)
-		}
-	}
-
-	if _, _, err := svc.Update(ctx, "fw1", domain.FirewallInput{}); !apperr.Is(err, apperr.ValidationFailed) {
-		t.Fatalf("zero-field firewall update error = %v", err)
-	}
-}
-
 func TestRequiredDeviceRenameAndResolverValidation(t *testing.T) {
 	ctx := context.Background()
 	deviceSvc := domain.NewDeviceService(&fakeDeviceAPI{devices: fixtureDevices(t)})
@@ -131,18 +111,4 @@ func TestNullableUpdateFieldsUseExplicitClearSemantics(t *testing.T) {
 		t.Fatalf("cleared port name = %#v", portAfter)
 	}
 
-	rules := fixtureFirewallRules(t)
-	rules[0]["src_address"] = "192.0.2.0/24"
-	rules[0]["dst_address"] = "198.51.100.0/24"
-	firewallSvc := domain.NewFirewallService(&fakeFirewallAPI{rules: rules})
-	firewallPlan, _, err := firewallSvc.Update(ctx, "fw1", domain.FirewallInput{ClearSrc: true, ClearDst: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	firewallAfter := firewallPlan.Changes[0].After.(map[string]any)
-	for _, field := range []string{"src", "dst"} {
-		if value, ok := firewallAfter[field]; !ok || value != "" {
-			t.Fatalf("cleared firewall %s = %#v", field, firewallAfter)
-		}
-	}
 }

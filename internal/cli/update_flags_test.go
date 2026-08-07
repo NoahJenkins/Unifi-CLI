@@ -16,7 +16,7 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 		{name: "network", typeOf: reflect.TypeOf(domain.NetworkInput{}), fields: []string{"SetName", "SetPurpose", "SetSubnet", "SetDomainName", "ClearDomainName"}},
 		{name: "wlan", typeOf: reflect.TypeOf(domain.WlanInput{}), fields: []string{"SetName", "SetSecurity", "SetNetwork", "SetPassword", "SetBand"}},
 		{name: "port", typeOf: reflect.TypeOf(domain.PortInput{}), fields: []string{"SetName", "ClearName", "SetProfile"}},
-		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetAction", "SetRuleset", "SetSrc", "ClearSrc", "SetDst", "ClearDst", "SetProtocol"}},
+		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -34,15 +34,17 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 	if newPortUpdateCmd().Flags().Lookup("clear-name") == nil {
 		t.Error("port update is missing --clear-name")
 	}
-	for _, flag := range []string{"clear-src", "clear-dst"} {
+	for _, flag := range []string{"description", "clear-description", "source-zone", "destination-zone", "ip-version", "protocol", "logging-enabled"} {
 		if newFirewallUpdateCmd().Flags().Lookup(flag) == nil {
 			t.Errorf("firewall update is missing --%s", flag)
 		}
 	}
-	if _, ok := reflect.TypeOf(domain.FirewallRule{}).FieldByName("Description"); ok {
-		t.Error("Task 5 must not expand the firewall DTO with description")
+	for _, obsolete := range []string{"ruleset", "src", "dst", "clear-src", "clear-dst", "index"} {
+		if newFirewallCreateCmd().Flags().Lookup(obsolete) != nil || newFirewallUpdateCmd().Flags().Lookup(obsolete) != nil {
+			t.Errorf("modern firewall policy commands still expose obsolete --%s", obsolete)
+		}
 	}
-	if newFirewallUpdateCmd().Flags().Lookup("description") != nil || newFirewallUpdateCmd().Flags().Lookup("clear-description") != nil {
-		t.Error("Task 5 must not add firewall description mutation flags")
+	if _, ok := reflect.TypeOf(domain.FirewallInput{}).FieldByName("Ruleset"); ok {
+		t.Error("modern firewall input still exposes legacy Ruleset")
 	}
 }
