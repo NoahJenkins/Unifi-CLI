@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -35,6 +36,15 @@ type Device struct {
 type ActionAcceptance struct {
 	Accepted bool `json:"accepted"`
 }
+
+type pendingDevice struct {
+	device                Device
+	adoptionTargetSiteIDs map[string]struct{}
+}
+
+func (d pendingDevice) GetID() string   { return "" }
+func (d pendingDevice) GetMAC() string  { return d.device.MAC }
+func (d pendingDevice) GetName() string { return d.device.Name }
 
 func (d Device) GetID() string   { return d.ID }
 func (d Device) GetMAC() string  { return d.MAC }
@@ -222,7 +232,7 @@ func (s *DeviceService) ApplyUpgrade(ctx context.Context, id string) (ActionAcce
 
 func (s *DeviceService) Adopt(ctx context.Context, id string) (plan.Plan, Device, error) {
 	if supportsOfficialDetails(s.api) {
-		d, err := s.getPendingOfficial(ctx, id)
+		d, _, err := s.resolveOfficialAdoption(ctx, id)
 		if err != nil {
 			return plan.Plan{}, Device{}, err
 		}
@@ -333,43 +343,99 @@ func (s *DeviceService) applyOfficialRestart(ctx context.Context, query string) 
 	return ActionAcceptance{Accepted: true}, nil
 }
 
-func (s *DeviceService) getPendingOfficial(ctx context.Context, query string) (Device, error) {
+func (s *DeviceService) getPendingOfficial(ctx context.Context, query string) (pendingDevice, error) {
 	raw, official, err := fetchOfficialGlobal(s.api, ctx, "pending-devices")
 	if err != nil {
-		return Device{}, err
+		return pendingDevice{}, err
 	}
 	if !official {
-		return Device{}, apperr.New(apperr.Internal, "official pending-device transport is unavailable")
+		return pendingDevice{}, apperr.New(apperr.Internal, "official pending-device transport is unavailable")
 	}
-	items := make([]Device, 0, len(raw))
+	items := make([]pendingDevice, 0, len(raw))
 	for _, item := range raw {
 		d := NormalizeDevice(item)
-		d.ID = d.MAC
 		if d.Name == "" {
 			d.Name = d.Model
 		}
-		items = append(items, d)
+		targets, err := parseAdoptionTargetSiteIDs(item["adoptionTargetSiteIds"])
+		if err != nil {
+			return pendingDevice{}, err
+		}
+		items = append(items, pendingDevice{device: d, adoptionTargetSiteIDs: targets})
 	}
 	selected, err := resolve.One(items, query)
 	if err != nil {
-		return Device{}, err
+		return pendingDevice{}, err
 	}
-	if strings.TrimSpace(selected.MAC) == "" {
-		return Device{}, apperr.New(apperr.Conflict, "pending device target has no MAC address")
+	if strings.TrimSpace(selected.device.MAC) == "" {
+		return pendingDevice{}, apperr.New(apperr.Conflict, "pending device target has no MAC address")
 	}
 	return selected, nil
 }
 
+func parseAdoptionTargetSiteIDs(value any) (map[string]struct{}, error) {
+	raw, ok := value.([]any)
+	if !ok || len(raw) == 0 {
+		return nil, apperr.New(apperr.Conflict, "pending device has an empty or malformed adoption target site set")
+	}
+	targets := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		id, ok := item.(string)
+		if !ok || !looksLikeUUID(id) {
+			return nil, apperr.New(apperr.Conflict, "pending device has an empty or malformed adoption target site set")
+		}
+		if _, duplicate := targets[id]; duplicate {
+			return nil, apperr.New(apperr.Conflict, "pending device adoption target site set contains duplicates")
+		}
+		targets[id] = struct{}{}
+	}
+	return targets, nil
+}
+
+func officialSiteIDFromPath(path string) (string, error) {
+	prefix := client.OfficialPath("sites") + "/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", apperr.New(apperr.Internal, "official site path is malformed")
+	}
+	escaped := strings.SplitN(strings.TrimPrefix(path, prefix), "/", 2)[0]
+	id, err := url.PathUnescape(escaped)
+	if err != nil || !looksLikeUUID(id) {
+		return "", apperr.New(apperr.Internal, "official site path has an invalid site ID")
+	}
+	return id, nil
+}
+
+func (s *DeviceService) resolveOfficialAdoption(ctx context.Context, query string) (Device, string, error) {
+	transport, err := requireOfficialMutationAPI(s.api)
+	if err != nil {
+		return Device{}, "", err
+	}
+	path, err := transport.IntegrationSitePath(ctx, "devices")
+	if err != nil {
+		return Device{}, "", err
+	}
+	siteID, err := officialSiteIDFromPath(path)
+	if err != nil {
+		return Device{}, "", err
+	}
+	pending, err := s.getPendingOfficial(ctx, query)
+	if err != nil {
+		return Device{}, "", err
+	}
+	if _, eligible := pending.adoptionTargetSiteIDs[siteID]; !eligible {
+		return Device{}, "", apperr.Newf(apperr.Conflict, "pending device is not eligible for adoption into site %s", siteID)
+	}
+	d := pending.device
+	d.ID = d.MAC
+	return d, path, nil
+}
+
 func (s *DeviceService) applyOfficialAdopt(ctx context.Context, query string) (ActionAcceptance, error) {
-	d, err := s.getPendingOfficial(ctx, query)
+	d, path, err := s.resolveOfficialAdoption(ctx, query)
 	if err != nil {
 		return ActionAcceptance{}, err
 	}
 	transport, _ := requireOfficialMutationAPI(s.api)
-	path, err := transport.IntegrationSitePath(ctx, "devices")
-	if err != nil {
-		return ActionAcceptance{}, err
-	}
 	body := map[string]any{"ignoreDeviceLimit": false, "macAddress": d.MAC}
 	var response map[string]any
 	if err := transport.DoOfficial(ctx, http.MethodPost, path, body, &response); err != nil {
@@ -396,6 +462,11 @@ func (s *DeviceService) applyOfficialForget(ctx context.Context, query string) (
 	}
 	if err := transport.DoOfficial(ctx, http.MethodDelete, path, nil, nil); err != nil {
 		return ActionAcceptance{}, err
+	}
+	if _, err := fetchOfficialSiteDetail(s.api, ctx, d.ID, "devices"); err == nil {
+		return ActionAcceptance{}, apperr.New(apperr.Conflict, "device forget verification failed: deleted device is still present")
+	} else if !apperr.Is(err, apperr.NotFound) {
+		return ActionAcceptance{}, verificationError("forgotten device could not be verified", err)
 	}
 	return ActionAcceptance{Accepted: true}, nil
 }

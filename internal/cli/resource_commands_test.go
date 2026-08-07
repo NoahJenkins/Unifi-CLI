@@ -55,6 +55,12 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 		"/proxy/network/api/s/default/rest/wlanconf/wlan-1":       `[]`,
 	}
 	officialCollections := map[string]string{
+		"/proxy/network/integration/v1/pending-devices": `[{
+			"adoptionTargetSiteIds":["11111111-1111-4111-8111-111111111111"],
+			"features":["accessPoint"],"firmwareUpdatable":true,"firmwareVersion":"7.0.1",
+			"ipAddress":"192.0.2.99","macAddress":"aa:bb:cc:dd:ee:99","model":"U7",
+			"state":"PENDING_ADOPTION","supported":true
+		}]`,
 		"/proxy/network/integration/v1/sites":                                                        `[{"id":"11111111-1111-4111-8111-111111111111","internalReference":"default","name":"Default"}]`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices":           `[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":["gateway","switching"],"interfaces":["ports"],"firmwareUpdatable":false,"supported":true}]`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/clients":           `[{"type":"WIRELESS","id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1","macAddress":"aa:bb:cc:dd:ee:02","name":"Laptop","ipAddress":"192.0.2.2","connectedAt":"2026-08-07T12:00:00Z","access":{"type":"DEFAULT"},"uplinkDeviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"}]`,
@@ -88,6 +94,28 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 		const dnsPath = "/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/dns/policies"
 		const networkPath = "/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks"
 		const wlanPath = "/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts"
+		const devicesPath = "/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices"
+		const deviceDetailPath = devicesPath + "/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+		if r.Method == http.MethodPost && r.URL.Path == deviceDetailPath+"/actions" {
+			_, _ = io.WriteString(w, `{}`)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == devicesPath {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"message":"bad request"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "30000000-0000-4000-8000-000000000001", "macAddress": body["macAddress"],
+			})
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == deviceDetailPath {
+			delete(officialDetails, deviceDetailPath)
+			_, _ = io.WriteString(w, `{}`)
+			return
+		}
 		if r.Method == http.MethodPost && (r.URL.Path == networkPath || r.URL.Path == wlanPath) {
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -173,6 +201,10 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 			if data, ok := officialDetails[r.URL.Path]; ok {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(w, data)
+				return
+			}
+			if r.URL.Path == deviceDetailPath {
+				http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
 				return
 			}
 		}

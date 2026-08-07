@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -16,20 +17,84 @@ import (
 // wireDocumentsEqual compares JSON-shaped controller documents after a JSON
 // round trip so integer inputs and decoded JSON numbers have the same meaning.
 func wireDocumentsEqual(a, b any) bool {
-	normalize := func(value any) (any, bool) {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, false
-		}
-		var normalized any
-		if err := json.Unmarshal(encoded, &normalized); err != nil {
-			return nil, false
-		}
-		return normalized, true
-	}
-	left, leftOK := normalize(a)
-	right, rightOK := normalize(b)
+	return wireDocumentsEqualAtPaths(a, b, nil)
+}
+
+func wireDocumentsEqualAtPaths(a, b any, setPaths map[string]struct{}) bool {
+	left, leftOK := normalizeWireDocument(a, "", setPaths)
+	right, rightOK := normalizeWireDocument(b, "", setPaths)
 	return leftOK && rightOK && reflect.DeepEqual(left, right)
+}
+
+func wireDocumentContains(observed, requested any, setPaths map[string]struct{}) bool {
+	actual, actualOK := normalizeWireDocument(observed, "", setPaths)
+	want, wantOK := normalizeWireDocument(requested, "", setPaths)
+	return actualOK && wantOK && wireValueContains(actual, want)
+}
+
+func normalizeWireDocument(value any, path string, setPaths map[string]struct{}) (any, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var normalized any
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		return nil, false
+	}
+	return normalizeWireValue(normalized, path, setPaths), true
+}
+
+func normalizeWireValue(value any, path string, setPaths map[string]struct{}) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			out[key] = normalizeWireValue(item, childPath, setPaths)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		childPath := "*"
+		if path != "" {
+			childPath = path + ".*"
+		}
+		for i, item := range typed {
+			out[i] = normalizeWireValue(item, childPath, setPaths)
+		}
+		if _, isSet := setPaths[path]; isSet {
+			sort.Slice(out, func(i, j int) bool {
+				left, _ := json.Marshal(out[i])
+				right, _ := json.Marshal(out[j])
+				return string(left) < string(right)
+			})
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+func wireValueContains(observed, requested any) bool {
+	switch want := requested.(type) {
+	case map[string]any:
+		actual, ok := observed.(map[string]any)
+		if !ok {
+			return false
+		}
+		for key, expectedValue := range want {
+			actualValue, exists := actual[key]
+			if !exists || !wireValueContains(actualValue, expectedValue) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(observed, requested)
+	}
 }
 
 type officialCollectionAPI interface {

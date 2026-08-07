@@ -406,7 +406,7 @@ func (s *NetworkService) applyOfficialCreate(ctx context.Context, in NetworkInpu
 	if err != nil {
 		return Network{}, verificationError("created network could not be verified", err)
 	}
-	if !wireDocumentsEqual(networkWritableDocument(observed), body) {
+	if !wireDocumentContains(networkWritableDocument(observed), body, nil) {
 		return Network{}, apperr.New(apperr.Conflict, "network create verification failed: observed writable document differs from requested state")
 	}
 	return NormalizeNetwork(observed), nil
@@ -426,9 +426,16 @@ func (s *NetworkService) prepareOfficialUpdate(ctx context.Context, query string
 		if err != nil {
 			return networkDocument{}, nil, err
 		}
-		body["management"] = management
+		currentManagement := strings.ToUpper(strField(doc.wire, "management"))
+		if management != currentManagement {
+			return networkDocument{}, nil, apperr.Newf(apperr.ValidationFailed,
+				"network management cannot change from %s to %s without a complete target-mode document", currentManagement, management)
+		}
 	}
 	if in.VLAN != nil {
+		if err := validateOfficialNetworkVLAN(*in.VLAN); err != nil {
+			return networkDocument{}, nil, err
+		}
 		body["vlanId"] = *in.VLAN
 	}
 	ipv4, _ := body["ipv4Configuration"].(map[string]any)
@@ -529,9 +536,15 @@ func officialNetworkCreateBody(in NetworkInput) (map[string]any, error) {
 	if in.VLAN == nil {
 		return nil, apperr.New(apperr.ValidationFailed, "official network creation requires a VLAN ID")
 	}
+	if err := validateOfficialNetworkVLAN(*in.VLAN); err != nil {
+		return nil, err
+	}
 	body := map[string]any{"name": in.Name, "enabled": true, "management": management, "vlanId": *in.VLAN}
 	switch management {
 	case "UNMANAGED":
+		if inputSetsNetworkSubnet(in) || in.SetDHCPEnabled || inputSetsNetworkDomain(in) || in.ClearDomainName {
+			return nil, apperr.New(apperr.ValidationFailed, "unmanaged network creation does not accept gateway-only IPv4 or DHCP fields")
+		}
 		return body, nil
 	case "SWITCH":
 		return nil, apperr.New(apperr.ValidationFailed, "switch-managed network creation requires a device ID not exposed by this command")
@@ -574,7 +587,17 @@ func parseNetworkSubnet(value string) (string, int, error) {
 	if err != nil || !prefix.Addr().Is4() {
 		return "", 0, apperr.Newf(apperr.ValidationFailed, "network subnet must be a valid IPv4 CIDR: %q", value)
 	}
+	if prefix.Bits() < 8 || prefix.Bits() > 30 {
+		return "", 0, apperr.Newf(apperr.ValidationFailed, "official gateway network prefix must be between 8 and 30: %q", value)
+	}
 	return prefix.Addr().String(), prefix.Bits(), nil
+}
+
+func validateOfficialNetworkVLAN(vlan int) error {
+	if vlan < 1 || vlan > 4009 {
+		return apperr.Newf(apperr.ValidationFailed, "official network VLAN must be between 1 and 4009: %d", vlan)
+	}
+	return nil
 }
 
 func mergeOfficialNetworkDetail(overview, detail Network) Network {

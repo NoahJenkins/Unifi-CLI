@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -412,6 +413,19 @@ func wlanWritableDocument(raw map[string]any) map[string]any {
 	return body
 }
 
+var officialWlanSetPaths = map[string]struct{}{
+	"broadcastingFrequenciesGHz":                           {},
+	"clientFilteringPolicy.macAddressFilter":               {},
+	"broadcastingDeviceFilter.deviceIds":                   {},
+	"broadcastingDeviceFilter.deviceTagIds":                {},
+	"mdnsProxyConfiguration.policies.*.bridgingNetworkIds": {},
+	"multicastFilteringPolicy.sourceMacAddressFilter":      {},
+}
+
+func wlanWireDocumentsEqual(a, b any) bool {
+	return wireDocumentsEqualAtPaths(a, b, officialWlanSetPaths)
+}
+
 func wlanResponseView(body, existing map[string]any) map[string]any {
 	view := deepCloneMap(body)
 	for _, key := range []string{"id", "metadata"} {
@@ -447,7 +461,7 @@ func (s *WlanService) applyOfficialCreate(ctx context.Context, in WlanInput) (Wl
 	if err != nil {
 		return Wlan{}, verificationError("created WLAN could not be verified", err)
 	}
-	if !wireDocumentsEqual(wlanWritableDocument(observed), body) {
+	if !wlanWireDocumentsEqual(wlanWritableDocument(observed), body) {
 		return Wlan{}, apperr.New(apperr.Conflict, "WLAN create verification failed: observed writable document differs from requested state")
 	}
 	return NormalizeWlan(observed), nil
@@ -460,6 +474,11 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 	}
 	if err := validateWlanSecurityTransition(doc.normalized, in); err != nil {
 		return wlanDocument{}, nil, err
+	}
+	if inputSetsWlanPassword(in) {
+		if err := validateOfficialWlanPassphrase(in.Password); err != nil {
+			return wlanDocument{}, nil, err
+		}
 	}
 	body := wlanWritableDocument(doc.wire)
 	if inputSetsWlanName(in) {
@@ -506,7 +525,7 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 		security["passphrase"] = in.Password
 		body["securityConfiguration"] = security
 	}
-	if wireDocumentsEqual(body, wlanWritableDocument(doc.wire)) {
+	if wlanWireDocumentsEqual(body, wlanWritableDocument(doc.wire)) {
 		return wlanDocument{}, nil, apperr.New(apperr.ValidationFailed, "WLAN update would not change controller state")
 	}
 	return doc, body, nil
@@ -530,7 +549,7 @@ func (s *WlanService) applyOfficialUpdate(ctx context.Context, query string, in 
 	if err != nil {
 		return Wlan{}, verificationError("updated WLAN could not be verified", err)
 	}
-	if !wireDocumentsEqual(wlanWritableDocument(observed), body) {
+	if !wlanWireDocumentsEqual(wlanWritableDocument(observed), body) {
 		return Wlan{}, apperr.New(apperr.Conflict, "WLAN update verification failed: observed writable document differs from requested state")
 	}
 	return NormalizeWlan(observed), nil
@@ -593,21 +612,28 @@ func officialWlanSecurity(security, password string) (map[string]any, error) {
 		typ = "OPEN"
 	case "wpapsk", "wpa2_personal":
 		typ = "WPA2_PERSONAL"
-	case "wpa3_personal":
-		typ = "WPA3_PERSONAL"
-	case "wpa2_wpa3_personal":
-		typ = "WPA2_WPA3_PERSONAL"
+	case "wpa3_personal", "wpa2_wpa3_personal":
+		return nil, apperr.Newf(apperr.ValidationFailed,
+			"WLAN security %q requires SAE, PMF, and fast-roaming inputs not exposed by this command", security)
 	default:
 		return nil, apperr.Newf(apperr.ValidationFailed, "WLAN security %q is not safely configurable through the official command surface", security)
 	}
 	body := map[string]any{"type": typ}
 	if typ != "OPEN" {
-		if strings.TrimSpace(password) == "" {
-			return nil, apperr.New(apperr.ValidationFailed, "personal WLAN security requires a passphrase")
+		if err := validateOfficialWlanPassphrase(password); err != nil {
+			return nil, err
 		}
 		body["passphrase"] = password
 	}
 	return body, nil
+}
+
+func validateOfficialWlanPassphrase(passphrase string) error {
+	length := utf8.RuneCountInString(passphrase)
+	if strings.TrimSpace(passphrase) == "" || length < 8 || length > 63 {
+		return apperr.New(apperr.ValidationFailed, "personal WLAN passphrase must contain 8 to 63 characters")
+	}
+	return nil
 }
 
 func officialWlanFrequencies(band string) ([]any, error) {
