@@ -121,11 +121,15 @@ func TestFetchOfficialAllRejectsMalformedPages(t *testing.T) {
 	tests := []struct {
 		name    string
 		fixture string
+		want    string
 	}{
-		{name: "missing metadata", fixture: "resources-missing-total.json"},
-		{name: "count disagrees with data", fixture: "resources-count-mismatch.json"},
-		{name: "unexpected offset", fixture: "resources-offset-mismatch.json"},
-		{name: "invalid JSON", fixture: "resources-invalid.json"},
+		{name: "missing metadata", fixture: "resources-missing-total.json", want: "missing required pagination fields"},
+		{name: "count disagrees with data", fixture: "resources-count-mismatch.json", want: "does not match data length"},
+		{name: "unexpected offset", fixture: "resources-offset-mismatch.json", want: "does not match requested offset"},
+		{name: "invalid JSON", fixture: "resources-invalid.json", want: "decode official API response"},
+		{name: "returned limit differs from request", fixture: "resources-limit-mismatch.json", want: "does not match requested limit"},
+		{name: "count exceeds returned limit", fixture: "resources-count-over-limit.json", want: "exceeds returned limit"},
+		{name: "page range exceeds total", fixture: "resources-range-over-total.json", want: "exceeds totalCount"},
 	}
 
 	for _, tt := range tests {
@@ -140,8 +144,8 @@ func TestFetchOfficialAllRejectsMalformedPages(t *testing.T) {
 			}
 
 			_, err = client.FetchOfficialAll[officialFixtureResource](context.Background(), c, "/proxy/network/integration/v1/resources")
-			if !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), "official API") {
-				t.Fatalf("error = %v, want internal malformed-page error", err)
+			if !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want internal malformed-page error containing %q", err, tt.want)
 			}
 		})
 	}

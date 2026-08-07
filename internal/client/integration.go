@@ -117,11 +117,17 @@ func validateOfficialPage[T any](page officialPageWire[T], expectedOffset int) e
 	if offset != expectedOffset {
 		return apperr.Newf(apperr.Internal, "official API page offset %d does not match requested offset %d", offset, expectedOffset)
 	}
-	if limit > officialPageSize || count > officialPageSize {
-		return apperr.Newf(apperr.Internal, "official API page exceeds requested limit %d", officialPageSize)
+	if count > limit {
+		return apperr.Newf(apperr.Internal, "official API page count %d exceeds returned limit %d", count, limit)
+	}
+	if limit != officialPageSize {
+		return apperr.Newf(apperr.Internal, "official API page limit %d does not match requested limit %d", limit, officialPageSize)
 	}
 	if count != len(*page.Data) {
 		return apperr.Newf(apperr.Internal, "official API page count %d does not match data length %d", count, len(*page.Data))
+	}
+	if offset > totalCount || count > totalCount-offset {
+		return apperr.Newf(apperr.Internal, "official API page range %d exceeds totalCount %d", offset+count, totalCount)
 	}
 	if offset+count < totalCount && count == 0 {
 		return apperr.Newf(apperr.Internal, "official API page at offset %d did not advance", offset)
