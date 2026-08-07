@@ -60,7 +60,7 @@ func (s *PortService) List(ctx context.Context, deviceQuery string) ([]Port, err
 		}
 		return ExtractPortsFromDevice(dev), nil
 	}
-	var out []Port
+	out := make([]Port, 0)
 	for _, m := range raw {
 		if !deviceHasPorts(m) {
 			continue

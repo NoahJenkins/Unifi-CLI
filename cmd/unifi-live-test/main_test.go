@@ -27,6 +27,19 @@ func TestParseConfigRejectsEmptyBinary(t *testing.T) {
 	}
 }
 
+func TestRunMalformedInvocationDoesNotEchoArguments(t *testing.T) {
+	const secret = "argument-secret-not-for-output"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--binary", "/tmp/unifi", secret}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
+		t.Fatalf("wrapper output leaked an argument: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestRunWritesReportAndReturnsFailureWhenChecksFail(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

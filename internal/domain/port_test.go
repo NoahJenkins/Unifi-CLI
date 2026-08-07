@@ -268,6 +268,24 @@ func TestPortServiceList(t *testing.T) {
 	}
 }
 
+func TestPortServiceListReturnsNonNilEmptyInventory(t *testing.T) {
+	api := &fakePortAPI{devices: []map[string]any{}}
+	ports, err := domain.NewPortService(api).List(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports == nil || len(ports) != 0 {
+		t.Fatalf("ports = %#v, want non-nil empty inventory", ports)
+	}
+	encoded, err := json.Marshal(ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("JSON = %s, want []", encoded)
+	}
+}
+
 func TestPortServiceGet(t *testing.T) {
 	api := &fakePortAPI{devices: devicesWithPorts()}
 	svc := domain.NewPortService(api)

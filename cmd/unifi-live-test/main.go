@@ -23,7 +23,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	cfg, err := parseConfig(args)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, "live test wrapper failed")
 		return 2
 	}
 
@@ -57,7 +57,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, fmt.Errorf("--binary is required")
 	}
 	if len(flags.Args()) != 0 {
-		return config{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
+		return config{}, fmt.Errorf("unexpected positional arguments")
 	}
 	return cfg, nil
 }

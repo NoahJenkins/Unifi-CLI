@@ -2,9 +2,11 @@ package livetest_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -96,6 +98,7 @@ func TestValidateRejectsInvalidListEnvelopes(t *testing.T) {
 	for _, raw := range [][]byte{
 		[]byte(`{"ok":true,"resource":"device","action":"get","data":[],"meta":{}}`),
 		[]byte(`{"ok":true,"resource":"device","action":"list","data":{},"meta":{}}`),
+		[]byte(`{"ok":true,"resource":"device","action":"list","data":null,"meta":{}}`),
 		[]byte(`{"ok":true,"resource":"device","action":"list","data":[],"meta":{"count":1}}`),
 		[]byte(`{"ok":false,"resource":"device","action":"list","data":[],"meta":{}}`),
 		[]byte(`not json`),
@@ -103,6 +106,74 @@ func TestValidateRejectsInvalidListEnvelopes(t *testing.T) {
 		if _, _, err := livetest.Validate(command, raw); err == nil {
 			t.Fatalf("Validate(%s) unexpectedly succeeded", raw)
 		}
+	}
+}
+
+func TestRunnerNormalizesEveryJSONSpellingExactlyOnce(t *testing.T) {
+	fake := &fakeExecutor{responses: map[string]fakeResponse{
+		"custom status --json": {stdout: `{"ok":true,"resource":"custom","action":"status","data":{},"meta":{}}`},
+	}}
+	_, err := (livetest.Runner{
+		Binary: "unifi", Executor: fake, Now: fixedNow,
+		Commands: []livetest.Command{{
+			Name: "custom status", Resource: "custom", Action: "status",
+			Args: []string{"custom", "--json=compact", "status", "--json", "--json=pretty"}, Shape: livetest.ObjectData,
+		}},
+	}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fake.calls, []string{"custom status --json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+}
+
+func TestRunnerRejectsUnsafeFlagFormsBeforeExecution(t *testing.T) {
+	for _, unsafe := range []string{"--yes", "--yes=true", "--dry-run", "--dry-run=false", "--raw", "--raw=true"} {
+		t.Run(unsafe, func(t *testing.T) {
+			fake := &fakeExecutor{responses: map[string]fakeResponse{}}
+			report, err := (livetest.Runner{
+				Binary: "unifi", Executor: fake, Now: fixedNow,
+				Commands: []livetest.Command{{
+					Name: "unsafe custom", Resource: "device", Action: "list",
+					Args: []string{"device", "list", unsafe}, Shape: livetest.ArrayData,
+				}},
+			}).Run(context.Background())
+			if err == nil {
+				t.Fatal("unsafe command succeeded")
+			}
+			if len(fake.calls) != 0 {
+				t.Fatalf("unsafe command invoked executor: %v", fake.calls)
+			}
+			if got := resultFor(t, report, "unsafe custom").Status; got != livetest.Fail {
+				t.Fatalf("status = %s", got)
+			}
+		})
+	}
+}
+
+func TestRunnerRejectsUnsafeDerivedGetBeforeExecution(t *testing.T) {
+	fake := &fakeExecutor{responses: map[string]fakeResponse{
+		"device list --json": {stdout: `{"ok":true,"resource":"device","action":"list","data":[{"id":"dev-1"}],"meta":{"count":1}}`},
+	}}
+	report, err := (livetest.Runner{
+		Binary: "unifi", Executor: fake, Now: fixedNow,
+		Commands: []livetest.Command{{
+			Name: "device list", Resource: "device", Action: "list", Args: []string{"device", "list"}, Shape: livetest.ArrayData,
+			GetFrom: &livetest.GetSpec{
+				Command: livetest.Command{Name: "device delete", Resource: "device", Action: "delete", Args: []string{"device", "delete"}, Shape: livetest.ObjectData},
+				IDField: "id",
+			},
+		}},
+	}).Run(context.Background())
+	if err == nil {
+		t.Fatal("unsafe derived get succeeded")
+	}
+	if got, want := fake.calls, []string{"device list --json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	if got := resultFor(t, report, "device delete").Status; got != livetest.Fail {
+		t.Fatalf("status = %s", got)
 	}
 }
 
@@ -196,6 +267,32 @@ func TestRunnerDoesNotExposeProcessStderrInFailureSummary(t *testing.T) {
 	}
 }
 
+func TestRunnerPreservesNumericExitStatusWithoutPayloads(t *testing.T) {
+	fake := validExecutor(t)
+	fake.responses["config show --json"] = fakeResponse{
+		stdout: "stdout-payload-sentinel", stderr: "stderr-secret-sentinel", exit: 23,
+		err: errors.New("process-error-secret-sentinel"),
+	}
+
+	report, err := (livetest.Runner{Binary: "unifi", Executor: fake, Now: fixedNow}).Run(context.Background())
+	if err == nil {
+		t.Fatal("Run unexpectedly succeeded")
+	}
+	result := resultFor(t, report, "config show")
+	if result.ExitCode == nil || *result.ExitCode != 23 {
+		t.Fatalf("exit code = %v, want 23", result.ExitCode)
+	}
+	serialized, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, protected := range []string{"stdout-payload-sentinel", "stderr-secret-sentinel", "process-error-secret-sentinel"} {
+		if strings.Contains(string(serialized), protected) {
+			t.Fatalf("result leaked protected content: %s", serialized)
+		}
+	}
+}
+
 func TestRunnerRecordsDurationFromInjectedClock(t *testing.T) {
 	fake := validExecutor(t)
 	start := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
@@ -241,6 +338,25 @@ func TestWriteReportRedactsUntrustedSummaryAndUsesPrivatePermissions(t *testing.
 	privatefiletest.AssertFile(t, path)
 	if filepath.Dir(path) != dir {
 		t.Fatalf("report dir = %q, want %q", filepath.Dir(path), dir)
+	}
+}
+
+func TestWriteReportUsesDistinctFilesForSameStartTime(t *testing.T) {
+	dir := t.TempDir()
+	report := livetest.Report{StartedAt: fixedNow(), Results: []livetest.Result{{Command: "auth status", Status: livetest.Pass}}}
+	first, err := livetest.WriteReport(dir, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := livetest.WriteReport(dir, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("report paths collided: %s", first)
+	}
+	for _, path := range []string{first, second} {
+		privatefiletest.AssertFile(t, path)
 	}
 }
 
