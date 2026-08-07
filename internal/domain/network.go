@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
@@ -32,12 +35,18 @@ func (n Network) GetName() string { return n.Name }
 
 // NetworkInput is the create/update payload from CLI flags.
 type NetworkInput struct {
-	Name        string
-	Purpose     string
-	VLAN        *int
-	Subnet      string
-	DHCPEnabled bool
-	DomainName  string
+	Name            string
+	SetName         bool
+	Purpose         string
+	SetPurpose      bool
+	VLAN            *int
+	Subnet          string
+	SetSubnet       bool
+	DHCPEnabled     bool
+	SetDHCPEnabled  bool
+	DomainName      string
+	SetDomainName   bool
+	ClearDomainName bool
 }
 
 type NetworkService struct {
@@ -49,10 +58,15 @@ func NewNetworkService(api NetworkAPI) *NetworkService {
 }
 
 func (s *NetworkService) List(ctx context.Context) ([]Network, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(client.PathRestNetwork)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+	raw, official, err := fetchNetworkObjects(ctx, s.api)
+	if err != nil {
 		return nil, err
+	}
+	if !official {
+		path := s.api.SitePath(client.PathRestNetwork)
+		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]Network, 0, len(raw))
 	for _, m := range raw {
@@ -69,8 +83,31 @@ func (s *NetworkService) Get(ctx context.Context, id string) (Network, error) {
 	return resolve.One(items, id)
 }
 
+func (s *NetworkService) listLegacy(ctx context.Context) ([]Network, error) {
+	var raw []map[string]any
+	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathRestNetwork), nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Network, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, NormalizeNetwork(item))
+	}
+	return out, nil
+}
+
+func (s *NetworkService) getLegacy(ctx context.Context, id string) (Network, error) {
+	items, err := s.listLegacy(ctx)
+	if err != nil {
+		return Network{}, err
+	}
+	return resolve.One(items, id)
+}
+
 func (s *NetworkService) Create(ctx context.Context, in NetworkInput) (plan.Plan, error) {
 	_ = ctx
+	if err := validateNetworkCreate(in); err != nil {
+		return plan.Plan{}, err
+	}
 	after := networkInputBody(in)
 	p := plan.Create("network", in.Name,
 		fmt.Sprintf("create network %s", in.Name),
@@ -80,6 +117,9 @@ func (s *NetworkService) Create(ctx context.Context, in NetworkInput) (plan.Plan
 }
 
 func (s *NetworkService) ApplyCreate(ctx context.Context, in NetworkInput) (Network, error) {
+	if err := validateNetworkCreate(in); err != nil {
+		return Network{}, err
+	}
 	path := s.api.SitePath(client.PathRestNetwork)
 	body := networkInputBody(in)
 	var raw []map[string]any
@@ -103,7 +143,10 @@ func (s *NetworkService) ApplyCreate(ctx context.Context, in NetworkInput) (Netw
 }
 
 func (s *NetworkService) Update(ctx context.Context, id string, in NetworkInput) (plan.Plan, Network, error) {
-	n, err := s.Get(ctx, id)
+	if err := validateNetworkUpdate(in); err != nil {
+		return plan.Plan{}, Network{}, err
+	}
+	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Network{}, err
 	}
@@ -118,7 +161,10 @@ func (s *NetworkService) Update(ctx context.Context, id string, in NetworkInput)
 }
 
 func (s *NetworkService) ApplyUpdate(ctx context.Context, id string, in NetworkInput) (Network, error) {
-	n, err := s.Get(ctx, id)
+	if err := validateNetworkUpdate(in); err != nil {
+		return Network{}, err
+	}
+	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Network{}, err
 	}
@@ -127,30 +173,33 @@ func (s *NetworkService) ApplyUpdate(ctx context.Context, id string, in NetworkI
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
 		return Network{}, err
 	}
-	if in.Name != "" {
+	if inputSetsNetworkName(in) {
 		n.Name = in.Name
 	}
-	if in.Purpose != "" {
+	if inputSetsNetworkPurpose(in) {
 		n.Purpose = in.Purpose
 		n.WAN = in.Purpose == "wan"
 	}
-	if in.Subnet != "" {
+	if inputSetsNetworkSubnet(in) {
 		n.Subnet = in.Subnet
 	}
-	if in.DomainName != "" {
+	if inputSetsNetworkDomain(in) {
 		n.DomainName = in.DomainName
+	}
+	if in.ClearDomainName {
+		n.DomainName = ""
 	}
 	if in.VLAN != nil {
 		n.VLAN = in.VLAN
 	}
-	if in.DHCPEnabled {
-		n.DHCPEnabled = true
+	if in.SetDHCPEnabled || in.DHCPEnabled {
+		n.DHCPEnabled = in.DHCPEnabled
 	}
 	return n, nil
 }
 
 func (s *NetworkService) Delete(ctx context.Context, id string) (plan.Plan, Network, error) {
-	n, err := s.Get(ctx, id)
+	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Network{}, err
 	}
@@ -162,7 +211,7 @@ func (s *NetworkService) Delete(ctx context.Context, id string) (plan.Plan, Netw
 }
 
 func (s *NetworkService) ApplyDelete(ctx context.Context, id string) (Network, error) {
-	n, err := s.Get(ctx, id)
+	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Network{}, err
 	}
@@ -187,6 +236,20 @@ func NormalizeNetwork(m map[string]any) Network {
 		DHCPEnabled: boolField(m, "dhcpd_enabled"),
 		DomainName:  strField(m, "domain_name"),
 	}
+	if n.Purpose == "" {
+		n.Purpose = strings.ToLower(strField(m, "management"))
+	}
+	if ipv4, ok := m["ipv4Configuration"].(map[string]any); ok {
+		host := strField(ipv4, "hostIpAddress")
+		prefix := intField(ipv4, "prefixLength")
+		if host != "" && prefix > 0 {
+			n.Subnet = host + "/" + strconv.Itoa(prefix)
+		}
+		if dhcp, ok := ipv4["dhcpConfiguration"].(map[string]any); ok {
+			n.DHCPEnabled = true
+			n.DomainName = strField(dhcp, "domainName")
+		}
+	}
 	if n.Purpose == "wan" {
 		n.WAN = true
 	}
@@ -198,25 +261,50 @@ func NormalizeNetwork(m map[string]any) Network {
 			n.VLAN = &v
 		}
 	}
+	if v, ok := asInt(m["vlanId"]); ok {
+		n.VLAN = &v
+	}
 	return n
+}
+
+func fetchNetworkObjects(ctx context.Context, api any) ([]map[string]any, bool, error) {
+	raw, official, err := fetchOfficialSite(api, ctx, "networks")
+	if err != nil || !official || !supportsOfficialDetails(api) {
+		return raw, official, err
+	}
+	for i, overview := range raw {
+		id := strField(overview, "id")
+		if id == "" {
+			continue
+		}
+		detail, err := fetchOfficialSiteDetail(api, ctx, id, "networks")
+		if err != nil {
+			return nil, true, err
+		}
+		raw[i] = detail
+	}
+	return raw, true, nil
 }
 
 func networkInputBody(in NetworkInput) map[string]any {
 	body := map[string]any{}
-	if in.Name != "" {
+	if inputSetsNetworkName(in) {
 		body["name"] = in.Name
 	}
-	if in.Purpose != "" {
+	if inputSetsNetworkPurpose(in) {
 		body["purpose"] = in.Purpose
 	}
-	if in.Subnet != "" {
+	if inputSetsNetworkSubnet(in) {
 		body["ip_subnet"] = in.Subnet
 	}
-	if in.DomainName != "" {
+	if inputSetsNetworkDomain(in) {
 		body["domain_name"] = in.DomainName
 	}
-	if in.DHCPEnabled {
-		body["dhcpd_enabled"] = true
+	if in.ClearDomainName {
+		body["domain_name"] = ""
+	}
+	if in.SetDHCPEnabled || in.DHCPEnabled {
+		body["dhcpd_enabled"] = in.DHCPEnabled
 	}
 	if in.VLAN != nil {
 		body["vlan"] = *in.VLAN
@@ -243,24 +331,74 @@ func networkSnapshot(n Network) map[string]any {
 
 func mergeNetworkAfter(n Network, in NetworkInput) map[string]any {
 	after := networkSnapshot(n)
-	if in.Name != "" {
+	if inputSetsNetworkName(in) {
 		after["name"] = in.Name
 	}
-	if in.Purpose != "" {
+	if inputSetsNetworkPurpose(in) {
 		after["purpose"] = in.Purpose
 		after["wan"] = in.Purpose == "wan"
 	}
-	if in.Subnet != "" {
+	if inputSetsNetworkSubnet(in) {
 		after["subnet"] = in.Subnet
 	}
-	if in.DomainName != "" {
+	if inputSetsNetworkDomain(in) {
 		after["domain_name"] = in.DomainName
+	}
+	if in.ClearDomainName {
+		after["domain_name"] = ""
 	}
 	if in.VLAN != nil {
 		after["vlan"] = *in.VLAN
 	}
-	if in.DHCPEnabled {
-		after["dhcp_enabled"] = true
+	if in.SetDHCPEnabled || in.DHCPEnabled {
+		after["dhcp_enabled"] = in.DHCPEnabled
 	}
 	return after
 }
+
+func validateNetworkCreate(in NetworkInput) error {
+	if err := validateRequired("network name", in.Name); err != nil {
+		return err
+	}
+	if err := validateRequired("network purpose", in.Purpose); err != nil {
+		return err
+	}
+	return validateNetworkFields(in)
+}
+
+func validateNetworkUpdate(in NetworkInput) error {
+	if !inputSetsNetworkName(in) && !inputSetsNetworkPurpose(in) && in.VLAN == nil &&
+		!inputSetsNetworkSubnet(in) && !in.SetDHCPEnabled && !inputSetsNetworkDomain(in) && !in.ClearDomainName {
+		return apperr.New(apperr.ValidationFailed, "network update requires at least one changed field")
+	}
+	if in.ClearDomainName && inputSetsNetworkDomain(in) {
+		return apperr.New(apperr.ValidationFailed, "use either domain name or clear domain name, not both")
+	}
+	if inputSetsNetworkName(in) {
+		if err := validateRequired("network name", in.Name); err != nil {
+			return err
+		}
+	}
+	return validateNetworkFields(in)
+}
+
+func validateNetworkFields(in NetworkInput) error {
+	if err := validateVLAN(in.VLAN); err != nil {
+		return err
+	}
+	if err := validateCIDR("network subnet", in.Subnet); err != nil {
+		return err
+	}
+	if err := validateEnum("network purpose", in.Purpose, "corporate", "guest", "wan"); err != nil {
+		return err
+	}
+	if inputSetsNetworkDomain(in) {
+		return validateDNSName(in.DomainName)
+	}
+	return nil
+}
+
+func inputSetsNetworkName(in NetworkInput) bool    { return in.SetName || in.Name != "" }
+func inputSetsNetworkPurpose(in NetworkInput) bool { return in.SetPurpose || in.Purpose != "" }
+func inputSetsNetworkSubnet(in NetworkInput) bool  { return in.SetSubnet || in.Subnet != "" }
+func inputSetsNetworkDomain(in NetworkInput) bool  { return in.SetDomainName || in.DomainName != "" }

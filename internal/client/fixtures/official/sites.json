@@ -1,0 +1,10 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 2,
+  "totalCount": 2,
+  "data": [
+    {"id": "site-uuid", "internalReference": "default", "name": "Default"},
+    {"id": "site-lab", "internalReference": "lab", "name": "Lab"}
+  ]
+}

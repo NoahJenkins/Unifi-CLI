@@ -49,19 +49,25 @@ func newNetworkGetCmd() *cobra.Command {
 
 func newNetworkCreateCmd() *cobra.Command {
 	var (
-		name    string
-		vlan    int
-		subnet  string
-		purpose string
+		name       string
+		vlan       int
+		subnet     string
+		purpose    string
+		domainName string
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a network",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.NetworkInput{
-				Name:    name,
-				Purpose: purpose,
-				Subnet:  subnet,
+				Name:          name,
+				SetName:       true,
+				Purpose:       purpose,
+				SetPurpose:    true,
+				Subnet:        subnet,
+				SetSubnet:     cmd.Flags().Changed("subnet"),
+				DomainName:    domainName,
+				SetDomainName: cmd.Flags().Changed("domain-name"),
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -74,16 +80,19 @@ func newNetworkCreateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
 	cmd.Flags().StringVar(&purpose, "purpose", "corporate", "purpose (corporate|guest|wan|…)")
+	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
 
 func newNetworkUpdateCmd() *cobra.Command {
 	var (
-		name    string
-		vlan    int
-		subnet  string
-		purpose string
+		name            string
+		vlan            int
+		subnet          string
+		purpose         string
+		domainName      string
+		clearDomainName bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -91,9 +100,15 @@ func newNetworkUpdateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.NetworkInput{
-				Name:    name,
-				Purpose: purpose,
-				Subnet:  subnet,
+				Name:            name,
+				SetName:         cmd.Flags().Changed("name"),
+				Purpose:         purpose,
+				SetPurpose:      cmd.Flags().Changed("purpose"),
+				Subnet:          subnet,
+				SetSubnet:       cmd.Flags().Changed("subnet"),
+				DomainName:      domainName,
+				SetDomainName:   cmd.Flags().Changed("domain-name"),
+				ClearDomainName: clearDomainName,
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -106,6 +121,8 @@ func newNetworkUpdateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
 	cmd.Flags().StringVar(&purpose, "purpose", "", "purpose (corporate|guest|wan|…)")
+	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
+	cmd.Flags().BoolVar(&clearDomainName, "clear-domain-name", false, "clear the DHCP domain name")
 	return cmd
 }
 

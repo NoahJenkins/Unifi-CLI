@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
@@ -42,10 +43,27 @@ func NewDeviceService(api DeviceAPI) *DeviceService {
 }
 
 func (s *DeviceService) List(ctx context.Context) ([]Device, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(client.PathStatDevice)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+	raw, official, err := fetchOfficialSite(s.api, ctx, "devices")
+	if err != nil {
 		return nil, err
+	}
+	if !official {
+		path := s.api.SitePath(client.PathStatDevice)
+		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+	} else if supportsOfficialDetails(s.api) {
+		for i, overview := range raw {
+			id := strField(overview, "id")
+			if id == "" {
+				continue
+			}
+			detail, err := fetchOfficialSiteDetail(s.api, ctx, id, "devices")
+			if err != nil {
+				return nil, err
+			}
+			raw[i] = detail
+		}
 	}
 	out := make([]Device, 0, len(raw))
 	for _, m := range raw {
@@ -62,8 +80,31 @@ func (s *DeviceService) Get(ctx context.Context, id string) (Device, error) {
 	return resolve.One(items, id)
 }
 
+func (s *DeviceService) listLegacy(ctx context.Context) ([]Device, error) {
+	var raw []map[string]any
+	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatDevice), nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Device, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, NormalizeDevice(item))
+	}
+	return out, nil
+}
+
+func (s *DeviceService) getLegacy(ctx context.Context, id string) (Device, error) {
+	items, err := s.listLegacy(ctx)
+	if err != nil {
+		return Device{}, err
+	}
+	return resolve.One(items, id)
+}
+
 func (s *DeviceService) Rename(ctx context.Context, id, newName string) (plan.Plan, Device, error) {
-	d, err := s.Get(ctx, id)
+	if err := validateRequired("device name", newName); err != nil {
+		return plan.Plan{}, Device{}, err
+	}
+	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Device{}, err
 	}
@@ -76,7 +117,7 @@ func (s *DeviceService) Rename(ctx context.Context, id, newName string) (plan.Pl
 }
 
 func (s *DeviceService) ApplyRename(ctx context.Context, id, newName string) (Device, error) {
-	d, err := s.Get(ctx, id)
+	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Device{}, err
 	}
@@ -122,7 +163,7 @@ func (s *DeviceService) ApplyAdopt(ctx context.Context, id string) (Device, erro
 }
 
 func (s *DeviceService) Forget(ctx context.Context, id string) (plan.Plan, Device, error) {
-	d, err := s.Get(ctx, id)
+	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Device{}, err
 	}
@@ -138,7 +179,7 @@ func (s *DeviceService) ApplyForget(ctx context.Context, id string) (Device, err
 }
 
 func (s *DeviceService) cmdPlan(ctx context.Context, id, cmd, op string) (plan.Plan, Device, error) {
-	d, err := s.Get(ctx, id)
+	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Device{}, err
 	}
@@ -154,7 +195,7 @@ func (s *DeviceService) cmdPlan(ctx context.Context, id, cmd, op string) (plan.P
 }
 
 func (s *DeviceService) applyDevMgr(ctx context.Context, id, cmd string) (Device, error) {
-	d, err := s.Get(ctx, id)
+	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Device{}, err
 	}
@@ -169,15 +210,21 @@ func (s *DeviceService) applyDevMgr(ctx context.Context, id, cmd string) (Device
 func NormalizeDevice(m map[string]any) Device {
 	d := Device{
 		ID:      strField(m, "_id", "id"),
-		MAC:     strField(m, "mac"),
+		MAC:     strField(m, "mac", "macAddress"),
 		Name:    strField(m, "name", "display_name"),
 		Model:   strField(m, "model"),
 		Type:    strField(m, "type"),
-		IP:      strField(m, "ip", "last_ip"),
-		Version: strField(m, "version", "sw_version"),
+		IP:      strField(m, "ip", "last_ip", "ipAddress"),
+		Version: strField(m, "version", "sw_version", "firmwareVersion"),
 		Adopted: boolField(m, "adopted"),
 		State:   mapDeviceState(m["state"]),
 		Uplink:  uplinkMAC(m),
+	}
+	if d.Type == "" {
+		d.Type = officialDeviceType(m["features"])
+	}
+	if _, official := m["macAddress"]; official {
+		d.Adopted = true
 	}
 	return d
 }
@@ -186,7 +233,28 @@ func mapDeviceState(v any) string {
 	n, ok := asInt(v)
 	if !ok {
 		if s, ok := v.(string); ok && s != "" {
-			return s
+			switch strings.ToUpper(s) {
+			case "ONLINE":
+				return "connected"
+			case "OFFLINE":
+				return "disconnected"
+			case "PENDING_ADOPTION":
+				return "pending"
+			case "UPDATING":
+				return "upgrading"
+			case "GETTING_READY":
+				return "provisioning"
+			case "CONNECTION_INTERRUPTED":
+				return "heartbeat_missed"
+			case "ADOPTING":
+				return "adopting"
+			case "DELETING":
+				return "deleting"
+			case "ISOLATED":
+				return "isolated"
+			default:
+				return strings.ToLower(s)
+			}
 		}
 		return "unknown"
 	}
@@ -225,7 +293,29 @@ func uplinkMAC(m map[string]any) string {
 	if !ok {
 		return ""
 	}
-	return strField(u, "uplink_mac", "mac")
+	return strField(u, "uplink_mac", "mac", "deviceId")
+}
+
+func officialDeviceType(v any) string {
+	features := map[string]bool{}
+	for _, feature := range anyStringSlice(v) {
+		features[feature] = true
+	}
+	if featureMap, ok := v.(map[string]any); ok {
+		for feature := range featureMap {
+			features[feature] = true
+		}
+	}
+	switch {
+	case features["gateway"]:
+		return "gateway"
+	case features["switching"]:
+		return "switch"
+	case features["accessPoint"]:
+		return "access_point"
+	default:
+		return ""
+	}
 }
 
 func strField(m map[string]any, keys ...string) string {

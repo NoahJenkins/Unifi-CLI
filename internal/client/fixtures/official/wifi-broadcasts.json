@@ -1,0 +1,29 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 2,
+  "totalCount": 2,
+  "data": [
+    {
+      "type": "STANDARD",
+      "id": "wifi-main",
+      "name": "Main",
+      "enabled": true,
+      "metadata": {"origin": "USER"},
+      "network": {"type": "SPECIFIC", "networkId": "network-lan"},
+      "securityConfiguration": {"type": "WPA2_PERSONAL"},
+      "broadcastingFrequenciesGHz": [2.4, 5]
+    },
+    {
+      "type": "STANDARD",
+      "id": "wifi-guest",
+      "name": "Guest",
+      "enabled": false,
+      "metadata": {"origin": "USER"},
+      "network": {"type": "SPECIFIC", "networkId": "network-iot"},
+      "securityConfiguration": {"type": "OPEN"},
+      "broadcastingFrequenciesGHz": [5],
+      "hotspotConfiguration": {"type": "CAPTIVE_PORTAL"}
+    }
+  ]
+}

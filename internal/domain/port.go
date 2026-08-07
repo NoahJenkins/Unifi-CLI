@@ -32,12 +32,16 @@ type Port struct {
 
 // PortInput is the update payload from CLI flags.
 type PortInput struct {
-	Name       string
-	POE        string
-	SetPOE     bool
-	Enabled    bool
-	SetEnabled bool
-	Profile    string
+	Name         string
+	SetName      bool
+	ClearName    bool
+	POE          string
+	SetPOE       bool
+	Enabled      bool
+	SetEnabled   bool
+	Profile      string
+	SetProfile   bool
+	ClearProfile bool
 }
 
 type PortService struct {
@@ -49,6 +53,12 @@ func NewPortService(api PortAPI) *PortService {
 }
 
 func (s *PortService) List(ctx context.Context, deviceQuery string) ([]Port, error) {
+	if raw, official, err := fetchOfficialSite(s.api, ctx, "devices"); official {
+		if err != nil {
+			return nil, err
+		}
+		return s.listOfficial(ctx, raw, deviceQuery)
+	}
 	raw, err := s.loadDevices(ctx)
 	if err != nil {
 		return nil, err
@@ -70,7 +80,34 @@ func (s *PortService) List(ctx context.Context, deviceQuery string) ([]Port, err
 	return out, nil
 }
 
+func (s *PortService) listOfficial(ctx context.Context, raw []map[string]any, deviceQuery string) ([]Port, error) {
+	selected := raw
+	if deviceQuery != "" {
+		dev, err := resolveDeviceRaw(raw, deviceQuery)
+		if err != nil {
+			return nil, err
+		}
+		selected = []map[string]any{dev}
+	}
+	out := make([]Port, 0)
+	for _, overview := range selected {
+		id := strField(overview, "id")
+		if id == "" {
+			continue
+		}
+		detail, err := fetchOfficialSiteDetail(s.api, ctx, id, "devices")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ExtractOfficialPortsFromDevice(detail)...)
+	}
+	return out, nil
+}
+
 func (s *PortService) Get(ctx context.Context, deviceQuery string, portIdx int) (Port, error) {
+	if err := validatePortIndex(portIdx); err != nil {
+		return Port{}, err
+	}
 	ports, err := s.List(ctx, deviceQuery)
 	if err != nil {
 		return Port{}, err
@@ -87,6 +124,9 @@ func (s *PortService) Get(ctx context.Context, deviceQuery string, portIdx int) 
 }
 
 func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (plan.Plan, Port, error) {
+	if err := validatePortUpdate(portIdx, in); err != nil {
+		return plan.Plan{}, Port{}, err
+	}
 	cur, _, err := s.loadAuthoritativePort(ctx, deviceQuery, portIdx)
 	if err != nil {
 		return plan.Plan{}, Port{}, err
@@ -103,6 +143,9 @@ func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx in
 }
 
 func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (Port, error) {
+	if err := validatePortUpdate(portIdx, in); err != nil {
+		return Port{}, err
+	}
 	cur, existing, err := s.loadAuthoritativePort(ctx, deviceQuery, portIdx)
 	if err != nil {
 		return Port{}, err
@@ -117,8 +160,11 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 	}
 
 	// apply local view
-	if in.Name != "" {
+	if inputSetsPortName(in) {
 		cur.Name = in.Name
+	}
+	if in.ClearName {
+		cur.Name = ""
 	}
 	if in.SetPOE {
 		cur.POE = in.POE
@@ -126,8 +172,11 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 	if in.SetEnabled {
 		cur.Enabled = in.Enabled
 	}
-	if in.Profile != "" {
+	if inputSetsPortProfile(in) {
 		cur.Profile = in.Profile
+	}
+	if in.ClearProfile {
+		cur.Profile = ""
 	}
 	return cur, nil
 }
@@ -234,6 +283,36 @@ func ExtractPortsFromDevice(dev map[string]any) []Port {
 	return out
 }
 
+func ExtractOfficialPortsFromDevice(dev map[string]any) []Port {
+	interfaces, _ := dev["interfaces"].(map[string]any)
+	rows := sliceOfMaps(interfaces["ports"])
+	out := make([]Port, 0, len(rows))
+	for _, row := range rows {
+		idx, ok := asInt(row["idx"])
+		if !ok || idx < 1 {
+			continue
+		}
+		poe := ""
+		if config, ok := row["poe"].(map[string]any); ok {
+			if boolField(config, "enabled") {
+				poe = "auto"
+			} else {
+				poe = "off"
+			}
+		}
+		out = append(out, Port{
+			DeviceID:   strField(dev, "id"),
+			DeviceName: strField(dev, "name"),
+			PortIdx:    idx,
+			Media:      strField(row, "connector"),
+			Speed:      speedString(row["speedMbps"]),
+			POE:        poe,
+			Enabled:    true,
+		})
+	}
+	return out
+}
+
 // MergePortOverrides merges patch into existing overrides by port_idx (replace fields, append if new).
 func MergePortOverrides(existing []map[string]any, patch map[string]any) []map[string]any {
 	idx, ok := asInt(patch["port_idx"])
@@ -305,8 +384,11 @@ func resolveDeviceRaw(raw []map[string]any, query string) (map[string]any, error
 
 func portInputOverride(portIdx int, in PortInput) map[string]any {
 	patch := map[string]any{"port_idx": portIdx}
-	if in.Name != "" {
+	if inputSetsPortName(in) {
 		patch["name"] = in.Name
+	}
+	if in.ClearName {
+		patch["name"] = ""
 	}
 	if in.SetPOE {
 		patch["poe_mode"] = in.POE
@@ -314,8 +396,11 @@ func portInputOverride(portIdx int, in PortInput) map[string]any {
 	if in.SetEnabled {
 		patch["enable"] = in.Enabled
 	}
-	if in.Profile != "" {
+	if inputSetsPortProfile(in) {
 		patch["portconf_id"] = in.Profile
+	}
+	if in.ClearProfile {
+		patch["portconf_id"] = ""
 	}
 	return patch
 }
@@ -337,8 +422,11 @@ func portSnapshot(p Port) map[string]any {
 
 func mergePortAfter(p Port, in PortInput) map[string]any {
 	after := portSnapshot(p)
-	if in.Name != "" {
+	if inputSetsPortName(in) {
 		after["name"] = in.Name
+	}
+	if in.ClearName {
+		after["name"] = ""
 	}
 	if in.SetPOE {
 		after["poe"] = in.POE
@@ -346,11 +434,37 @@ func mergePortAfter(p Port, in PortInput) map[string]any {
 	if in.SetEnabled {
 		after["enabled"] = in.Enabled
 	}
-	if in.Profile != "" {
+	if inputSetsPortProfile(in) {
 		after["profile"] = in.Profile
+	}
+	if in.ClearProfile {
+		after["profile"] = ""
 	}
 	return after
 }
+
+func validatePortUpdate(portIdx int, in PortInput) error {
+	if err := validatePortIndex(portIdx); err != nil {
+		return err
+	}
+	if !inputSetsPortName(in) && !in.ClearName && !in.SetPOE && !in.SetEnabled &&
+		!inputSetsPortProfile(in) && !in.ClearProfile {
+		return apperr.New(apperr.ValidationFailed, "port update requires at least one changed field")
+	}
+	if in.ClearName && inputSetsPortName(in) {
+		return apperr.New(apperr.ValidationFailed, "use either port name or clear name, not both")
+	}
+	if in.ClearProfile && inputSetsPortProfile(in) {
+		return apperr.New(apperr.ValidationFailed, "use either port profile or clear profile, not both")
+	}
+	if in.SetPOE {
+		return validateEnum("PoE mode", in.POE, "auto", "off", "pasv24", "passthrough")
+	}
+	return nil
+}
+
+func inputSetsPortName(in PortInput) bool    { return in.SetName || in.Name != "" }
+func inputSetsPortProfile(in PortInput) bool { return in.SetProfile || in.Profile != "" }
 
 func sliceOfMaps(v any) []map[string]any {
 	if v == nil {

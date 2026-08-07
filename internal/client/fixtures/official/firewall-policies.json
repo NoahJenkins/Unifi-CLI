@@ -1,0 +1,21 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "policy-allow-dns",
+      "name": "Allow DNS",
+      "description": "Permit DNS from internal clients",
+      "enabled": true,
+      "index": 100,
+      "action": {"type": "ALLOW"},
+      "source": {"zoneId": "zone-internal"},
+      "destination": {"zoneId": "zone-gateway"},
+      "ipProtocolScope": {"type": "IPV4", "protocolFilter": {"type": "PRESET", "protocolPreset": "UDP"}},
+      "loggingEnabled": false,
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

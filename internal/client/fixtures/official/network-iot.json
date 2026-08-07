@@ -1,0 +1,14 @@
+{
+  "id": "network-iot",
+  "name": "IoT",
+  "enabled": true,
+  "default": false,
+  "management": "GATEWAY",
+  "vlanId": 20,
+  "metadata": {"origin": "USER"},
+  "ipv4Configuration": {
+    "hostIpAddress": "198.51.100.1",
+    "prefixLength": 24,
+    "autoScaleEnabled": false
+  }
+}

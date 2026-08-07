@@ -78,10 +78,14 @@ func newWlanCreateCmd() *cobra.Command {
 				return emitErr("wlan", "create", err)
 			}
 			in := domain.WlanInput{
-				Name:     name,
-				Security: security,
-				Network:  network,
-				Password: secret,
+				Name:        name,
+				SetName:     true,
+				Security:    security,
+				SetSecurity: true,
+				Network:     network,
+				SetNetwork:  cmd.Flags().Changed("network"),
+				Password:    secret,
+				SetPassword: password || passwordStdin,
 			}
 			return runWlanCreate(in)
 		},
@@ -113,10 +117,14 @@ func newWlanUpdateCmd() *cobra.Command {
 				return emitErr("wlan", "update", err)
 			}
 			in := domain.WlanInput{
-				Name:     name,
-				Security: security,
-				Network:  network,
-				Password: secret,
+				Name:        name,
+				SetName:     cmd.Flags().Changed("name"),
+				Security:    security,
+				SetSecurity: cmd.Flags().Changed("security"),
+				Network:     network,
+				SetNetwork:  cmd.Flags().Changed("network"),
+				Password:    secret,
+				SetPassword: password || passwordStdin,
 			}
 			return runWlanUpdate(args[0], in)
 		},

@@ -1,0 +1,18 @@
+{
+  "id": "device-gateway",
+  "configurationId": "config-gateway",
+  "macAddress": "aa:bb:cc:dd:ee:01",
+  "name": "Gateway",
+  "model": "UDM-SE",
+  "state": "ONLINE",
+  "ipAddress": "192.0.2.1",
+  "firmwareVersion": "4.3.6",
+  "features": {"gateway": {}, "switching": {}},
+  "interfaces": {
+    "ports": [
+      {"idx": 1, "connector": "RJ45", "maxSpeedMbps": 2500, "speedMbps": 1000, "state": "UP", "poe": {"enabled": true, "standard": "802.3at", "state": "UP", "type": 2}}
+    ]
+  },
+  "firmwareUpdatable": false,
+  "supported": true
+}

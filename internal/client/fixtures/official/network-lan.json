@@ -1,0 +1,22 @@
+{
+  "id": "network-lan",
+  "name": "LAN",
+  "enabled": true,
+  "default": true,
+  "management": "GATEWAY",
+  "vlanId": 1,
+  "metadata": {"origin": "SYSTEM"},
+  "ipv4Configuration": {
+    "hostIpAddress": "192.0.2.1",
+    "prefixLength": 24,
+    "autoScaleEnabled": false,
+    "dhcpConfiguration": {
+      "mode": "SERVER",
+      "domainName": "example.test",
+      "dnsServerIpAddressesOverride": ["192.0.2.53", "2001:db8::53"],
+      "ipAddressRange": {"start": "192.0.2.10", "stop": "192.0.2.200"},
+      "leaseTimeSeconds": 86400,
+      "pingConflictDetectionEnabled": true
+    }
+  }
+}

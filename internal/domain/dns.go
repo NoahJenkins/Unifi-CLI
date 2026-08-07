@@ -336,10 +336,15 @@ func (s *DNSService) ApplyDelete(ctx context.Context, id string) (DNSRecord, err
 }
 
 func (s *DNSService) ListResolvers(ctx context.Context) ([]DNSResolver, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(client.PathRestNetwork)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+	raw, official, err := fetchNetworkObjects(ctx, s.api)
+	if err != nil {
 		return nil, err
+	}
+	if !official {
+		path := s.api.SitePath(client.PathRestNetwork)
+		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]DNSResolver, 0, len(raw))
 	for _, m := range raw {
@@ -349,6 +354,9 @@ func (s *DNSService) ListResolvers(ctx context.Context) ([]DNSResolver, error) {
 }
 
 func (s *DNSService) SetResolvers(ctx context.Context, networkQuery string, servers []string) (plan.Plan, DNSResolver, error) {
+	if err := validateResolvers(servers); err != nil {
+		return plan.Plan{}, DNSResolver{}, err
+	}
 	r, err := s.getResolver(ctx, networkQuery)
 	if err != nil {
 		return plan.Plan{}, DNSResolver{}, err
@@ -369,6 +377,9 @@ func (s *DNSService) SetResolvers(ctx context.Context, networkQuery string, serv
 }
 
 func (s *DNSService) ApplySetResolvers(ctx context.Context, networkQuery string, servers []string) (DNSResolver, error) {
+	if err := validateResolvers(servers); err != nil {
+		return DNSResolver{}, err
+	}
 	r, err := s.getResolver(ctx, networkQuery)
 	if err != nil {
 		return DNSResolver{}, err
@@ -474,6 +485,13 @@ func NormalizeDNSResolver(m map[string]any) DNSResolver {
 }
 
 func extractNetworkDNS(m map[string]any, wan bool) []string {
+	if ipv4, ok := m["ipv4Configuration"].(map[string]any); ok {
+		if dhcp, ok := ipv4["dhcpConfiguration"].(map[string]any); ok {
+			if servers := anyStringSlice(dhcp["dnsServerIpAddressesOverride"]); len(servers) > 0 {
+				return servers
+			}
+		}
+	}
 	// Prefer dns_nameservers array when present.
 	if v, ok := m["dns_nameservers"]; ok {
 		if ss := anyStringSlice(v); len(ss) > 0 {
@@ -762,4 +780,16 @@ func resolverSetBody(r DNSResolver, servers []string) map[string]any {
 	// Keep dns_nameservers in sync: list prefers it when non-empty.
 	body["dns_nameservers"] = append([]string(nil), servers...)
 	return body
+}
+
+func validateResolvers(servers []string) error {
+	if len(servers) < 1 || len(servers) > 4 {
+		return apperr.New(apperr.ValidationFailed, "DNS resolvers require 1 to 4 IP addresses")
+	}
+	for _, server := range servers {
+		if _, err := netip.ParseAddr(server); err != nil {
+			return apperr.Newf(apperr.ValidationFailed, "DNS resolver %q must be a valid IP address", server)
+		}
+	}
+	return nil
 }

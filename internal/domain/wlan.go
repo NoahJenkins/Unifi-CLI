@@ -33,13 +33,18 @@ func (w Wlan) GetName() string { return w.Name }
 
 // WlanInput is the create/update payload from CLI flags.
 type WlanInput struct {
-	Name     string
-	Security string
-	Network  string
-	Password string
-	Band     string
-	Guest    bool
-	SetGuest bool
+	Name        string
+	SetName     bool
+	Security    string
+	SetSecurity bool
+	Network     string
+	SetNetwork  bool
+	Password    string
+	SetPassword bool
+	Band        string
+	SetBand     bool
+	Guest       bool
+	SetGuest    bool
 }
 
 type WlanService struct {
@@ -51,10 +56,15 @@ func NewWlanService(api WlanAPI) *WlanService {
 }
 
 func (s *WlanService) List(ctx context.Context) ([]Wlan, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(client.PathRestWlan)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+	raw, official, err := fetchOfficialSite(s.api, ctx, "wifi", "broadcasts")
+	if err != nil {
 		return nil, err
+	}
+	if !official {
+		path := s.api.SitePath(client.PathRestWlan)
+		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]Wlan, 0, len(raw))
 	for _, m := range raw {
@@ -71,8 +81,31 @@ func (s *WlanService) Get(ctx context.Context, id string) (Wlan, error) {
 	return resolve.One(items, id)
 }
 
+func (s *WlanService) listLegacy(ctx context.Context) ([]Wlan, error) {
+	var raw []map[string]any
+	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathRestWlan), nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Wlan, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, NormalizeWlan(item))
+	}
+	return out, nil
+}
+
+func (s *WlanService) getLegacy(ctx context.Context, id string) (Wlan, error) {
+	items, err := s.listLegacy(ctx)
+	if err != nil {
+		return Wlan{}, err
+	}
+	return resolve.One(items, id)
+}
+
 func (s *WlanService) Create(ctx context.Context, in WlanInput) (plan.Plan, error) {
 	_ = ctx
+	if err := validateWlanCreate(in); err != nil {
+		return plan.Plan{}, err
+	}
 	after := wlanPlanAfter(in)
 	p := plan.Create("wlan", in.Name,
 		fmt.Sprintf("create wlan %s", in.Name),
@@ -82,6 +115,9 @@ func (s *WlanService) Create(ctx context.Context, in WlanInput) (plan.Plan, erro
 }
 
 func (s *WlanService) ApplyCreate(ctx context.Context, in WlanInput) (Wlan, error) {
+	if err := validateWlanCreate(in); err != nil {
+		return Wlan{}, err
+	}
 	path := s.api.SitePath(client.PathRestWlan)
 	body := wlanInputBody(in)
 	var raw []map[string]any
@@ -102,7 +138,10 @@ func (s *WlanService) ApplyCreate(ctx context.Context, in WlanInput) (Wlan, erro
 }
 
 func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan.Plan, Wlan, error) {
-	w, err := s.Get(ctx, id)
+	if err := validateWlanUpdate(in); err != nil {
+		return plan.Plan{}, Wlan{}, err
+	}
+	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Wlan{}, err
 	}
@@ -120,7 +159,10 @@ func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan
 }
 
 func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) (Wlan, error) {
-	w, err := s.Get(ctx, id)
+	if err := validateWlanUpdate(in); err != nil {
+		return Wlan{}, err
+	}
+	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Wlan{}, err
 	}
@@ -132,16 +174,16 @@ func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) 
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
 		return Wlan{}, err
 	}
-	if in.Name != "" {
+	if inputSetsWlanName(in) {
 		w.Name = in.Name
 	}
-	if in.Security != "" {
+	if inputSetsWlanSecurity(in) {
 		w.Security = in.Security
 	}
-	if in.Network != "" {
+	if inputSetsWlanNetwork(in) {
 		w.NetworkID = in.Network
 	}
-	if in.Band != "" {
+	if inputSetsWlanBand(in) {
 		w.Band = in.Band
 	}
 	if in.SetGuest {
@@ -151,7 +193,7 @@ func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) 
 }
 
 func validateWlanSecurityTransition(current Wlan, in WlanInput) error {
-	if strings.EqualFold(current.Security, "open") && in.Security != "" &&
+	if strings.EqualFold(current.Security, "open") && inputSetsWlanSecurity(in) &&
 		!strings.EqualFold(in.Security, "open") && in.Password == "" {
 		return apperr.New(apperr.ValidationFailed, "securing an open WLAN requires a password")
 	}
@@ -159,7 +201,7 @@ func validateWlanSecurityTransition(current Wlan, in WlanInput) error {
 }
 
 func (s *WlanService) Delete(ctx context.Context, id string) (plan.Plan, Wlan, error) {
-	w, err := s.Get(ctx, id)
+	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Wlan{}, err
 	}
@@ -171,7 +213,7 @@ func (s *WlanService) Delete(ctx context.Context, id string) (plan.Plan, Wlan, e
 }
 
 func (s *WlanService) ApplyDelete(ctx context.Context, id string) (Wlan, error) {
-	w, err := s.Get(ctx, id)
+	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Wlan{}, err
 	}
@@ -199,7 +241,7 @@ func (s *WlanService) ApplyDisable(ctx context.Context, id string) (Wlan, error)
 }
 
 func (s *WlanService) setEnabledPlan(ctx context.Context, id string, enabled bool) (plan.Plan, Wlan, error) {
-	w, err := s.Get(ctx, id)
+	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Wlan{}, err
 	}
@@ -218,7 +260,7 @@ func (s *WlanService) setEnabledPlan(ctx context.Context, id string, enabled boo
 }
 
 func (s *WlanService) applySetEnabled(ctx context.Context, id string, enabled bool) (Wlan, error) {
-	w, err := s.Get(ctx, id)
+	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Wlan{}, err
 	}
@@ -232,7 +274,7 @@ func (s *WlanService) applySetEnabled(ctx context.Context, id string, enabled bo
 }
 
 func NormalizeWlan(m map[string]any) Wlan {
-	return Wlan{
+	w := Wlan{
 		ID:        strField(m, "_id", "id"),
 		Name:      strField(m, "name"),
 		Enabled:   boolField(m, "enabled"),
@@ -241,23 +283,66 @@ func NormalizeWlan(m map[string]any) Wlan {
 		Band:      strField(m, "wlan_band", "band"),
 		Guest:     boolField(m, "is_guest"),
 	}
+	if security, ok := m["securityConfiguration"].(map[string]any); ok {
+		w.Security = strings.ToLower(strField(security, "type"))
+	}
+	if network, ok := m["network"].(map[string]any); ok {
+		w.NetworkID = strField(network, "networkId")
+	}
+	if frequencies := numberSlice(m["broadcastingFrequenciesGHz"]); len(frequencies) > 0 {
+		w.Band = officialBand(frequencies)
+	}
+	if _, ok := m["hotspotConfiguration"].(map[string]any); ok {
+		w.Guest = true
+	}
+	return w
+}
+
+func numberSlice(v any) []float64 {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]float64, 0, len(raw))
+	for _, item := range raw {
+		if number, ok := item.(float64); ok {
+			out = append(out, number)
+		}
+	}
+	return out
+}
+
+func officialBand(frequencies []float64) string {
+	if len(frequencies) > 1 {
+		return "both"
+	}
+	switch frequencies[0] {
+	case 2.4:
+		return "2g"
+	case 5:
+		return "5g"
+	case 6:
+		return "6g"
+	default:
+		return anyToString(frequencies[0])
+	}
 }
 
 func wlanInputBody(in WlanInput) map[string]any {
 	body := map[string]any{}
-	if in.Name != "" {
+	if inputSetsWlanName(in) {
 		body["name"] = in.Name
 	}
-	if in.Security != "" {
+	if inputSetsWlanSecurity(in) {
 		body["security"] = in.Security
 	}
-	if in.Network != "" {
+	if inputSetsWlanNetwork(in) {
 		body["networkconf_id"] = in.Network
 	}
-	if in.Password != "" {
+	if inputSetsWlanPassword(in) {
 		body["x_passphrase"] = in.Password
 	}
-	if in.Band != "" {
+	if inputSetsWlanBand(in) {
 		body["wlan_band"] = in.Band
 	}
 	if in.SetGuest {
@@ -269,19 +354,19 @@ func wlanInputBody(in WlanInput) map[string]any {
 // wlanPlanAfter builds the dry-run after map; password is always masked as ***.
 func wlanPlanAfter(in WlanInput) map[string]any {
 	after := map[string]any{}
-	if in.Name != "" {
+	if inputSetsWlanName(in) {
 		after["name"] = in.Name
 	}
-	if in.Security != "" {
+	if inputSetsWlanSecurity(in) {
 		after["security"] = in.Security
 	}
-	if in.Network != "" {
+	if inputSetsWlanNetwork(in) {
 		after["network"] = in.Network
 	}
-	if in.Password != "" {
+	if inputSetsWlanPassword(in) {
 		after["password"] = "***"
 	}
-	if in.Band != "" {
+	if inputSetsWlanBand(in) {
 		after["band"] = in.Band
 	}
 	if in.SetGuest {
@@ -304,19 +389,19 @@ func wlanSnapshot(w Wlan) map[string]any {
 
 func mergeWlanAfter(w Wlan, in WlanInput) map[string]any {
 	after := wlanSnapshot(w)
-	if in.Name != "" {
+	if inputSetsWlanName(in) {
 		after["name"] = in.Name
 	}
-	if in.Security != "" {
+	if inputSetsWlanSecurity(in) {
 		after["security"] = in.Security
 	}
-	if in.Network != "" {
+	if inputSetsWlanNetwork(in) {
 		after["network_id"] = in.Network
 	}
-	if in.Password != "" {
+	if inputSetsWlanPassword(in) {
 		after["password"] = "***"
 	}
-	if in.Band != "" {
+	if inputSetsWlanBand(in) {
 		after["band"] = in.Band
 	}
 	if in.SetGuest {
@@ -324,3 +409,41 @@ func mergeWlanAfter(w Wlan, in WlanInput) map[string]any {
 	}
 	return after
 }
+
+func validateWlanCreate(in WlanInput) error {
+	if err := validateRequired("WLAN name", in.Name); err != nil {
+		return err
+	}
+	if err := validateRequired("WLAN security", in.Security); err != nil {
+		return err
+	}
+	return validateWlanFields(in)
+}
+
+func validateWlanUpdate(in WlanInput) error {
+	if !inputSetsWlanName(in) && !inputSetsWlanSecurity(in) && !inputSetsWlanNetwork(in) &&
+		!inputSetsWlanPassword(in) && !inputSetsWlanBand(in) && !in.SetGuest {
+		return apperr.New(apperr.ValidationFailed, "WLAN update requires at least one changed field")
+	}
+	if inputSetsWlanName(in) {
+		if err := validateRequired("WLAN name", in.Name); err != nil {
+			return err
+		}
+	}
+	return validateWlanFields(in)
+}
+
+func validateWlanFields(in WlanInput) error {
+	if err := validateEnum("WLAN security", in.Security,
+		"open", "wpapsk", "wpaeap", "wpa2_personal", "wpa3_personal", "wpa2_wpa3_personal",
+		"wpa2_enterprise", "wpa3_enterprise", "wpa2_wpa3_enterprise"); err != nil {
+		return err
+	}
+	return validateEnum("WLAN band", in.Band, "2g", "5g", "6g", "both")
+}
+
+func inputSetsWlanName(in WlanInput) bool     { return in.SetName || in.Name != "" }
+func inputSetsWlanSecurity(in WlanInput) bool { return in.SetSecurity || in.Security != "" }
+func inputSetsWlanNetwork(in WlanInput) bool  { return in.SetNetwork || in.Network != "" }
+func inputSetsWlanPassword(in WlanInput) bool { return in.SetPassword || in.Password != "" }
+func inputSetsWlanBand(in WlanInput) bool     { return in.SetBand || in.Band != "" }

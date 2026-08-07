@@ -1,11 +1,6 @@
 package domain
 
-import (
-	"context"
-	"net/http"
-
-	"github.com/noahjenkins/unifi-cli/internal/client"
-)
+import "context"
 
 type SystemAPI interface {
 	Do(ctx context.Context, method, path string, in, out any) error
@@ -34,12 +29,12 @@ func NewSystemService(api SystemAPI) *SystemService {
 }
 
 func (s *SystemService) Health(ctx context.Context) (Health, error) {
-	var devices []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatDevice), nil, &devices); err != nil {
+	devices, err := NewDeviceService(s.api).List(ctx)
+	if err != nil {
 		return Health{}, err
 	}
-	var clients []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatSta), nil, &clients); err != nil {
+	clients, err := NewClientService(s.api).List(ctx)
+	if err != nil {
 		return Health{}, err
 	}
 
@@ -49,8 +44,7 @@ func (s *SystemService) Health(ctx context.Context) (Health, error) {
 	}
 	adoptedTotal := 0
 	adoptedConnected := 0
-	for _, m := range devices {
-		d := NormalizeDevice(m)
+	for _, d := range devices {
 		if d.State == "connected" {
 			h.DeviceConnected++
 		}
@@ -62,17 +56,6 @@ func (s *SystemService) Health(ctx context.Context) (Health, error) {
 		}
 	}
 	h.Status = healthStatus(adoptedTotal, adoptedConnected, h.DeviceTotal, h.DeviceConnected)
-
-	// Optional subsystems from stat/health when present.
-	var rawHealth []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatHealth), nil, &rawHealth); err == nil {
-		for _, m := range rawHealth {
-			h.Subsystems = append(h.Subsystems, HealthSubsystem{
-				Name:   strField(m, "subsystem", "name"),
-				Status: strField(m, "status", "state"),
-			})
-		}
-	}
 
 	return h, nil
 }

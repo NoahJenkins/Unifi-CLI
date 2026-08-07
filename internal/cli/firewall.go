@@ -52,30 +52,39 @@ func newFirewallGetCmd() *cobra.Command {
 
 func newFirewallCreateCmd() *cobra.Command {
 	var (
-		name     string
-		enabled  bool
-		action   string
-		ruleset  string
-		src      string
-		dst      string
-		protocol string
-		index    int
+		name        string
+		description string
+		enabled     bool
+		action      string
+		ruleset     string
+		src         string
+		dst         string
+		protocol    string
+		index       int
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a firewall rule",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.FirewallInput{
-				Name:       name,
-				Enabled:    enabled,
-				SetEnabled: true,
-				Action:     action,
-				Ruleset:    ruleset,
-				Src:        src,
-				Dst:        dst,
-				Protocol:   protocol,
-				Index:      index,
-				SetIndex:   cmd.Flags().Changed("index"),
+				Name:           name,
+				SetName:        true,
+				Description:    description,
+				SetDescription: cmd.Flags().Changed("description"),
+				Enabled:        enabled,
+				SetEnabled:     true,
+				Action:         action,
+				SetAction:      true,
+				Ruleset:        ruleset,
+				SetRuleset:     true,
+				Src:            src,
+				SetSrc:         cmd.Flags().Changed("src"),
+				Dst:            dst,
+				SetDst:         cmd.Flags().Changed("dst"),
+				Protocol:       protocol,
+				SetProtocol:    cmd.Flags().Changed("protocol"),
+				Index:          index,
+				SetIndex:       cmd.Flags().Changed("index"),
 			}
 			if !cmd.Flags().Changed("enabled") {
 				in.Enabled = true
@@ -84,6 +93,7 @@ func newFirewallCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "rule name")
+	cmd.Flags().StringVar(&description, "description", "", "rule description")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "rule enabled")
 	cmd.Flags().StringVar(&action, "action", "", "accept|drop|reject")
 	cmd.Flags().StringVar(&ruleset, "ruleset", "", "e.g. LAN_IN, WAN_IN")
@@ -99,14 +109,18 @@ func newFirewallCreateCmd() *cobra.Command {
 
 func newFirewallUpdateCmd() *cobra.Command {
 	var (
-		name     string
-		enabled  bool
-		action   string
-		ruleset  string
-		src      string
-		dst      string
-		protocol string
-		index    int
+		name             string
+		description      string
+		clearDescription bool
+		enabled          bool
+		action           string
+		ruleset          string
+		src              string
+		dst              string
+		protocol         string
+		index            int
+		clearSrc         bool
+		clearDst         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -114,12 +128,23 @@ func newFirewallUpdateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.FirewallInput{
-				Name:     name,
-				Action:   action,
-				Ruleset:  ruleset,
-				Src:      src,
-				Dst:      dst,
-				Protocol: protocol,
+				Name:             name,
+				SetName:          cmd.Flags().Changed("name"),
+				Description:      description,
+				SetDescription:   cmd.Flags().Changed("description"),
+				ClearDescription: clearDescription,
+				Action:           action,
+				SetAction:        cmd.Flags().Changed("action"),
+				Ruleset:          ruleset,
+				SetRuleset:       cmd.Flags().Changed("ruleset"),
+				Src:              src,
+				SetSrc:           cmd.Flags().Changed("src"),
+				ClearSrc:         clearSrc,
+				Dst:              dst,
+				SetDst:           cmd.Flags().Changed("dst"),
+				ClearDst:         clearDst,
+				Protocol:         protocol,
+				SetProtocol:      cmd.Flags().Changed("protocol"),
 			}
 			if cmd.Flags().Changed("enabled") {
 				in.Enabled = enabled
@@ -133,11 +158,15 @@ func newFirewallUpdateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "rule name")
+	cmd.Flags().StringVar(&description, "description", "", "rule description")
+	cmd.Flags().BoolVar(&clearDescription, "clear-description", false, "clear the rule description")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "rule enabled")
 	cmd.Flags().StringVar(&action, "action", "", "accept|drop|reject")
 	cmd.Flags().StringVar(&ruleset, "ruleset", "", "e.g. LAN_IN, WAN_IN")
 	cmd.Flags().StringVar(&src, "src", "", "source address/network")
 	cmd.Flags().StringVar(&dst, "dst", "", "destination address/network")
+	cmd.Flags().BoolVar(&clearSrc, "clear-src", false, "clear the source address/network")
+	cmd.Flags().BoolVar(&clearDst, "clear-dst", false, "clear the destination address/network")
 	cmd.Flags().StringVar(&protocol, "protocol", "", "all|tcp|udp|…")
 	cmd.Flags().IntVar(&index, "index", 0, "rule index")
 	return cmd
@@ -262,6 +291,7 @@ func runFirewallGet(id string) error {
 	}
 	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(r.ID))
 	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(r.Name))
+	fmt.Fprintf(rt.Out, "description: %s\n", render.SafeText(r.Description))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(r.Enabled))
 	fmt.Fprintf(rt.Out, "action: %s\n", render.SafeText(r.Action))
 	fmt.Fprintf(rt.Out, "ruleset: %s\n", render.SafeText(r.Ruleset))

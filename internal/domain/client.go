@@ -46,10 +46,15 @@ func NewClientService(api ClientAPI) *ClientService {
 }
 
 func (s *ClientService) List(ctx context.Context) ([]Client, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(client.PathStatSta)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+	raw, official, err := fetchOfficialSite(s.api, ctx, "clients")
+	if err != nil {
 		return nil, err
+	}
+	if !official {
+		path := s.api.SitePath(client.PathStatSta)
+		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]Client, 0, len(raw))
 	for _, m := range raw {
@@ -66,6 +71,26 @@ func (s *ClientService) Get(ctx context.Context, id string) (Client, error) {
 	return resolve.One(items, id)
 }
 
+func (s *ClientService) listLegacy(ctx context.Context) ([]Client, error) {
+	var raw []map[string]any
+	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatSta), nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Client, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, NormalizeClient(item))
+	}
+	return out, nil
+}
+
+func (s *ClientService) getLegacy(ctx context.Context, id string) (Client, error) {
+	items, err := s.listLegacy(ctx)
+	if err != nil {
+		return Client{}, err
+	}
+	return resolve.One(items, id)
+}
+
 func (s *ClientService) Reconnect(ctx context.Context, id string) (plan.Plan, Client, error) {
 	return s.cmdPlan(ctx, id, "kick-sta", "reconnect")
 }
@@ -75,7 +100,7 @@ func (s *ClientService) ApplyReconnect(ctx context.Context, id string) (Client, 
 }
 
 func (s *ClientService) Block(ctx context.Context, id string) (plan.Plan, Client, error) {
-	c, err := s.Get(ctx, id)
+	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Client{}, err
 	}
@@ -92,7 +117,7 @@ func (s *ClientService) ApplyBlock(ctx context.Context, id string) (Client, erro
 }
 
 func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Client, error) {
-	c, err := s.Get(ctx, id)
+	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Client{}, err
 	}
@@ -109,7 +134,7 @@ func (s *ClientService) ApplyUnblock(ctx context.Context, id string) (Client, er
 }
 
 func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (plan.Plan, Client, error) {
-	c, err := s.Get(ctx, id)
+	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Client{}, err
 	}
@@ -122,7 +147,7 @@ func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (pl
 }
 
 func (s *ClientService) applyStaMgr(ctx context.Context, id, cmd string, mutate func(*Client)) (Client, error) {
-	c, err := s.Get(ctx, id)
+	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Client{}, err
 	}
@@ -140,15 +165,18 @@ func (s *ClientService) applyStaMgr(ctx context.Context, id, cmd string, mutate 
 func NormalizeClient(m map[string]any) Client {
 	c := Client{
 		ID:       strField(m, "_id", "id"),
-		MAC:      strField(m, "mac"),
+		MAC:      strField(m, "mac", "macAddress"),
 		Hostname: strField(m, "hostname"),
 		Name:     strField(m, "name"),
-		IP:       strField(m, "ip", "last_ip"),
+		IP:       strField(m, "ip", "last_ip", "ipAddress"),
 		ESSID:    strField(m, "essid"),
 		Network:  strField(m, "network", "network_name"),
 		IsWired:  boolField(m, "is_wired"),
 		Blocked:  boolField(m, "blocked"),
-		LastSeen: strField(m, "last_seen"),
+		LastSeen: strField(m, "last_seen", "connectedAt"),
+	}
+	if strField(m, "type") == "WIRED" {
+		c.IsWired = true
 	}
 	if c.Name == "" {
 		c.Name = c.Hostname

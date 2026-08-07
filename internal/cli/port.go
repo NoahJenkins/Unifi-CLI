@@ -56,10 +56,12 @@ func newPortGetCmd() *cobra.Command {
 
 func newPortUpdateCmd() *cobra.Command {
 	var (
-		poe     string
-		name    string
-		profile string
-		enabled bool
+		poe          string
+		name         string
+		profile      string
+		enabled      bool
+		clearName    bool
+		clearProfile bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update <device> <port>",
@@ -71,8 +73,12 @@ func newPortUpdateCmd() *cobra.Command {
 				return emitErr("port", "update", apperr.Newf(apperr.ValidationFailed, "invalid port index %q", args[1]))
 			}
 			in := domain.PortInput{
-				Name:    name,
-				Profile: profile,
+				Name:         name,
+				SetName:      cmd.Flags().Changed("name"),
+				ClearName:    clearName,
+				Profile:      profile,
+				SetProfile:   cmd.Flags().Changed("profile"),
+				ClearProfile: clearProfile,
 			}
 			if cmd.Flags().Changed("poe") {
 				in.POE = poe
@@ -88,6 +94,8 @@ func newPortUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&poe, "poe", "", "PoE mode (auto|off|pasv24|passthrough|…)")
 	cmd.Flags().StringVar(&name, "name", "", "port name")
 	cmd.Flags().StringVar(&profile, "profile", "", "port profile id")
+	cmd.Flags().BoolVar(&clearName, "clear-name", false, "clear the port name")
+	cmd.Flags().BoolVar(&clearProfile, "clear-profile", false, "clear the port profile")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "enable or disable the port")
 	return cmd
 }

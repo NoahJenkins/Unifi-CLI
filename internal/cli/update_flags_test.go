@@ -1,0 +1,42 @@
+package cli
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/noahjenkins/unifi-cli/internal/domain"
+)
+
+func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
+	tests := []struct {
+		name   string
+		typeOf reflect.Type
+		fields []string
+	}{
+		{name: "network", typeOf: reflect.TypeOf(domain.NetworkInput{}), fields: []string{"SetName", "SetPurpose", "SetSubnet", "SetDomainName", "ClearDomainName"}},
+		{name: "wlan", typeOf: reflect.TypeOf(domain.WlanInput{}), fields: []string{"SetName", "SetSecurity", "SetNetwork", "SetPassword", "SetBand"}},
+		{name: "port", typeOf: reflect.TypeOf(domain.PortInput{}), fields: []string{"SetName", "ClearName", "SetProfile"}},
+		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetRuleset", "SetSrc", "ClearSrc", "SetDst", "ClearDst", "SetProtocol"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, field := range tt.fields {
+				if _, ok := tt.typeOf.FieldByName(field); !ok {
+					t.Errorf("%s is missing explicit presence field %s", tt.typeOf.Name(), field)
+				}
+			}
+		})
+	}
+
+	if newNetworkUpdateCmd().Flags().Lookup("clear-domain-name") == nil {
+		t.Error("network update is missing --clear-domain-name")
+	}
+	if newPortUpdateCmd().Flags().Lookup("clear-name") == nil {
+		t.Error("port update is missing --clear-name")
+	}
+	for _, flag := range []string{"description", "clear-description", "clear-src", "clear-dst"} {
+		if newFirewallUpdateCmd().Flags().Lookup(flag) == nil {
+			t.Errorf("firewall update is missing --%s", flag)
+		}
+	}
+}
