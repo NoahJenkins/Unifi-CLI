@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -34,12 +36,17 @@ func New(cfg config.Config) (*Client, error) {
 }
 
 func NewWithStore(cfg config.Config, store authstore.Store) (*Client, error) {
+	var err error
+	cfg, err = validatedConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	apiKey := os.Getenv("UNIFI_API_KEY")
 	if apiKey != "" {
-		return newClient(cfg, apiKey, "environment_api_key", store), nil
+		return newClient(cfg, apiKey, "environment_api_key", store)
 	}
 	if store == nil {
-		return newClient(cfg, "", "", nil), nil
+		return newClient(cfg, "", "", nil)
 	}
 	apiKey, found, err := store.Load(cfg.BaseURL())
 	if err != nil {
@@ -49,25 +56,51 @@ func NewWithStore(cfg config.Config, store authstore.Store) (*Client, error) {
 		)
 	}
 	if !found {
-		return newClient(cfg, "", "", store), nil
+		return newClient(cfg, "", "", store)
 	}
-	return newClient(cfg, apiKey, "saved_api_key", store), nil
+	return newClient(cfg, apiKey, "saved_api_key", store)
 }
 
 func NewWithAPIKey(cfg config.Config, apiKey, method string) (*Client, error) {
-	return newClient(cfg, apiKey, method, nil), nil
+	var err error
+	cfg, err = validatedConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newClient(cfg, apiKey, method, nil)
 }
 
-func newClient(cfg config.Config, apiKey, method string, store authstore.Store) *Client {
-	timeout := cfg.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Second
+func validatedConfig(cfg config.Config) (config.Config, error) {
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 30 * time.Second
+	}
+	if err := cfg.Validate(); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func newClient(cfg config.Config, apiKey, method string, store authstore.Store) (*Client, error) {
+	tlsConfig := &tls.Config{
+		// Local controllers may require either a custom CA or explicit insecure mode.
+		InsecureSkipVerify: cfg.Insecure, //nolint:gosec
+	}
+	if cfg.CACert != "" {
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil || rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
+		caPEM, err := os.ReadFile(cfg.CACert)
+		if err != nil {
+			return nil, fmt.Errorf("load ca_cert: %w", err)
+		}
+		if !rootCAs.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("load ca_cert: no certificates found")
+		}
+		tlsConfig.RootCAs = rootCAs
 	}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			// Local controllers commonly use self-signed certs.
-			InsecureSkipVerify: cfg.Insecure, //nolint:gosec
-		},
+		TLSClientConfig: tlsConfig,
 	}
 	return &Client{
 		cfg:        cfg,
@@ -76,10 +109,11 @@ func newClient(cfg config.Config, apiKey, method string, store authstore.Store) 
 		store:      store,
 		authMethod: method,
 		http: &http.Client{
-			Timeout:   timeout,
-			Transport: transport,
+			Timeout:       cfg.Timeout,
+			Transport:     transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-	}
+	}, nil
 }
 
 // AuthMethod describes the API-key source active for this client.

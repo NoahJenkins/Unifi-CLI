@@ -2,12 +2,16 @@ package client_test
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,6 +84,28 @@ func testConfig(t *testing.T, srv *httptest.Server) config.Config {
 		Site:     "default",
 		Timeout:  5 * time.Second,
 	}
+}
+
+func loadTestConfig(t *testing.T, srv *httptest.Server, extra string) config.Config {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+	host, portStr, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := fmt.Sprintf("host: %q\nport: %s\ntimeout: 5s\n%s", host, portStr, extra)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
 }
 
 func TestEnvironmentAPIKeyWinsOverSavedKey(t *testing.T) {
@@ -283,6 +309,126 @@ func TestNewWithAPIKeyValidatesEnteredKeyWithoutResolvingEnvironment(t *testing.
 	}
 }
 
+func TestCustomCACertificateEstablishesVerifiedTLS(t *testing.T) {
+	tests := []struct {
+		name   string
+		useEnv bool
+	}{
+		{name: "config file"},
+		{name: "environment", useEnv: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, `{"data":[]}`)
+			}))
+			defer srv.Close()
+
+			caPath := filepath.Join(t.TempDir(), "controller-ca.pem")
+			caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+			if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			extra := fmt.Sprintf("ca_cert: %q\n", caPath)
+			if tt.useEnv {
+				t.Setenv("UNIFI_CA_CERT", caPath)
+				extra = ""
+			}
+			cfg := loadTestConfig(t, srv, extra)
+			c, err := client.NewWithAPIKey(cfg, "key", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err != nil {
+				t.Fatalf("Do with custom CA: %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifiedTLSIsDefaultWithoutCustomCAOrInsecureMode(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := loadTestConfig(t, srv, "")
+	c, err := client.NewWithAPIKey(cfg, "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	if !apperr.Is(err, apperr.ControllerUnreachable) {
+		t.Fatalf("Do error = %v, want TLS verification failure", err)
+	}
+	if requests != 0 {
+		t.Fatalf("controller handler requests = %d, want 0 after TLS verification failure", requests)
+	}
+}
+
+func TestNewWithAPIKeyRejectsInvalidTransportConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{
+			name: "non-origin host",
+			cfg:  config.Config{Host: "https://controller.example/path", Port: 443, Timeout: time.Second},
+			want: "host",
+		},
+		{
+			name: "oversized port",
+			cfg:  config.Config{Host: "controller.example", Port: 65536, Timeout: time.Second},
+			want: "port",
+		},
+		{
+			name: "negative timeout",
+			cfg:  config.Config{Host: "controller.example", Port: 443, Timeout: -time.Second},
+			want: "timeout",
+		},
+		{
+			name: "conflicting TLS settings",
+			cfg: config.Config{
+				Host: "controller.example", Port: 443, Timeout: time.Second,
+				Insecure: true, CACert: "does-not-need-to-exist.pem",
+			},
+			want: "insecure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.NewWithAPIKey(tt.cfg, "key", "interactive_api_key")
+			if err == nil {
+				t.Fatal("NewWithAPIKey unexpectedly accepted invalid transport configuration")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewWithStoreRejectsInvalidDestinationBeforeCredentialLookup(t *testing.T) {
+	store := &memoryAPIKeyStore{keys: map[string]string{"https://controller.example:443": "saved-key"}}
+	_, err := client.NewWithStore(config.Config{
+		Host:    "https://controller.example/path",
+		Port:    443,
+		Timeout: time.Second,
+	}, store)
+	if err == nil {
+		t.Fatal("NewWithStore unexpectedly accepted an invalid destination")
+	}
+	if store.loadCalls != 0 {
+		t.Fatalf("credential store Load calls = %d, want 0 before destination validation", store.loadCalls)
+	}
+}
+
 func TestDoMapsConnectionError(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	cfg := testConfig(t, srv)
@@ -312,6 +458,62 @@ func TestDoRejectsOversizedControllerResponse(t *testing.T) {
 	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "response is too large") {
 		t.Fatalf("Do error = %v, want bounded-response failure", err)
+	}
+}
+
+func TestDoRejectsRedirectsBeforeCredentialsOrMutationBodiesAreForwarded(t *testing.T) {
+	statuses := []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	}
+
+	for _, status := range statuses {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			var destinationRequests int
+			var destinationAPIKey, destinationBody string
+			destination := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				destinationRequests++
+				destinationAPIKey = r.Header.Get("X-API-KEY")
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read redirected body: %v", err)
+				}
+				destinationBody = string(body)
+				_, _ = io.WriteString(w, `{"data":[]}`)
+			}))
+			defer destination.Close()
+
+			origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, destination.URL+"/redirected", status)
+			}))
+			defer origin.Close()
+
+			c, err := client.NewWithAPIKey(testConfig(t, origin), "redirect-secret", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			err = c.Do(
+				context.Background(),
+				http.MethodPost,
+				"/mutate",
+				map[string]string{"name": "redirect-body-sentinel"},
+				nil,
+			)
+
+			if destinationRequests != 0 || destinationAPIKey != "" || destinationBody != "" {
+				t.Fatalf(
+					"redirect destination received requests=%d API-key=%q body=%q",
+					destinationRequests,
+					destinationAPIKey,
+					destinationBody,
+				)
+			}
+			if err == nil {
+				t.Fatal("Do unexpectedly accepted a redirect response")
+			}
+		})
 	}
 }
 

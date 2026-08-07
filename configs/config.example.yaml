@@ -1,6 +1,7 @@
 host: 192.168.1.1
 port: 443
-insecure: false         # prefer certificate verification; opt in only on a trusted LAN
+# ca_cert: /path/to/controller-ca.pem  # trust a private CA while keeping verification enabled
+insecure: false         # explicit last resort; cannot be combined with ca_cert
 site: default
 safe_mode: true
 timeout: 30s
