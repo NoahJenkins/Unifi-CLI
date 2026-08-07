@@ -36,9 +36,10 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       verifies the source archive, all six exact archive names and layouts,
       their exhaustive SHA-256 entries, bound CycloneDX SBOMs, embedded build
       settings, byte-for-byte equality between every archived executable and
-      its corresponding trusted cross-build, and exact source-manifest equality
-      before provenance attestation. The verifier never executes an extracted
-      artifact.
+      its corresponding trusted cross-build, exact source-manifest equality,
+      and trusted Git hashes for LICENSE, README.md, and CHANGELOG.md inside
+      every platform archive before provenance attestation. The verifier never
+      executes an extracted artifact.
       The macOS and Windows CI runners separately run the same four-command
       native executable contract before release.
 - [ ] Confirm GoReleaser creates and uploads only a draft release using

@@ -500,7 +500,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
 		expectedRoot := strings.TrimSuffix(strings.TrimSuffix(wantName, ".tar.gz"), ".zip")
-		executable, cleanup, err := inspectReleaseArchive(ctx, archivePath, target, expectedRoot)
+		executable, cleanup, err := inspectReleaseArchive(ctx, archivePath, target, expectedRoot, manifest)
 		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
@@ -933,17 +933,22 @@ func verifyTrustedArtifact(ctx context.Context, trustedPath string, artifact arc
 	return nil
 }
 
-func inspectReleaseArchive(ctx context.Context, archivePath string, target target, expectedRoot string) (archiveExecutable, func(), error) {
+func inspectReleaseArchive(ctx context.Context, archivePath string, target target, expectedRoot string, manifest sourceManifest) (archiveExecutable, func(), error) {
 	dir, err := os.MkdirTemp("", "unifi-release-artifact-")
 	if err != nil {
 		return archiveExecutable{}, func() {}, err
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	destination := filepath.Join(dir, target.executableName())
+	supportFiles, err := trustedArchiveSupportFiles(manifest)
+	if err != nil {
+		cleanup()
+		return archiveExecutable{}, func() {}, err
+	}
 	if strings.HasSuffix(archivePath, ".zip") {
-		err = inspectZipArchive(ctx, archivePath, target, expectedRoot, destination)
+		err = inspectZipArchiveTrusted(ctx, archivePath, target, expectedRoot, destination, supportFiles)
 	} else {
-		err = inspectTarArchive(ctx, archivePath, target, expectedRoot, destination)
+		err = inspectTarArchiveTrusted(ctx, archivePath, target, expectedRoot, destination, supportFiles)
 	}
 	if err != nil {
 		cleanup()
@@ -962,6 +967,10 @@ func inspectReleaseArchive(ctx context.Context, archivePath string, target targe
 }
 
 func inspectZipArchive(ctx context.Context, archivePath string, target target, expectedRoot, destination string) error {
+	return inspectZipArchiveTrusted(ctx, archivePath, target, expectedRoot, destination, nil)
+}
+
+func inspectZipArchiveTrusted(ctx context.Context, archivePath string, target target, expectedRoot, destination string, supportFiles map[string]string) error {
 	file, size, err := openReleaseFile(archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
@@ -1007,14 +1016,15 @@ func inspectZipArchive(ctx context.Context, archivePath string, target target, e
 		if mode != wantMode {
 			return fmt.Errorf("archive entry %q mode = %04o, want %04o", clean, mode, wantMode)
 		}
-		if clean != expectedRoot+"/"+target.executableName() {
-			continue
-		}
 		reader, err := entry.Open()
 		if err != nil {
 			return err
 		}
-		err = writeExtracted(destination, contextReader{ctx: ctx, reader: reader}, mode, maxReleaseEntryBytes)
+		if clean == expectedRoot+"/"+target.executableName() {
+			err = writeExtracted(destination, contextReader{ctx: ctx, reader: reader}, mode, maxReleaseEntryBytes)
+		} else {
+			err = verifyArchiveSupportReader(ctx, reader, clean, expectedRoot, supportFiles)
+		}
 		closeErr := reader.Close()
 		if err != nil {
 			return err
@@ -1027,6 +1037,10 @@ func inspectZipArchive(ctx context.Context, archivePath string, target target, e
 }
 
 func inspectTarArchive(ctx context.Context, archivePath string, target target, expectedRoot, destination string) error {
+	return inspectTarArchiveTrusted(ctx, archivePath, target, expectedRoot, destination, nil)
+}
+
+func inspectTarArchiveTrusted(ctx context.Context, archivePath string, target target, expectedRoot, destination string, supportFiles map[string]string) error {
 	file, _, err := openReleaseFile(archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
@@ -1088,11 +1102,46 @@ func inspectTarArchive(ctx context.Context, archivePath string, target target, e
 			if err := writeExtracted(destination, contextReader{ctx: ctx, reader: reader}, mode, maxReleaseEntryBytes); err != nil {
 				return err
 			}
-		} else if _, err := io.CopyN(io.Discard, contextReader{ctx: ctx, reader: reader}, header.Size); err != nil {
-			return fmt.Errorf("read archive entry %q: %w", header.Name, err)
+		} else if err := verifyArchiveSupportReader(ctx, io.LimitReader(reader, header.Size), clean, expectedRoot, supportFiles); err != nil {
+			return err
 		}
 	}
 	return requireArchiveEntries(seenPaths, want, destination, expectedRoot)
+}
+
+func trustedArchiveSupportFiles(manifest sourceManifest) (map[string]string, error) {
+	want := map[string]string{"LICENSE": "", "README.md": "", "CHANGELOG.md": ""}
+	for _, entry := range manifest.Files {
+		if _, ok := want[entry.Path]; !ok {
+			continue
+		}
+		if entry.Mode != "100644" {
+			return nil, fmt.Errorf("trusted support file %q has Git mode %s, want 100644", entry.Path, entry.Mode)
+		}
+		want[entry.Path] = entry.SHA256
+	}
+	for path, digest := range want {
+		if digest == "" {
+			return nil, fmt.Errorf("trusted source manifest is missing archive support file %q", path)
+		}
+	}
+	return want, nil
+}
+
+func verifyArchiveSupportReader(ctx context.Context, reader io.Reader, clean, expectedRoot string, supportFiles map[string]string) error {
+	relative := strings.TrimPrefix(clean, expectedRoot+"/")
+	want, ok := supportFiles[relative]
+	if !ok {
+		return fmt.Errorf("archive support file %q has no trusted source digest", relative)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, contextReader{ctx: ctx, reader: reader}); err != nil {
+		return fmt.Errorf("read archive support file %q: %w", relative, err)
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, want) {
+		return fmt.Errorf("archive support file %q SHA-256 does not match trusted source manifest", relative)
+	}
+	return nil
 }
 
 func writeExtracted(path string, reader io.Reader, mode fs.FileMode, maxBytes int64) error {

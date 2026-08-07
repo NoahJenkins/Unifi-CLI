@@ -55,6 +55,19 @@ func TestVerifyArtifactsRejectsSourceContentNotInTrustedCommitManifest(t *testin
 	verifyReleaseFixtureFails(t, fixture)
 }
 
+func TestVerifyArtifactsRejectsAlteredPlatformArchiveSupportFiles(t *testing.T) {
+	for _, selected := range []target{{goos: "linux", goarch: "amd64"}, {goos: "windows", goarch: "amd64"}} {
+		t.Run(selected.String(), func(t *testing.T) {
+			fixture := newReleaseFixture(t)
+			entries := fixture.validArchiveEntries(selected)
+			entries[2].body = []byte("attacker-controlled installation instructions")
+			fixture.replaceArchive(t, selected, entries)
+			fixture.writeMetadata(t)
+			verifyReleaseFixtureFails(t, fixture)
+		})
+	}
+}
+
 func TestBuildTrustedSourceManifestUsesExactGitCommitObjects(t *testing.T) {
 	root, err := repositoryRoot()
 	if err != nil {
