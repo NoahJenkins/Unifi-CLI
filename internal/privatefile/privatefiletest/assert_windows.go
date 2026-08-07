@@ -33,11 +33,11 @@ func assertPrivateDACL(t *testing.T, path string, wantInheritance uint8) {
 	if control&windows.SE_DACL_PROTECTED == 0 {
 		t.Fatalf("DACL control = %#x, want SE_DACL_PROTECTED", control)
 	}
-	dacl, present, err := descriptor.DACL()
+	dacl, _, err := descriptor.DACL()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !present || dacl == nil {
+	if dacl == nil {
 		t.Fatal("DACL missing")
 	}
 	wantSIDs := approvedSIDs(t)
