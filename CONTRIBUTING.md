@@ -27,6 +27,11 @@ coverage in the Ubuntu matrix job, and run `govulncheck` on Linux.
 - Update `README.md` and other current documentation when user-visible behavior changes.
 - Treat files under `docs/superpowers/` as historical decision records; do not use them as current user instructions.
 
+Dependabot patch and minor version updates are grouped by ecosystem. Patch and
+minor Dependabot PRs are configured for squash auto-merge, including separate
+security-update PRs; GitHub merges them only after all `main` ruleset checks
+pass. Major updates remain open for manual review.
+
 ## Live controller testing
 
 Live tests are optional and must target only a controller you own or are authorized to test:
