@@ -1,6 +1,6 @@
 # GitHub Actions CI Implementation Plan
 
-> **Implemented historical plan.** The workflow and three-platform checks are green on `main`. Required-check enforcement remains pending in repository settings and should be enabled when the repository plan/visibility supports it.
+> **Implemented historical plan.** The workflow and three-platform checks are implemented. Required-check governance is hosted in GitHub settings and is not represented by this historical file. Use the root documentation for current contribution requirements.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

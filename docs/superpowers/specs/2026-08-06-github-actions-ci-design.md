@@ -1,7 +1,7 @@
 # GitHub Actions CI Design
 
 **Date:** 2026-08-06  
-**Status:** Implemented; required-check enforcement remains pending in repository settings
+**Status:** Implemented; required-check governance is managed in GitHub settings
 **Scope:** Automated build, vet, and unit-test checks on GitHub Actions
 
 ## Goal
@@ -84,5 +84,5 @@ The change is implemented on a feature branch and opened as a PR, which is
 itself the first CI run. The implementation target was:
 
 - the PR shows all three matrix checks green;
-- branch protection is active on `main` (currently unavailable while the repository is private on the present plan);
+- required-check governance is verified separately in the hosted GitHub settings;
 - merging the PR leaves `main` green.

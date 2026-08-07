@@ -14,6 +14,6 @@ The files under `docs/superpowers/` are dated design and implementation records.
 | 2026-07-28 session-persistence design and plan | Superseded; no session/password authentication remains |
 | 2026-07-28 read-only live-test design and plan | Implemented; old credential alternatives are superseded |
 | 2026-07-29 API-key-only design and plan | Implemented |
-| 2026-08-06 GitHub Actions design and plan | Implemented; required-check enforcement remains a repository-settings task |
+| 2026-08-06 GitHub Actions design and plan | Implemented; required-check governance is managed in GitHub settings |
 
 When a historical record disagrees with root documentation or code, the root documentation and current implementation are authoritative.

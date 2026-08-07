@@ -15,8 +15,9 @@ Only test against systems and networks you own or are explicitly authorized to a
 ## Security model
 
 - API keys belong in the native OS credential store or the explicitly selected protected-file fallback, never in repository files or command arguments.
+- WLAN passwords must use the hidden `--password` prompt or bounded `--password-stdin`; the CLI never accepts them as string flag values.
 - Mutations require `--yes`; `--dry-run` wins over `--yes`; destructive operations protected by `safe_mode` also require `--force`.
 - TLS verification is the secure default. `insecure: true` is an explicit trusted-LAN compatibility fallback and permits controller impersonation by an active network attacker.
-- Live integration tests must remain read-only and their reports must remain redacted.
+- Live integration tests must remain read-only. Reports may retain only fixed summaries and numeric process exit codes, never process streams, errors, arguments, controller payloads, or credentials.
 
 Security fixes may be released without advance public disclosure when disclosure would put users at risk.

@@ -121,11 +121,29 @@ Identifiers resolve as: internal id → MAC (normalized) → exact name. Ambiguo
 3. **`safe_mode`** (default `true`) blocks highest-impact ops unless `--force --yes`:
    - `device forget`
    - WAN / destructive network delete
-4. API keys are never printed (`auth status`, `config show`, and plans mask WLAN secrets).
+4. API keys and WLAN passwords are never printed (`auth status`, `config show`, and plans mask WLAN secrets).
 5. Human-readable output escapes terminal control characters returned by the controller. JSON output preserves source data for machine consumers.
 6. Successful applies emit an audit line on stderr (unless `--quiet`).
 
-WLAN create/update currently accepts `--password`. Although plans and output mask it, command arguments can be retained in shell history or exposed by process inspection. Avoid shared shells and clear sensitive history until a hidden-input workflow replaces this flag.
+WLAN passwords never belong in command arguments. Use `--password` as a boolean
+flag to open a hidden terminal prompt, or pipe exactly one non-empty line to
+`--password-stdin` for automation. The two flags are mutually exclusive, stdin
+input is bounded to 4 KiB, and neither source is written to plans or output.
+
+```bash
+# hidden interactive prompt
+unifi wlan create --name Main --security wpapsk --network LAN --password
+
+# automation (the secret is read from stdin, not argv)
+printf '%s\n' "$WLAN_PASSWORD" | \
+  unifi wlan update Main --security wpapsk --password-stdin --yes
+```
+
+Secured WLAN creation requires one of these password sources. Changing an open
+WLAN to a secured mode also requires a source; other updates preserve the
+existing password when neither flag is supplied. Because this project is
+pre-1.0, the former string form `--password value` is intentionally unsupported
+and must be migrated to one of the safe forms above.
 
 ```bash
 # plan only (default for mutations)
@@ -207,6 +225,7 @@ test -z "$(gofmt -l $(git ls-files '*.go'))"
 go vet ./...
 go test ./...
 go test -race ./...
+./scripts/check-coverage.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
 # optional live smoke against a real controller
@@ -214,7 +233,10 @@ export UNIFI_HOST=... UNIFI_API_KEY=... UNIFI_INSECURE=true
 UNIFI_IT=1 ./scripts/smoke.sh
 ```
 
-Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary, verifies formatting, runs `go vet`, and runs unit tests.
+Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary, verifies formatting,
+runs `go vet`, and runs unit tests. `scripts/check-coverage.sh` separately
+enforces at least 50% statement coverage for `internal/cli`; CI runs that gate
+inside the Ubuntu matrix job.
 
 With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
 checks auth status, local configuration, every implemented list command,
@@ -223,10 +245,16 @@ list. Empty firewall-rule and local-DNS lists are reported as `not_configured`
 rather than failures. It never calls `login`, a mutation command, or an
 apply/raw flag.
 
-Each live run writes a redacted report to `dist/test-reports/`. Reports contain
-only command names, statuses, durations, and fixed safe summaries; they do not
-contain controller payloads, identifiers, arguments, credentials, or stderr.
+Each live run writes a private, collision-resistant redacted report to
+`dist/test-reports/`. Reports contain only command names, statuses, durations,
+fixed safe summaries, and a numeric exit code when a command process fails.
+They do not contain stdout, stderr, process errors, controller payloads,
+identifiers, arguments, or credentials.
 
 ## Security and contributions
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Development setup, testing expectations, and pull-request guidance are in [CONTRIBUTING.md](CONTRIBUTING.md). Historical design and implementation records under `docs/superpowers/` are indexed in [docs/README.md](docs/README.md) and are not the current user documentation.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
