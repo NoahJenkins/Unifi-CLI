@@ -36,6 +36,11 @@ jobs:
         shell: bash
         run: bash ./scripts/smoke.sh
 
+      - name: enforce internal CLI coverage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ./scripts/check-coverage.sh
+
   vulnerability-scan:
     name: govulncheck
     runs-on: ubuntu-latest
