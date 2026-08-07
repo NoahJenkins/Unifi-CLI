@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke checks for unifi-cli.
-# Default: build + unit tests.
+# Default: build + vet + unit tests.
 # Live controller: UNIFI_IT=1 with UNIFI_HOST and UNIFI_API_KEY set.
 set -euo pipefail
 

@@ -192,6 +192,7 @@ JSON success envelope shape:
 
 ```bash
 go build -o dist/unifi ./cmd/unifi
+go vet ./...
 go test ./...
 
 # optional live smoke against a real controller
@@ -199,7 +200,7 @@ export UNIFI_HOST=... UNIFI_API_KEY=... UNIFI_INSECURE=true
 UNIFI_IT=1 ./scripts/smoke.sh
 ```
 
-Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary and runs unit tests only.
+Without `UNIFI_IT=1`, `scripts/smoke.sh` builds the binary, runs `go vet`, and runs unit tests.
 
 With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
 checks auth status, local configuration, every implemented list command,
