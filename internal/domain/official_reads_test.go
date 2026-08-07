@@ -54,6 +54,41 @@ func (f *officialReadAPI) Do(_ context.Context, method, path string, in any, out
 	f.requests = append(f.requests, officialTestRequest{method: method, path: path, body: cloneTestValue(in)})
 	f.mu.Unlock()
 	if method != "GET" {
+		body, _ := in.(map[string]any)
+		if method == http.MethodPut {
+			if items := f.legacy[path]; len(items) > 0 {
+				for key, value := range body {
+					items[0][key] = value
+				}
+			}
+			separator := strings.LastIndex(path, "/")
+			id := path[separator+1:]
+			for _, item := range f.legacy[path[:separator]] {
+				if strFieldTest(item, "_id", "id") == id {
+					for key, value := range body {
+						item[key] = value
+					}
+				}
+			}
+			for _, item := range f.legacy[f.SitePath(client.PathStatDevice)] {
+				if strFieldTest(item, "_id", "id") == id {
+					for key, value := range body {
+						item[key] = value
+					}
+				}
+			}
+		}
+		if method == http.MethodPost {
+			cmd, _ := body["cmd"].(string)
+			mac, _ := body["mac"].(string)
+			if cmd == "block-sta" || cmd == "unblock-sta" {
+				for _, item := range f.legacy[f.SitePath(client.PathStatSta)] {
+					if strFieldTest(item, "mac") == mac {
+						item["blocked"] = cmd == "block-sta"
+					}
+				}
+			}
+		}
 		return nil
 	}
 	if items, ok := f.legacy[path]; ok {
@@ -85,7 +120,7 @@ func (f *officialReadAPI) FetchOfficialObjects(_ context.Context, path string) (
 	return append([]map[string]any(nil), items...), nil
 }
 
-func (f *officialReadAPI) DoOfficial(ctx context.Context, method, path string, _ any, out any) error {
+func (f *officialReadAPI) DoOfficial(ctx context.Context, method, path string, in any, out any) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, "OFFICIAL "+method+" "+path)
 	f.active++
@@ -110,6 +145,23 @@ func (f *officialReadAPI) DoOfficial(ctx context.Context, method, path string, _
 	}
 	if err := f.errs[path]; err != nil {
 		return err
+	}
+	if method == http.MethodPut {
+		body, _ := in.(map[string]any)
+		updated := cloneTestMap(body)
+		if existing := f.details[path]; existing != nil {
+			for _, key := range []string{"id", "default", "metadata"} {
+				if value, ok := existing[key]; ok {
+					updated[key] = cloneTestValue(value)
+				}
+			}
+		}
+		f.details[path] = updated
+		return decodeInto(updated, out)
+	}
+	if method == http.MethodDelete {
+		delete(f.details, path)
+		return nil
 	}
 	item, ok := f.details[path]
 	if !ok {
@@ -196,24 +248,36 @@ func readOfficialFixture(t *testing.T, name string, out any) {
 func newOfficialReadAPI(t *testing.T) *officialReadAPI {
 	t.Helper()
 	sitePath := client.OfficialPath("sites", officialSiteID)
+	wifiItems := officialFixtureData(t, "wifi-broadcasts.json")
+	details := map[string]map[string]any{
+		sitePath + "/devices/" + officialGatewayID:                  officialFixtureObject(t, "device-gateway.json"),
+		sitePath + "/devices/" + officialSwitchID:                   officialFixtureObject(t, "device-switch.json"),
+		sitePath + "/networks/" + officialLANID:                     officialFixtureObject(t, "network-lan.json"),
+		sitePath + "/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc2": officialFixtureObject(t, "network-iot.json"),
+	}
+	for _, item := range wifiItems {
+		detail := cloneTestMap(item)
+		for key, value := range map[string]any{
+			"clientIsolationEnabled": false, "hideName": false, "multicastToUnicastConversionEnabled": false,
+			"uapsdEnabled": true, "advertiseDeviceName": false, "arpProxyEnabled": false, "bssTransitionEnabled": true,
+		} {
+			detail[key] = value
+		}
+		details[sitePath+"/wifi/broadcasts/"+strFieldTest(item, "id")] = detail
+	}
 	return &officialReadAPI{
 		collections: map[string][]map[string]any{
 			client.OfficialPath("sites"):    officialFixtureData(t, "sites.json"),
 			sitePath + "/devices":           officialFixtureData(t, "devices.json"),
 			sitePath + "/clients":           officialFixtureData(t, "clients.json"),
 			sitePath + "/networks":          officialFixtureData(t, "networks.json"),
-			sitePath + "/wifi/broadcasts":   officialFixtureData(t, "wifi-broadcasts.json"),
+			sitePath + "/wifi/broadcasts":   wifiItems,
 			sitePath + "/firewall/policies": officialFixtureData(t, "firewall-policies.json"),
 			sitePath + "/dns/policies":      officialFixtureData(t, "dns-policies-all-types.json"),
 		},
-		details: map[string]map[string]any{
-			sitePath + "/devices/" + officialGatewayID:                  officialFixtureObject(t, "device-gateway.json"),
-			sitePath + "/devices/" + officialSwitchID:                   officialFixtureObject(t, "device-switch.json"),
-			sitePath + "/networks/" + officialLANID:                     officialFixtureObject(t, "network-lan.json"),
-			sitePath + "/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc2": officialFixtureObject(t, "network-iot.json"),
-		},
-		errs:   map[string]error{},
-		legacy: map[string][]map[string]any{},
+		details: details,
+		errs:    map[string]error{},
+		legacy:  map[string][]map[string]any{},
 	}
 }
 
@@ -283,7 +347,7 @@ func TestStableReadServicesUseOfficialNetworkAPI(t *testing.T) {
 		if len(items) != 2 || items[0].VLAN == nil || *items[0].VLAN != 1 {
 			t.Fatalf("networks = %+v", items)
 		}
-		if items[0].Subnet != "" || items[0].DHCPEnabled || items[0].DomainName != "" || items[0].Purpose != "" {
+		if items[0].Subnet != "" || items[0].DHCPEnabled || items[0].DomainName != "" || items[0].Purpose != "gateway" {
 			t.Fatalf("network overview invented legacy/detail fields: %+v", items[0])
 		}
 		assertExactCalls(t, api.calls, "OFFICIAL LIST "+sitePath+"/networks")
@@ -292,7 +356,7 @@ func TestStableReadServicesUseOfficialNetworkAPI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if item.Subnet != "192.0.2.1/24" || !item.DHCPEnabled || item.DomainName != "example.test" || item.Purpose != "" {
+		if item.Subnet != "192.0.2.1/24" || !item.DHCPEnabled || item.DomainName != "example.test" || item.Purpose != "gateway" {
 			t.Fatalf("target network detail = %+v", item)
 		}
 		assertCallCount(t, api.calls, "OFFICIAL GET "+sitePath+"/networks/"+officialLANID, 1)
@@ -757,16 +821,16 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 	if item, err := domain.NewClientService(api).ApplyBlock(ctx, clientRead.ID); err != nil || item.ID != "legacy-client" {
 		t.Fatalf("client apply target: item=%+v err=%v", item, err)
 	}
-	if p, item, err := domain.NewNetworkService(api).Update(ctx, networkRead.ID, domain.NetworkInput{Name: "Renamed"}); err != nil || item.ID != "legacy-network" || p.Changes[0].ID != "legacy-network" {
+	if p, item, err := domain.NewNetworkService(api).Update(ctx, networkRead.ID, domain.NetworkInput{Name: "Renamed"}); err != nil || item.ID != officialLANID || p.Changes[0].ID != officialLANID {
 		t.Fatalf("network mutation target: item=%+v plan=%+v err=%v", item, p, err)
 	}
-	if item, err := domain.NewNetworkService(api).ApplyUpdate(ctx, networkRead.ID, domain.NetworkInput{Name: "Renamed"}); err != nil || item.ID != "legacy-network" {
+	if item, err := domain.NewNetworkService(api).ApplyUpdate(ctx, networkRead.ID, domain.NetworkInput{Name: "Renamed"}); err != nil || item.ID != officialLANID {
 		t.Fatalf("network apply target: item=%+v err=%v", item, err)
 	}
-	if p, item, err := domain.NewWlanService(api).Update(ctx, wlanRead.ID, domain.WlanInput{Name: "Renamed"}); err != nil || item.ID != "legacy-wlan" || p.Changes[0].ID != "legacy-wlan" {
+	if p, item, err := domain.NewWlanService(api).Update(ctx, wlanRead.ID, domain.WlanInput{Name: "Renamed"}); err != nil || item.ID != officialMainWifiID || p.Changes[0].ID != officialMainWifiID {
 		t.Fatalf("WLAN mutation target: item=%+v plan=%+v err=%v", item, p, err)
 	}
-	if item, err := domain.NewWlanService(api).ApplyUpdate(ctx, wlanRead.ID, domain.WlanInput{Name: "Renamed"}); err != nil || item.ID != "legacy-wlan" {
+	if item, err := domain.NewWlanService(api).ApplyUpdate(ctx, wlanRead.ID, domain.WlanInput{Name: "Renamed"}); err != nil || item.ID != officialMainWifiID {
 		t.Fatalf("WLAN apply target: item=%+v err=%v", item, err)
 	}
 	if p, item, err := domain.NewPortService(api).Update(ctx, portRead.DeviceID, 1, domain.PortInput{Name: "Uplink"}); err != nil || item.DeviceID != "legacy-switch" || p.Changes[0].ID != "legacy-switch/1" {
@@ -789,12 +853,12 @@ func TestOfficialReadIDsTranslateToExactLegacyMutationTargets(t *testing.T) {
 	for _, want := range []string{
 		"LEGACY PUT " + api.SitePath(client.PathRestDevice, "legacy-device"),
 		"LEGACY POST " + api.SitePath(client.PathCmdStaMgr),
-		"LEGACY PUT " + api.SitePath(client.PathRestNetwork, "legacy-network"),
-		"LEGACY PUT " + api.SitePath(client.PathRestWlan, "legacy-wlan"),
 		"LEGACY PUT " + api.SitePath(client.PathRestDevice, "legacy-switch"),
 	} {
 		assertCallCount(t, api.calls, want, 1)
 	}
+	assertCallCount(t, api.calls, "OFFICIAL PUT "+client.OfficialPath("sites", officialSiteID, "networks", officialLANID), 1)
+	assertCallCount(t, api.calls, "OFFICIAL PUT "+client.OfficialPath("sites", officialSiteID, "wifi", "broadcasts", officialMainWifiID), 1)
 }
 
 func TestOfficialMutationIdentityTranslationRejectsAmbiguousAndMissingLegacyMatches(t *testing.T) {
@@ -833,19 +897,6 @@ func TestOfficialMutationIdentityTranslationRejectsAmbiguousAndMissingLegacyMatc
 			},
 		},
 		{
-			name:       "network",
-			legacyPath: func(api *officialReadAPI) string { return api.SitePath(client.PathRestNetwork) },
-			ambiguous: []map[string]any{
-				{"_id": "legacy-network-1", "name": "LAN", "purpose": "corporate"},
-				{"_id": "legacy-network-2", "name": "LAN", "purpose": "corporate"},
-			},
-			missing: []map[string]any{{"_id": "other", "name": "Other", "purpose": "corporate"}},
-			mutate: func(api *officialReadAPI) error {
-				_, _, err := domain.NewNetworkService(api).Update(ctx, officialLANID, domain.NetworkInput{Name: "Renamed"})
-				return err
-			},
-		},
-		{
 			name:       "dns resolver network",
 			legacyPath: func(api *officialReadAPI) string { return api.SitePath(client.PathRestNetwork) },
 			ambiguous: []map[string]any{
@@ -855,19 +906,6 @@ func TestOfficialMutationIdentityTranslationRejectsAmbiguousAndMissingLegacyMatc
 			missing: []map[string]any{{"_id": "other", "name": "Other", "purpose": "corporate"}},
 			mutate: func(api *officialReadAPI) error {
 				_, _, err := domain.NewDNSService(api).SetResolvers(ctx, officialLANID, []string{"1.1.1.1"})
-				return err
-			},
-		},
-		{
-			name:       "WLAN",
-			legacyPath: func(api *officialReadAPI) string { return api.SitePath(client.PathRestWlan) },
-			ambiguous: []map[string]any{
-				{"_id": "legacy-wlan-1", "name": "Main", "security": "wpapsk"},
-				{"_id": "legacy-wlan-2", "name": "Main", "security": "wpapsk"},
-			},
-			missing: []map[string]any{{"_id": "other", "name": "Other", "security": "wpapsk"}},
-			mutate: func(api *officialReadAPI) error {
-				_, _, err := domain.NewWlanService(api).Update(ctx, officialMainWifiID, domain.WlanInput{Name: "Renamed"})
 				return err
 			},
 		},

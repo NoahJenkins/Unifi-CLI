@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 
@@ -173,6 +174,9 @@ func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx in
 	}
 	before := portSnapshot(cur)
 	after := mergePortAfter(cur, in)
+	if reflect.DeepEqual(before, after) {
+		return plan.Plan{}, Port{}, apperr.New(apperr.ValidationFailed, "port update would not change controller state")
+	}
 	name := fmt.Sprintf("%s:%d", cur.DeviceName, cur.PortIdx)
 	p := plan.Update("port", fmt.Sprintf("%s/%d", cur.DeviceID, cur.PortIdx), name,
 		fmt.Sprintf("update port %d on %s", cur.PortIdx, cur.DeviceName),
@@ -190,6 +194,9 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 	if err != nil {
 		return Port{}, err
 	}
+	if reflect.DeepEqual(portSnapshot(cur), mergePortAfter(cur, in)) {
+		return Port{}, apperr.New(apperr.ValidationFailed, "port update would not change controller state")
+	}
 	patch := portInputOverride(portIdx, in)
 	merged := MergePortOverrides(existing, patch)
 
@@ -199,26 +206,33 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 		return Port{}, err
 	}
 
-	// apply local view
-	if inputSetsPortName(in) {
-		cur.Name = in.Name
+	observed, _, err := s.loadAuthoritativePort(ctx, cur.DeviceID, portIdx)
+	if err != nil {
+		return Port{}, verificationError("updated port could not be verified", err)
 	}
-	if in.ClearName {
-		cur.Name = ""
+	if !portMatchesInput(observed, in) {
+		return Port{}, apperr.New(apperr.Conflict, "port update verification failed: observed fields differ from requested state")
 	}
-	if in.SetPOE {
-		cur.POE = in.POE
+	return observed, nil
+}
+
+func portMatchesInput(observed Port, in PortInput) bool {
+	if inputSetsPortName(in) && observed.Name != in.Name {
+		return false
 	}
-	if in.SetEnabled {
-		cur.Enabled = in.Enabled
+	if in.ClearName && observed.Name != "" {
+		return false
 	}
-	if inputSetsPortProfile(in) {
-		cur.Profile = in.Profile
+	if in.SetPOE && observed.POE != in.POE {
+		return false
 	}
-	if in.ClearProfile {
-		cur.Profile = ""
+	if in.SetEnabled && (!observed.EnabledKnown || observed.Enabled != in.Enabled) {
+		return false
 	}
-	return cur, nil
+	if inputSetsPortProfile(in) && observed.Profile != in.Profile {
+		return false
+	}
+	return !in.ClearProfile || observed.Profile == ""
 }
 
 func (s *PortService) loadAuthoritativePort(ctx context.Context, deviceQuery string, portIdx int) (Port, []map[string]any, error) {

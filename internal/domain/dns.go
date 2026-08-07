@@ -369,6 +369,9 @@ func (s *DNSService) SetResolvers(ctx context.Context, networkQuery string, serv
 	if err != nil {
 		return plan.Plan{}, DNSResolver{}, err
 	}
+	if reflect.DeepEqual(r.DNS, servers) {
+		return plan.Plan{}, DNSResolver{}, apperr.New(apperr.ValidationFailed, "resolver update would not change controller state")
+	}
 	before := resolverSnapshot(r)
 	after := resolverSnapshot(DNSResolver{
 		NetworkID:   r.NetworkID,
@@ -392,13 +395,22 @@ func (s *DNSService) ApplySetResolvers(ctx context.Context, networkQuery string,
 	if err != nil {
 		return DNSResolver{}, err
 	}
+	if reflect.DeepEqual(r.DNS, servers) {
+		return DNSResolver{}, apperr.New(apperr.ValidationFailed, "resolver update would not change controller state")
+	}
 	path := s.api.SitePath(client.PathRestNetwork, r.NetworkID)
 	body := resolverSetBody(r, servers)
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
 		return DNSResolver{}, err
 	}
-	r.DNS = append([]string(nil), servers...)
-	return r, nil
+	observed, err := s.getResolver(ctx, r.NetworkID)
+	if err != nil {
+		return DNSResolver{}, verificationError("updated DNS resolvers could not be verified", err)
+	}
+	if !reflect.DeepEqual(observed.DNS, servers) {
+		return DNSResolver{}, apperr.New(apperr.Conflict, "DNS resolver verification failed: observed servers differ from requested state")
+	}
+	return observed, nil
 }
 
 type resolverIdent struct {

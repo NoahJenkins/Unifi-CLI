@@ -50,17 +50,6 @@ func newDeviceGetCmd() *cobra.Command {
 	}
 }
 
-// deviceMutationDestructive is the single source of truth for which device
-// write actions require safe_mode + --force. CLI wiring must use this map.
-var deviceMutationDestructive = map[string]bool{
-	"rename":  false,
-	"restart": false,
-	"locate":  false,
-	"upgrade": false,
-	"adopt":   false,
-	"forget":  true,
-}
-
 func newDeviceRenameCmd() *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
@@ -68,7 +57,7 @@ func newDeviceRenameCmd() *cobra.Command {
 		Short: "Rename a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("rename", args[0], deviceMutationDestructive["rename"], name)
+			return runDeviceMutation("rename", args[0], name)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "new device name")
@@ -82,7 +71,7 @@ func newDeviceRestartCmd() *cobra.Command {
 		Short: "Restart a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("restart", args[0], deviceMutationDestructive["restart"], "")
+			return runDeviceMutation("restart", args[0], "")
 		},
 	}
 }
@@ -93,7 +82,7 @@ func newDeviceLocateCmd() *cobra.Command {
 		Short: "Blink locate LEDs on a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("locate", args[0], deviceMutationDestructive["locate"], "")
+			return runDeviceMutation("locate", args[0], "")
 		},
 	}
 }
@@ -104,7 +93,7 @@ func newDeviceUpgradeCmd() *cobra.Command {
 		Short: "Upgrade device firmware",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("upgrade", args[0], deviceMutationDestructive["upgrade"], "")
+			return runDeviceMutation("upgrade", args[0], "")
 		},
 	}
 }
@@ -115,7 +104,7 @@ func newDeviceAdoptCmd() *cobra.Command {
 		Short: "Adopt a pending device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("adopt", args[0], deviceMutationDestructive["adopt"], "")
+			return runDeviceMutation("adopt", args[0], "")
 		},
 	}
 }
@@ -126,7 +115,7 @@ func newDeviceForgetCmd() *cobra.Command {
 		Short: "Forget (delete) a device — destructive",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("forget", args[0], deviceMutationDestructive["forget"], "")
+			return runDeviceMutation("forget", args[0], "")
 		},
 	}
 }
@@ -194,7 +183,7 @@ func runDeviceGet(id string) error {
 	return nil
 }
 
-func runDeviceMutation(action, id string, destructive bool, newName string) error {
+func runDeviceMutation(action, id, newName string) error {
 	rt, err := loadRuntime(true)
 	if err != nil {
 		return emitErr("device", action, err)
@@ -226,11 +215,8 @@ func runDeviceMutation(action, id string, destructive bool, newName string) erro
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			risk := plan.Routine
-			if destructive {
-				risk = plan.Destructive
-			}
-			return plan.Targeted(p, d.ID, p.Changes, risk, false)
+			risk, experimental := task7MutationPolicy("device", action)
+			return plan.Targeted(p, d.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := build(target.ID())

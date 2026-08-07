@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
@@ -112,14 +113,25 @@ func (s *ClientService) Reconnect(ctx context.Context, id string) (plan.Plan, Cl
 	return s.cmdPlan(ctx, id, "kick-sta", "reconnect")
 }
 
-func (s *ClientService) ApplyReconnect(ctx context.Context, id string) (Client, error) {
-	return s.applyStaMgr(ctx, id, "kick-sta", nil)
+func (s *ClientService) ApplyReconnect(ctx context.Context, id string) (ActionAcceptance, error) {
+	c, err := s.getLegacy(ctx, id)
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	path := s.api.SitePath(client.PathCmdStaMgr)
+	if err := s.api.Do(ctx, http.MethodPost, path, map[string]any{"cmd": "kick-sta", "mac": c.MAC}, nil); err != nil {
+		return ActionAcceptance{}, err
+	}
+	return ActionAcceptance{Accepted: true}, nil
 }
 
 func (s *ClientService) Block(ctx context.Context, id string) (plan.Plan, Client, error) {
 	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Client{}, err
+	}
+	if c.Blocked {
+		return plan.Plan{}, Client{}, apperr.New(apperr.ValidationFailed, "client is already blocked")
 	}
 	p := plan.Update("client", c.ID, c.GetName(),
 		fmt.Sprintf("block client %s", c.GetName()),
@@ -130,13 +142,16 @@ func (s *ClientService) Block(ctx context.Context, id string) (plan.Plan, Client
 }
 
 func (s *ClientService) ApplyBlock(ctx context.Context, id string) (Client, error) {
-	return s.applyStaMgr(ctx, id, "block-sta", func(c *Client) { c.Blocked = true })
+	return s.applyObservedState(ctx, id, "block-sta", true)
 }
 
 func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Client, error) {
 	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Client{}, err
+	}
+	if !c.Blocked {
+		return plan.Plan{}, Client{}, apperr.New(apperr.ValidationFailed, "client is already unblocked")
 	}
 	p := plan.Update("client", c.ID, c.GetName(),
 		fmt.Sprintf("unblock client %s", c.GetName()),
@@ -147,7 +162,7 @@ func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Clie
 }
 
 func (s *ClientService) ApplyUnblock(ctx context.Context, id string) (Client, error) {
-	return s.applyStaMgr(ctx, id, "unblock-sta", func(c *Client) { c.Blocked = false })
+	return s.applyObservedState(ctx, id, "unblock-sta", false)
 }
 
 func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (plan.Plan, Client, error) {
@@ -163,20 +178,27 @@ func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (pl
 	return p, c, nil
 }
 
-func (s *ClientService) applyStaMgr(ctx context.Context, id, cmd string, mutate func(*Client)) (Client, error) {
+func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, blocked bool) (Client, error) {
 	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Client{}, err
+	}
+	if c.Blocked == blocked {
+		return Client{}, apperr.New(apperr.ValidationFailed, "client action would not change controller state")
 	}
 	path := s.api.SitePath(client.PathCmdStaMgr)
 	body := map[string]any{"cmd": cmd, "mac": c.MAC}
 	if err := s.api.Do(ctx, http.MethodPost, path, body, nil); err != nil {
 		return Client{}, err
 	}
-	if mutate != nil {
-		mutate(&c)
+	observed, err := s.getLegacy(ctx, c.ID)
+	if err != nil {
+		return Client{}, verificationError("client action could not be verified", err)
 	}
-	return c, nil
+	if observed.Blocked != blocked {
+		return Client{}, apperr.New(apperr.Conflict, "client action verification failed: observed blocked state differs from requested state")
+	}
+	return observed, nil
 }
 
 func NormalizeClient(m map[string]any) Client {

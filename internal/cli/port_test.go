@@ -55,6 +55,8 @@ func TestRunPortUpdateRejectsAuthoritativeOverrideDriftWithoutPUT(t *testing.T) 
 
 	useCommandTestRuntime(t, srv, true)
 	flagYes = true
+	flagExperimental = true
+	flagForce = true
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		return runPortUpdate("Switch-Core", 12, domain.PortInput{POE: "off", SetPOE: true})
 	})

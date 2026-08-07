@@ -27,6 +27,18 @@ func (f *mutateClientAPI) Do(ctx context.Context, method, path string, in, out a
 		}
 		return json.Unmarshal(b, out)
 	}
+	if method == http.MethodPost {
+		body, _ := in.(map[string]any)
+		cmd, _ := body["cmd"].(string)
+		blocked, observable := map[string]bool{"block-sta": true, "unblock-sta": false}[cmd]
+		if observable {
+			for _, client := range f.sta {
+				if strFieldTest(client, "mac") == body["mac"] {
+					client["blocked"] = blocked
+				}
+			}
+		}
+	}
 	if out != nil {
 		_ = json.Unmarshal([]byte(`[]`), out)
 	}
@@ -64,7 +76,7 @@ func TestClientReconnectPlanAndApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "sta1" {
+	if !got.Accepted {
 		t.Fatalf("apply result: %+v", got)
 	}
 	last := api.calls[len(api.calls)-1]
@@ -105,11 +117,16 @@ func TestClientBlockPlanAndApply(t *testing.T) {
 	if !got.Blocked {
 		t.Fatalf("apply should return blocked client: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPost || last.path != "/proxy/network/api/s/default/cmd/stamgr" {
-		t.Fatalf("call = %+v", last)
+	var mutation mutateCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPost {
+			mutation = call
+		}
 	}
-	body, _ := last.body.(map[string]any)
+	if mutation.path != "/proxy/network/api/s/default/cmd/stamgr" {
+		t.Fatalf("call = %+v", mutation)
+	}
+	body, _ := mutation.body.(map[string]any)
 	if body["cmd"] != "block-sta" || body["mac"] != "11:22:33:44:55:01" {
 		t.Fatalf("body = %+v", body)
 	}
@@ -140,11 +157,16 @@ func TestClientUnblockPlanAndApply(t *testing.T) {
 	if got.Blocked {
 		t.Fatalf("apply should return unblocked client: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPost || last.path != "/proxy/network/api/s/default/cmd/stamgr" {
-		t.Fatalf("call = %+v", last)
+	var mutation mutateCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPost {
+			mutation = call
+		}
 	}
-	body, _ := last.body.(map[string]any)
+	if mutation.path != "/proxy/network/api/s/default/cmd/stamgr" {
+		t.Fatalf("call = %+v", mutation)
+	}
+	body, _ := mutation.body.(map[string]any)
 	if body["cmd"] != "unblock-sta" || body["mac"] != "11:22:33:44:55:03" {
 		t.Fatalf("body = %+v", body)
 	}

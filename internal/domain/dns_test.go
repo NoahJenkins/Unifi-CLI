@@ -77,6 +77,7 @@ type fakeDNSAPI struct {
 	calls              []dnsCall
 	errByPath          map[string]error
 	err                error
+	ignoreResolverPuts bool
 }
 
 type dnsCall struct {
@@ -142,6 +143,20 @@ func (f *fakeDNSAPI) Do(ctx context.Context, method, path string, in, out any) e
 		return nil
 	case method == http.MethodGet && strings.Contains(path, "rest/networkconf"):
 		return decodeInto(f.networks, out)
+	case method == http.MethodPut && strings.Contains(path, "rest/networkconf/"):
+		if f.ignoreResolverPuts {
+			return nil
+		}
+		id := path[strings.LastIndex(path, "/")+1:]
+		body, _ := in.(map[string]any)
+		for _, network := range f.networks {
+			if strFieldTest(network, "_id", "id") == id {
+				for key, value := range body {
+					network[key] = value
+				}
+			}
+		}
+		return nil
 	default:
 		if out != nil {
 			_ = json.Unmarshal([]byte(`[]`), out)
@@ -491,7 +506,7 @@ func TestDNSResolversSetPlanAndApply(t *testing.T) {
 	svc := domain.NewDNSService(api)
 	ctx := context.Background()
 
-	servers := []string{"1.1.1.1", "8.8.8.8"}
+	servers := []string{"9.9.9.9", "149.112.112.112"}
 	p, r, err := svc.SetResolvers(ctx, "LAN", servers)
 	if err != nil {
 		t.Fatal(err)
@@ -504,10 +519,10 @@ func TestDNSResolversSetPlanAndApply(t *testing.T) {
 	}
 	after, _ := p.Changes[0].After.(map[string]any)
 	dnsAfter, _ := after["dns"].([]string)
-	if len(dnsAfter) != 2 || dnsAfter[0] != "1.1.1.1" {
+	if len(dnsAfter) != 2 || dnsAfter[0] != "9.9.9.9" {
 		// allow []any from JSON-shaped maps
 		if arr, ok := after["dns"].([]any); ok {
-			if len(arr) != 2 || arr[0] != "1.1.1.1" {
+			if len(arr) != 2 || arr[0] != "9.9.9.9" {
 				t.Fatalf("after dns: %+v", after["dns"])
 			}
 		} else if len(dnsAfter) != 2 {
@@ -522,15 +537,12 @@ func TestDNSResolversSetPlanAndApply(t *testing.T) {
 	if got.NetworkID != "net1" {
 		t.Fatalf("applied: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("method = %q", last.method)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodPut)
+	if mutation.path != "/proxy/network/api/s/default/rest/networkconf/net1" {
+		t.Fatalf("path = %q", mutation.path)
 	}
-	if last.path != "/proxy/network/api/s/default/rest/networkconf/net1" {
-		t.Fatalf("path = %q", last.path)
-	}
-	body, _ := last.body.(map[string]any)
-	if body["dhcpd_dns_1"] != "1.1.1.1" || body["dhcpd_dns_2"] != "8.8.8.8" {
+	body, _ := mutation.body.(map[string]any)
+	if body["dhcpd_dns_1"] != "9.9.9.9" || body["dhcpd_dns_2"] != "149.112.112.112" {
 		t.Fatalf("body: %+v", body)
 	}
 	if body["dhcpd_dns_enabled"] != true {
@@ -557,14 +569,11 @@ func TestDNSResolversSetClearsDNSNameserversOnIoT(t *testing.T) {
 		t.Fatalf("returned dns: %+v", got.DNS)
 	}
 
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("method = %q", last.method)
+	mutation := dnsCallWithMethod(t, api.calls, http.MethodPut)
+	if mutation.path != "/proxy/network/api/s/default/rest/networkconf/net2" {
+		t.Fatalf("path = %q", mutation.path)
 	}
-	if last.path != "/proxy/network/api/s/default/rest/networkconf/net2" {
-		t.Fatalf("path = %q", last.path)
-	}
-	body, _ := last.body.(map[string]any)
+	body, _ := mutation.body.(map[string]any)
 	if body["dhcpd_dns_1"] != "1.1.1.1" || body["dhcpd_dns_2"] != "8.8.8.8" {
 		t.Fatalf("dhcpd body: %+v", body)
 	}

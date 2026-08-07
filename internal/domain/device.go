@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
@@ -28,6 +30,10 @@ type Device struct {
 	Version string `json:"version"`
 	Uplink  string `json:"uplink"`
 	Adopted bool   `json:"adopted"`
+}
+
+type ActionAcceptance struct {
+	Accepted bool `json:"accepted"`
 }
 
 func (d Device) GetID() string   { return d.ID }
@@ -145,8 +151,14 @@ func (s *DeviceService) ApplyRename(ctx context.Context, id, newName string) (De
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
 		return Device{}, err
 	}
-	d.Name = newName
-	return d, nil
+	observed, err := s.getLegacy(ctx, d.ID)
+	if err != nil {
+		return Device{}, verificationError("renamed device could not be verified", err)
+	}
+	if observed.Name != newName {
+		return Device{}, apperr.New(apperr.Conflict, "device rename verification failed: observed name differs from requested state")
+	}
+	return observed, nil
 }
 
 func mergeOfficialDeviceDetail(overview, detail Device) Device {
@@ -179,10 +191,16 @@ func mergeOfficialDeviceDetail(overview, detail Device) Device {
 }
 
 func (s *DeviceService) Restart(ctx context.Context, id string) (plan.Plan, Device, error) {
+	if supportsOfficialDetails(s.api) {
+		return s.officialActionPlan(ctx, id, "restart")
+	}
 	return s.cmdPlan(ctx, id, "restart", "update")
 }
 
-func (s *DeviceService) ApplyRestart(ctx context.Context, id string) (Device, error) {
+func (s *DeviceService) ApplyRestart(ctx context.Context, id string) (ActionAcceptance, error) {
+	if supportsOfficialDetails(s.api) {
+		return s.applyOfficialRestart(ctx, id)
+	}
 	return s.applyDevMgr(ctx, id, "restart")
 }
 
@@ -190,7 +208,7 @@ func (s *DeviceService) Locate(ctx context.Context, id string) (plan.Plan, Devic
 	return s.cmdPlan(ctx, id, "set-locate", "update")
 }
 
-func (s *DeviceService) ApplyLocate(ctx context.Context, id string) (Device, error) {
+func (s *DeviceService) ApplyLocate(ctx context.Context, id string) (ActionAcceptance, error) {
 	return s.applyDevMgr(ctx, id, "set-locate")
 }
 
@@ -198,19 +216,43 @@ func (s *DeviceService) Upgrade(ctx context.Context, id string) (plan.Plan, Devi
 	return s.cmdPlan(ctx, id, "upgrade", "update")
 }
 
-func (s *DeviceService) ApplyUpgrade(ctx context.Context, id string) (Device, error) {
+func (s *DeviceService) ApplyUpgrade(ctx context.Context, id string) (ActionAcceptance, error) {
 	return s.applyDevMgr(ctx, id, "upgrade")
 }
 
 func (s *DeviceService) Adopt(ctx context.Context, id string) (plan.Plan, Device, error) {
+	if supportsOfficialDetails(s.api) {
+		d, err := s.getPendingOfficial(ctx, id)
+		if err != nil {
+			return plan.Plan{}, Device{}, err
+		}
+		p := plan.Update("device", d.ID, d.Name, fmt.Sprintf("adopt device %s", d.Name),
+			map[string]any{"action": "none", "mac": d.MAC}, map[string]any{"action": "adopt", "mac": d.MAC})
+		return p, d, nil
+	}
 	return s.cmdPlan(ctx, id, "adopt", "update")
 }
 
-func (s *DeviceService) ApplyAdopt(ctx context.Context, id string) (Device, error) {
+func (s *DeviceService) ApplyAdopt(ctx context.Context, id string) (ActionAcceptance, error) {
+	if supportsOfficialDetails(s.api) {
+		return s.applyOfficialAdopt(ctx, id)
+	}
 	return s.applyDevMgr(ctx, id, "adopt")
 }
 
 func (s *DeviceService) Forget(ctx context.Context, id string) (plan.Plan, Device, error) {
+	if supportsOfficialDetails(s.api) {
+		d, err := s.Get(ctx, id)
+		if err != nil {
+			return plan.Plan{}, Device{}, err
+		}
+		if !looksLikeUUID(d.ID) {
+			return plan.Plan{}, Device{}, apperr.New(apperr.Conflict, "official device target has an invalid ID")
+		}
+		p := plan.Delete("device", d.ID, d.Name, fmt.Sprintf("forget device %s", d.Name),
+			map[string]any{"id": d.ID, "mac": d.MAC, "name": d.Name})
+		return p, d, nil
+	}
 	d, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Device{}, err
@@ -222,7 +264,10 @@ func (s *DeviceService) Forget(ctx context.Context, id string) (plan.Plan, Devic
 	return p, d, nil
 }
 
-func (s *DeviceService) ApplyForget(ctx context.Context, id string) (Device, error) {
+func (s *DeviceService) ApplyForget(ctx context.Context, id string) (ActionAcceptance, error) {
+	if supportsOfficialDetails(s.api) {
+		return s.applyOfficialForget(ctx, id)
+	}
 	return s.applyDevMgr(ctx, id, "delete-device")
 }
 
@@ -242,17 +287,117 @@ func (s *DeviceService) cmdPlan(ctx context.Context, id, cmd, op string) (plan.P
 	return p, d, nil
 }
 
-func (s *DeviceService) applyDevMgr(ctx context.Context, id, cmd string) (Device, error) {
+func (s *DeviceService) applyDevMgr(ctx context.Context, id, cmd string) (ActionAcceptance, error) {
 	d, err := s.getLegacy(ctx, id)
 	if err != nil {
-		return Device{}, err
+		return ActionAcceptance{}, err
 	}
 	path := s.api.SitePath(client.PathCmdDevMgr)
 	body := map[string]any{"cmd": cmd, "mac": d.MAC}
 	if err := s.api.Do(ctx, http.MethodPost, path, body, nil); err != nil {
+		return ActionAcceptance{}, err
+	}
+	return ActionAcceptance{Accepted: true}, nil
+}
+
+func (s *DeviceService) officialActionPlan(ctx context.Context, query, action string) (plan.Plan, Device, error) {
+	d, err := s.Get(ctx, query)
+	if err != nil {
+		return plan.Plan{}, Device{}, err
+	}
+	if !looksLikeUUID(d.ID) {
+		return plan.Plan{}, Device{}, apperr.New(apperr.Conflict, "official device target has an invalid ID")
+	}
+	p := plan.Update("device", d.ID, d.Name, fmt.Sprintf("%s device %s", action, d.Name),
+		map[string]any{"action": "none", "id": d.ID, "state": d.State},
+		map[string]any{"action": action, "id": d.ID, "state": d.State})
+	return p, d, nil
+}
+
+func (s *DeviceService) applyOfficialRestart(ctx context.Context, query string) (ActionAcceptance, error) {
+	d, err := s.Get(ctx, query)
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	if !looksLikeUUID(d.ID) {
+		return ActionAcceptance{}, apperr.New(apperr.Conflict, "official device target has an invalid ID")
+	}
+	transport, _ := requireOfficialMutationAPI(s.api)
+	path, err := transport.IntegrationSitePath(ctx, "devices", d.ID, "actions")
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	if err := transport.DoOfficial(ctx, http.MethodPost, path, map[string]any{"action": "RESTART"}, nil); err != nil {
+		return ActionAcceptance{}, err
+	}
+	return ActionAcceptance{Accepted: true}, nil
+}
+
+func (s *DeviceService) getPendingOfficial(ctx context.Context, query string) (Device, error) {
+	raw, official, err := fetchOfficialGlobal(s.api, ctx, "pending-devices")
+	if err != nil {
 		return Device{}, err
 	}
-	return d, nil
+	if !official {
+		return Device{}, apperr.New(apperr.Internal, "official pending-device transport is unavailable")
+	}
+	items := make([]Device, 0, len(raw))
+	for _, item := range raw {
+		d := NormalizeDevice(item)
+		d.ID = d.MAC
+		if d.Name == "" {
+			d.Name = d.Model
+		}
+		items = append(items, d)
+	}
+	selected, err := resolve.One(items, query)
+	if err != nil {
+		return Device{}, err
+	}
+	if strings.TrimSpace(selected.MAC) == "" {
+		return Device{}, apperr.New(apperr.Conflict, "pending device target has no MAC address")
+	}
+	return selected, nil
+}
+
+func (s *DeviceService) applyOfficialAdopt(ctx context.Context, query string) (ActionAcceptance, error) {
+	d, err := s.getPendingOfficial(ctx, query)
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	transport, _ := requireOfficialMutationAPI(s.api)
+	path, err := transport.IntegrationSitePath(ctx, "devices")
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	body := map[string]any{"ignoreDeviceLimit": false, "macAddress": d.MAC}
+	var response map[string]any
+	if err := transport.DoOfficial(ctx, http.MethodPost, path, body, &response); err != nil {
+		return ActionAcceptance{}, err
+	}
+	if !looksLikeUUID(strField(response, "id")) || !reflect.DeepEqual(resolve.NormalizeMAC(strField(response, "macAddress")), resolve.NormalizeMAC(d.MAC)) {
+		return ActionAcceptance{}, apperr.New(apperr.Conflict, "device adoption result is unverified: controller response is missing the matching device ID or MAC")
+	}
+	return ActionAcceptance{Accepted: true}, nil
+}
+
+func (s *DeviceService) applyOfficialForget(ctx context.Context, query string) (ActionAcceptance, error) {
+	d, err := s.Get(ctx, query)
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	if !looksLikeUUID(d.ID) {
+		return ActionAcceptance{}, apperr.New(apperr.Conflict, "official device target has an invalid ID")
+	}
+	transport, _ := requireOfficialMutationAPI(s.api)
+	path, err := transport.IntegrationSitePath(ctx, "devices", d.ID)
+	if err != nil {
+		return ActionAcceptance{}, err
+	}
+	if err := transport.DoOfficial(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return ActionAcceptance{}, err
+	}
+	return ActionAcceptance{Accepted: true}, nil
 }
 
 func NormalizeDevice(m map[string]any) Device {

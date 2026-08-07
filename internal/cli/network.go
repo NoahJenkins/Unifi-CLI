@@ -52,7 +52,7 @@ func newNetworkCreateCmd() *cobra.Command {
 		name       string
 		vlan       int
 		subnet     string
-		purpose    string
+		management string
 		domainName string
 	)
 	cmd := &cobra.Command{
@@ -62,7 +62,7 @@ func newNetworkCreateCmd() *cobra.Command {
 			in := domain.NetworkInput{
 				Name:          name,
 				SetName:       true,
-				Purpose:       purpose,
+				Purpose:       management,
 				SetPurpose:    true,
 				Subnet:        subnet,
 				SetSubnet:     cmd.Flags().Changed("subnet"),
@@ -79,9 +79,10 @@ func newNetworkCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "network name")
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
-	cmd.Flags().StringVar(&purpose, "purpose", "corporate", "purpose (corporate|guest|wan|…)")
+	cmd.Flags().StringVar(&management, "management", "", "management mode (gateway|switch|unmanaged)")
 	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("management")
 	return cmd
 }
 
@@ -90,7 +91,7 @@ func newNetworkUpdateCmd() *cobra.Command {
 		name            string
 		vlan            int
 		subnet          string
-		purpose         string
+		management      string
 		domainName      string
 		clearDomainName bool
 	)
@@ -102,8 +103,8 @@ func newNetworkUpdateCmd() *cobra.Command {
 			in := domain.NetworkInput{
 				Name:            name,
 				SetName:         cmd.Flags().Changed("name"),
-				Purpose:         purpose,
-				SetPurpose:      cmd.Flags().Changed("purpose"),
+				Purpose:         management,
+				SetPurpose:      cmd.Flags().Changed("management"),
 				Subnet:          subnet,
 				SetSubnet:       cmd.Flags().Changed("subnet"),
 				DomainName:      domainName,
@@ -120,7 +121,7 @@ func newNetworkUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "network name")
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
-	cmd.Flags().StringVar(&purpose, "purpose", "", "purpose (corporate|guest|wan|…)")
+	cmd.Flags().StringVar(&management, "management", "", "management mode (gateway|switch|unmanaged)")
 	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	cmd.Flags().BoolVar(&clearDomainName, "clear-domain-name", false, "clear the DHCP domain name")
 	return cmd
@@ -129,7 +130,7 @@ func newNetworkUpdateCmd() *cobra.Command {
 func newNetworkDeleteCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete <id>",
-		Short: "Delete a network (WAN delete is destructive under safe_mode)",
+		Short: "Delete a network (destructive under safe_mode)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runNetworkDelete(args[0])
@@ -226,7 +227,8 @@ func runNetworkCreate(in domain.NetworkInput) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Untargeted(p, plan.Routine, false), nil
+			risk, experimental := task7MutationPolicy("network", "create")
+			return plan.Untargeted(p, risk, experimental), nil
 		},
 		nil,
 		func(target plan.Target) (any, error) {
@@ -249,7 +251,8 @@ func runNetworkUpdate(id string, in domain.NetworkInput) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, n.ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("network", "update")
+			return plan.Targeted(p, n.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.Update(ctx, target.ID(), in)
@@ -276,11 +279,8 @@ func runNetworkDelete(id string) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			risk := plan.Routine
-			if domain.NetworkDeleteDestructive(n) {
-				risk = plan.Destructive
-			}
-			return plan.Targeted(p, n.ID, p.Changes, risk, false)
+			risk, experimental := task7MutationPolicy("network", "delete")
+			return plan.Targeted(p, n.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.Delete(ctx, target.ID())

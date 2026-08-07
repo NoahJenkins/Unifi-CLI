@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -161,6 +162,7 @@ type fakePortAPI struct {
 	restDevices map[string]map[string]any // keyed by device id for GET rest/device/{id}
 	calls       []portCall
 	err         error
+	ignorePuts  bool
 }
 
 type portCall struct {
@@ -205,6 +207,25 @@ func (f *fakePortAPI) Do(ctx context.Context, method, path string, in, out any) 
 		}
 		return json.Unmarshal(b, out)
 	}
+	if method == http.MethodPut && !f.ignorePuts {
+		body, _ := in.(map[string]any)
+		overrides := sliceTestMaps(body["port_overrides"])
+		id := path[strings.LastIndex(path, "/")+1:]
+		if f.restDevices == nil {
+			f.restDevices = map[string]map[string]any{}
+		}
+		if _, ok := f.restDevices[id]; !ok {
+			for _, device := range f.devices {
+				if strID(device) == id {
+					f.restDevices[id] = cloneTestMap(device)
+					break
+				}
+			}
+		}
+		if device := f.restDevices[id]; device != nil {
+			device["port_overrides"] = overrides
+		}
+	}
 	if out != nil {
 		_ = json.Unmarshal([]byte(`[]`), out)
 	}
@@ -219,6 +240,13 @@ func strID(m map[string]any) string {
 		return v
 	}
 	return ""
+}
+
+func sliceTestMaps(value any) []map[string]any {
+	b, _ := json.Marshal(value)
+	var out []map[string]any
+	_ = json.Unmarshal(b, &out)
+	return out
 }
 
 func (f *fakePortAPI) SitePath(parts ...string) string {
@@ -353,15 +381,17 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 		t.Fatalf("expected GET rest/device/sw1 before PUT; calls=%v", callSummary(api.calls))
 	}
 
-	// last call PUT rest/device/sw1 with merged port_overrides
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("method = %q", last.method)
+	// one PUT rest/device/sw1 with merged port_overrides
+	var mutation portCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			mutation = call
+		}
 	}
-	if last.path != "/proxy/network/api/s/default/rest/device/sw1" {
-		t.Fatalf("path = %q", last.path)
+	if mutation.path != "/proxy/network/api/s/default/rest/device/sw1" {
+		t.Fatalf("path = %q", mutation.path)
 	}
-	overrides := portOverridesFromBody(t, last.body)
+	overrides := portOverridesFromBody(t, mutation.body)
 	if len(overrides) != 1 {
 		t.Fatalf("override len = %d, want 1: %+v", len(overrides), overrides)
 	}
@@ -468,11 +498,13 @@ func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("last method = %q", last.method)
+	var mutation portCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			mutation = call
+		}
 	}
-	overrides := portOverridesFromBody(t, last.body)
+	overrides := portOverridesFromBody(t, mutation.body)
 	if len(overrides) != 2 {
 		t.Fatalf("override len = %d, want 2 (must not wipe port 5): %+v", len(overrides), overrides)
 	}

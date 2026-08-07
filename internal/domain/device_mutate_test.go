@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/domain"
@@ -33,6 +34,14 @@ func (f *mutateDeviceAPI) Do(ctx context.Context, method, path string, in, out a
 			return err
 		}
 		return json.Unmarshal(b, out)
+	}
+	if method == http.MethodPut {
+		body, _ := in.(map[string]any)
+		for _, device := range f.devices {
+			if strFieldTest(device, "_id", "id") == path[strings.LastIndex(path, "/")+1:] {
+				device["name"] = body["name"]
+			}
+		}
 	}
 	// mutate responses: empty ok
 	if out != nil {
@@ -79,15 +88,17 @@ func TestDeviceRenamePlanAndApply(t *testing.T) {
 	if got.ID != "ap1" {
 		t.Fatalf("apply result: %+v", got)
 	}
-	// last call should be PUT rest/device/ap1
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("method = %q", last.method)
+	// one PUT rest/device/ap1 is followed by an authoritative GET.
+	var mutation mutateCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			mutation = call
+		}
 	}
-	if last.path != "/proxy/network/api/s/default/rest/device/ap1" {
-		t.Fatalf("path = %q", last.path)
+	if mutation.path != "/proxy/network/api/s/default/rest/device/ap1" {
+		t.Fatalf("path = %q", mutation.path)
 	}
-	body, _ := last.body.(map[string]any)
+	body, _ := mutation.body.(map[string]any)
 	if body["name"] != "AP-Lobby" {
 		t.Fatalf("body = %+v", body)
 	}

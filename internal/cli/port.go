@@ -196,7 +196,8 @@ func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
 			if len(p.Changes) != 1 || p.Changes[0].ID == "" {
 				return plan.PreparedMutation{}, fmt.Errorf("port update produced invalid target plan")
 			}
-			return plan.Targeted(p, p.Changes[0].ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("port", "update")
+			return plan.Targeted(p, p.Changes[0].ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			deviceID, targetPortIdx, err := parsePortTarget(target.ID())

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -50,6 +52,11 @@ type NetworkInput struct {
 
 type NetworkService struct {
 	api NetworkAPI
+}
+
+type networkDocument struct {
+	normalized Network
+	wire       map[string]any
 }
 
 func NewNetworkService(api NetworkAPI) *NetworkService {
@@ -131,11 +138,18 @@ func (s *NetworkService) getLegacy(ctx context.Context, id string) (Network, err
 }
 
 func (s *NetworkService) Create(ctx context.Context, in NetworkInput) (plan.Plan, error) {
-	_ = ctx
 	if err := validateNetworkCreate(in); err != nil {
 		return plan.Plan{}, err
 	}
 	after := networkInputBody(in)
+	if supportsOfficialDetails(s.api) {
+		var err error
+		after, err = officialNetworkCreateBody(in)
+		if err != nil {
+			return plan.Plan{}, err
+		}
+	}
+	_ = ctx
 	p := plan.Create("network", in.Name,
 		fmt.Sprintf("create network %s", in.Name),
 		after,
@@ -146,6 +160,9 @@ func (s *NetworkService) Create(ctx context.Context, in NetworkInput) (plan.Plan
 func (s *NetworkService) ApplyCreate(ctx context.Context, in NetworkInput) (Network, error) {
 	if err := validateNetworkCreate(in); err != nil {
 		return Network{}, err
+	}
+	if supportsOfficialDetails(s.api) {
+		return s.applyOfficialCreate(ctx, in)
 	}
 	path := s.api.SitePath(client.PathRestNetwork)
 	body := networkInputBody(in)
@@ -173,6 +190,16 @@ func (s *NetworkService) Update(ctx context.Context, id string, in NetworkInput)
 	if err := validateNetworkUpdate(in); err != nil {
 		return plan.Plan{}, Network{}, err
 	}
+	if supportsOfficialDetails(s.api) {
+		doc, body, err := s.prepareOfficialUpdate(ctx, id, in)
+		if err != nil {
+			return plan.Plan{}, Network{}, err
+		}
+		after := NormalizeNetwork(networkResponseView(body, doc.wire))
+		p := plan.Update("network", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("update network %s", doc.normalized.Name), networkSnapshot(doc.normalized), networkSnapshot(after))
+		return p, doc.normalized, nil
+	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Network{}, err
@@ -190,6 +217,9 @@ func (s *NetworkService) Update(ctx context.Context, id string, in NetworkInput)
 func (s *NetworkService) ApplyUpdate(ctx context.Context, id string, in NetworkInput) (Network, error) {
 	if err := validateNetworkUpdate(in); err != nil {
 		return Network{}, err
+	}
+	if supportsOfficialDetails(s.api) {
+		return s.applyOfficialUpdate(ctx, id, in)
 	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
@@ -226,6 +256,15 @@ func (s *NetworkService) ApplyUpdate(ctx context.Context, id string, in NetworkI
 }
 
 func (s *NetworkService) Delete(ctx context.Context, id string) (plan.Plan, Network, error) {
+	if supportsOfficialDetails(s.api) {
+		doc, err := s.resolveOfficialDocument(ctx, id)
+		if err != nil {
+			return plan.Plan{}, Network{}, err
+		}
+		p := plan.Delete("network", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("delete network %s", doc.normalized.Name), networkSnapshot(doc.normalized))
+		return p, doc.normalized, nil
+	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Network{}, err
@@ -238,6 +277,9 @@ func (s *NetworkService) Delete(ctx context.Context, id string) (plan.Plan, Netw
 }
 
 func (s *NetworkService) ApplyDelete(ctx context.Context, id string) (Network, error) {
+	if supportsOfficialDetails(s.api) {
+		return s.applyOfficialDelete(ctx, id)
+	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Network{}, err
@@ -249,16 +291,17 @@ func (s *NetworkService) ApplyDelete(ctx context.Context, id string) (Network, e
 	return n, nil
 }
 
-// NetworkDeleteDestructive reports whether deleting n requires safe_mode --force.
-func NetworkDeleteDestructive(n Network) bool {
-	return n.WAN
+// NetworkDeleteDestructive reports whether deleting a network requires
+// safe_mode --force. Every network deletion is destructive.
+func NetworkDeleteDestructive(Network) bool {
+	return true
 }
 
 func NormalizeNetwork(m map[string]any) Network {
 	n := Network{
 		ID:          strField(m, "_id", "id"),
 		Name:        strField(m, "name"),
-		Purpose:     strField(m, "purpose"),
+		Purpose:     strings.ToLower(strField(m, "purpose", "management")),
 		Subnet:      strField(m, "ip_subnet", "subnet"),
 		DHCPEnabled: boolField(m, "dhcpd_enabled"),
 		DomainName:  strField(m, "domain_name"),
@@ -289,6 +332,249 @@ func NormalizeNetwork(m map[string]any) Network {
 		n.VLAN = &v
 	}
 	return n
+}
+
+func (s *NetworkService) resolveOfficialDocument(ctx context.Context, query string) (networkDocument, error) {
+	raw, official, err := fetchOfficialSite(s.api, ctx, "networks")
+	if err != nil {
+		return networkDocument{}, err
+	}
+	if !official {
+		return networkDocument{}, apperr.New(apperr.Internal, "official network transport is unavailable")
+	}
+	items := make([]Network, 0, len(raw))
+	for _, item := range raw {
+		items = append(items, NormalizeNetwork(item))
+	}
+	selected, err := resolve.One(items, query)
+	if err != nil {
+		return networkDocument{}, err
+	}
+	if !looksLikeUUID(selected.ID) {
+		return networkDocument{}, apperr.New(apperr.Conflict, "official network target has an invalid ID")
+	}
+	wire, err := fetchOfficialSiteDetail(s.api, ctx, selected.ID, "networks")
+	if err != nil {
+		return networkDocument{}, err
+	}
+	if strField(wire, "id") != selected.ID {
+		return networkDocument{}, apperr.New(apperr.Conflict, "official network detail returned an ambiguous ID")
+	}
+	return networkDocument{normalized: NormalizeNetwork(wire), wire: deepCloneMap(wire)}, nil
+}
+
+func networkWritableDocument(raw map[string]any) map[string]any {
+	body := deepCloneMap(raw)
+	delete(body, "id")
+	delete(body, "default")
+	delete(body, "metadata")
+	return body
+}
+
+func networkResponseView(body, existing map[string]any) map[string]any {
+	view := deepCloneMap(body)
+	for _, key := range []string{"id", "default", "metadata"} {
+		if value, ok := existing[key]; ok {
+			view[key] = deepCloneValue(value)
+		}
+	}
+	return view
+}
+
+func (s *NetworkService) applyOfficialCreate(ctx context.Context, in NetworkInput) (Network, error) {
+	transport, err := requireOfficialMutationAPI(s.api)
+	if err != nil {
+		return Network{}, err
+	}
+	body, err := officialNetworkCreateBody(in)
+	if err != nil {
+		return Network{}, err
+	}
+	path, err := transport.IntegrationSitePath(ctx, "networks")
+	if err != nil {
+		return Network{}, err
+	}
+	var created map[string]any
+	if err := transport.DoOfficial(ctx, http.MethodPost, path, body, &created); err != nil {
+		return Network{}, err
+	}
+	id := strField(created, "id")
+	if !looksLikeUUID(id) {
+		return Network{}, apperr.New(apperr.Conflict, "network create result is unverified: controller response is missing a valid network ID")
+	}
+	observed, err := fetchOfficialSiteDetail(s.api, ctx, id, "networks")
+	if err != nil {
+		return Network{}, verificationError("created network could not be verified", err)
+	}
+	if !wireDocumentsEqual(networkWritableDocument(observed), body) {
+		return Network{}, apperr.New(apperr.Conflict, "network create verification failed: observed writable document differs from requested state")
+	}
+	return NormalizeNetwork(observed), nil
+}
+
+func (s *NetworkService) prepareOfficialUpdate(ctx context.Context, query string, in NetworkInput) (networkDocument, map[string]any, error) {
+	doc, err := s.resolveOfficialDocument(ctx, query)
+	if err != nil {
+		return networkDocument{}, nil, err
+	}
+	body := networkWritableDocument(doc.wire)
+	if inputSetsNetworkName(in) {
+		body["name"] = in.Name
+	}
+	if inputSetsNetworkPurpose(in) {
+		management, err := officialNetworkManagement(in.Purpose)
+		if err != nil {
+			return networkDocument{}, nil, err
+		}
+		body["management"] = management
+	}
+	if in.VLAN != nil {
+		body["vlanId"] = *in.VLAN
+	}
+	ipv4, _ := body["ipv4Configuration"].(map[string]any)
+	if inputSetsNetworkSubnet(in) {
+		addr, prefix, err := parseNetworkSubnet(in.Subnet)
+		if err != nil {
+			return networkDocument{}, nil, err
+		}
+		if ipv4 == nil {
+			ipv4 = map[string]any{"autoScaleEnabled": false}
+		} else {
+			ipv4 = deepCloneMap(ipv4)
+		}
+		ipv4["hostIpAddress"] = addr
+		ipv4["prefixLength"] = prefix
+		body["ipv4Configuration"] = ipv4
+	}
+	if in.SetDHCPEnabled || inputSetsNetworkDomain(in) || in.ClearDomainName {
+		if ipv4 == nil {
+			return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "network has no IPv4 configuration to update")
+		}
+		dhcp, _ := ipv4["dhcpConfiguration"].(map[string]any)
+		if in.SetDHCPEnabled && in.DHCPEnabled && dhcp == nil {
+			return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "enabling DHCP requires an existing official DHCP configuration")
+		}
+		if in.SetDHCPEnabled && !in.DHCPEnabled {
+			delete(ipv4, "dhcpConfiguration")
+		} else if dhcp != nil {
+			dhcp = deepCloneMap(dhcp)
+			if inputSetsNetworkDomain(in) {
+				dhcp["domainName"] = in.DomainName
+			}
+			if in.ClearDomainName {
+				delete(dhcp, "domainName")
+			}
+			ipv4["dhcpConfiguration"] = dhcp
+		} else if inputSetsNetworkDomain(in) || in.ClearDomainName {
+			return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "network has no DHCP configuration to update")
+		}
+		body["ipv4Configuration"] = ipv4
+	}
+	if wireDocumentsEqual(body, networkWritableDocument(doc.wire)) {
+		return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "network update would not change controller state")
+	}
+	return doc, body, nil
+}
+
+func (s *NetworkService) applyOfficialUpdate(ctx context.Context, query string, in NetworkInput) (Network, error) {
+	doc, body, err := s.prepareOfficialUpdate(ctx, query, in)
+	if err != nil {
+		return Network{}, err
+	}
+	transport, _ := requireOfficialMutationAPI(s.api)
+	path, err := transport.IntegrationSitePath(ctx, "networks", doc.normalized.ID)
+	if err != nil {
+		return Network{}, err
+	}
+	var response map[string]any
+	if err := transport.DoOfficial(ctx, http.MethodPut, path, body, &response); err != nil {
+		return Network{}, err
+	}
+	observed, err := fetchOfficialSiteDetail(s.api, ctx, doc.normalized.ID, "networks")
+	if err != nil {
+		return Network{}, verificationError("updated network could not be verified", err)
+	}
+	if !wireDocumentsEqual(networkWritableDocument(observed), body) {
+		return Network{}, apperr.New(apperr.Conflict, "network update verification failed: observed writable document differs from requested state")
+	}
+	return NormalizeNetwork(observed), nil
+}
+
+func (s *NetworkService) applyOfficialDelete(ctx context.Context, query string) (Network, error) {
+	doc, err := s.resolveOfficialDocument(ctx, query)
+	if err != nil {
+		return Network{}, err
+	}
+	transport, _ := requireOfficialMutationAPI(s.api)
+	path, err := transport.IntegrationSitePath(ctx, "networks", doc.normalized.ID)
+	if err != nil {
+		return Network{}, err
+	}
+	if err := transport.DoOfficial(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return Network{}, err
+	}
+	if _, err := fetchOfficialSiteDetail(s.api, ctx, doc.normalized.ID, "networks"); err == nil {
+		return Network{}, apperr.New(apperr.Conflict, "network delete verification failed: deleted network is still present")
+	} else if !apperr.Is(err, apperr.NotFound) {
+		return Network{}, verificationError("deleted network could not be verified", err)
+	}
+	return doc.normalized, nil
+}
+
+func officialNetworkCreateBody(in NetworkInput) (map[string]any, error) {
+	management, err := officialNetworkManagement(in.Purpose)
+	if err != nil {
+		return nil, err
+	}
+	if in.VLAN == nil {
+		return nil, apperr.New(apperr.ValidationFailed, "official network creation requires a VLAN ID")
+	}
+	body := map[string]any{"name": in.Name, "enabled": true, "management": management, "vlanId": *in.VLAN}
+	switch management {
+	case "UNMANAGED":
+		return body, nil
+	case "SWITCH":
+		return nil, apperr.New(apperr.ValidationFailed, "switch-managed network creation requires a device ID not exposed by this command")
+	case "GATEWAY":
+		if !inputSetsNetworkSubnet(in) {
+			return nil, apperr.New(apperr.ValidationFailed, "gateway-managed network creation requires a subnet")
+		}
+		addr, prefix, err := parseNetworkSubnet(in.Subnet)
+		if err != nil {
+			return nil, err
+		}
+		if in.DHCPEnabled || inputSetsNetworkDomain(in) {
+			return nil, apperr.New(apperr.ValidationFailed, "gateway network creation cannot safely infer the required DHCP address range")
+		}
+		body["cellularBackupEnabled"] = false
+		body["internetAccessEnabled"] = true
+		body["isolationEnabled"] = false
+		body["ipv4Configuration"] = map[string]any{"hostIpAddress": addr, "prefixLength": prefix, "autoScaleEnabled": false}
+		return body, nil
+	default:
+		return nil, apperr.New(apperr.ValidationFailed, "unsupported official network management mode")
+	}
+}
+
+func officialNetworkManagement(value string) (string, error) {
+	switch strings.ToLower(value) {
+	case "gateway":
+		return "GATEWAY", nil
+	case "switch":
+		return "SWITCH", nil
+	case "unmanaged":
+		return "UNMANAGED", nil
+	default:
+		return "", apperr.Newf(apperr.ValidationFailed, "network management %q is unsupported by the official API; use gateway, switch, or unmanaged", value)
+	}
+}
+
+func parseNetworkSubnet(value string) (string, int, error) {
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || !prefix.Addr().Is4() {
+		return "", 0, apperr.Newf(apperr.ValidationFailed, "network subnet must be a valid IPv4 CIDR: %q", value)
+	}
+	return prefix.Addr().String(), prefix.Bits(), nil
 }
 
 func mergeOfficialNetworkDetail(overview, detail Network) Network {
@@ -407,7 +693,7 @@ func validateNetworkFields(in NetworkInput) error {
 	if err := validateCIDR("network subnet", in.Subnet); err != nil {
 		return err
 	}
-	if err := validateEnum("network purpose", in.Purpose, "corporate", "guest", "wan"); err != nil {
+	if err := validateEnum("network purpose", in.Purpose, "corporate", "guest", "wan", "gateway", "switch", "unmanaged"); err != nil {
 		return err
 	}
 	if inputSetsNetworkDomain(in) {

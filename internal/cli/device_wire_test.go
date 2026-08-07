@@ -10,35 +10,6 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 )
 
-func TestDeviceMutationDestructiveWiring(t *testing.T) {
-	// Regression: forget must be destructive=true or safe_mode cannot block it.
-	want := map[string]bool{
-		"rename":  false,
-		"restart": false,
-		"locate":  false,
-		"upgrade": false,
-		"adopt":   false,
-		"forget":  true,
-	}
-	if len(deviceMutationDestructive) != len(want) {
-		t.Fatalf("deviceMutationDestructive has %d entries, want %d — update test when adding verbs",
-			len(deviceMutationDestructive), len(want))
-	}
-	for action, destructive := range want {
-		got, ok := deviceMutationDestructive[action]
-		if !ok {
-			t.Errorf("missing action %q in deviceMutationDestructive", action)
-			continue
-		}
-		if got != destructive {
-			t.Errorf("%s: destructive=%v, want %v", action, got, destructive)
-		}
-	}
-	if !deviceMutationDestructive["forget"] {
-		t.Fatal("forget must prepare a destructive mutation")
-	}
-}
-
 func TestEmittedExitPreservesValidationCode(t *testing.T) {
 	// runDeviceMutation used to return fmt.Errorf → Execute → exit 1 always.
 	var out bytes.Buffer

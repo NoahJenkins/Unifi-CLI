@@ -2,7 +2,9 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -10,6 +12,25 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
 )
+
+// wireDocumentsEqual compares JSON-shaped controller documents after a JSON
+// round trip so integer inputs and decoded JSON numbers have the same meaning.
+func wireDocumentsEqual(a, b any) bool {
+	normalize := func(value any) (any, bool) {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, false
+		}
+		var normalized any
+		if err := json.Unmarshal(encoded, &normalized); err != nil {
+			return nil, false
+		}
+		return normalized, true
+	}
+	left, leftOK := normalize(a)
+	right, rightOK := normalize(b)
+	return leftOK && rightOK && reflect.DeepEqual(left, right)
+}
 
 type officialCollectionAPI interface {
 	FetchOfficialObjects(context.Context, string) ([]map[string]any, error)
@@ -22,6 +43,11 @@ type officialSiteCollectionAPI interface {
 
 type officialDetailAPI interface {
 	DoOfficial(context.Context, string, string, any, any) error
+}
+
+type officialMutationAPI interface {
+	officialSiteCollectionAPI
+	officialDetailAPI
 }
 
 const officialDetailConcurrencyLimit = 4
@@ -145,6 +171,39 @@ func supportsOfficialDetails(api any) bool {
 	_, collectionOK := api.(officialSiteCollectionAPI)
 	_, detailOK := api.(officialDetailAPI)
 	return collectionOK && detailOK
+}
+
+func requireOfficialMutationAPI(api any) (officialMutationAPI, error) {
+	transport, ok := api.(officialMutationAPI)
+	if !ok {
+		return nil, apperr.New(apperr.Internal, "official mutation transport is unavailable")
+	}
+	return transport, nil
+}
+
+func deepCloneMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = deepCloneValue(value)
+	}
+	return out
+}
+
+func deepCloneValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return deepCloneMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = deepCloneValue(item)
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
+	}
 }
 
 func resolveLegacyMutationTarget[T resolve.Identifiable](legacy, official []T, query, resource string, sameIdentity func(T, T) bool) (T, error) {

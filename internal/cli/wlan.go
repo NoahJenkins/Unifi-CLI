@@ -273,7 +273,8 @@ func runWlanCreate(in domain.WlanInput) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Untargeted(p, plan.Routine, false), nil
+			risk, experimental := task7MutationPolicy("wlan", "create")
+			return plan.Untargeted(p, risk, experimental), nil
 		},
 		nil,
 		func(target plan.Target) (any, error) {
@@ -296,7 +297,8 @@ func runWlanUpdate(id string, in domain.WlanInput) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("wlan", "update")
+			return plan.Targeted(p, w.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.Update(ctx, target.ID(), in)
@@ -322,7 +324,8 @@ func runWlanDelete(id string) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("wlan", "delete")
+			return plan.Targeted(p, w.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.Delete(ctx, target.ID())
@@ -348,7 +351,8 @@ func runWlanEnable(id string) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("wlan", "enable")
+			return plan.Targeted(p, w.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.Enable(ctx, target.ID())
@@ -374,7 +378,8 @@ func runWlanDisable(id string) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, w.ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("wlan", "disable")
+			return plan.Targeted(p, w.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.Disable(ctx, target.ID())

@@ -177,7 +177,8 @@ func runClientMutation(action, id string) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, c.ID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("client", action)
+			return plan.Targeted(p, c.ID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := build(target.ID())

@@ -383,7 +383,8 @@ func runDNSResolversSet(network string, servers []string) error {
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Targeted(p, n.NetworkID, p.Changes, plan.Routine, false)
+			risk, experimental := task7MutationPolicy("dns", "resolvers set")
+			return plan.Targeted(p, n.NetworkID, p.Changes, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			p, _, err := svc.SetResolvers(ctx, target.ID(), servers)
