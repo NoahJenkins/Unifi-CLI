@@ -70,12 +70,12 @@ func runSystemHealth() error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "status: %s\n", h.Status)
+	fmt.Fprintf(rt.Out, "status: %s\n", render.SafeText(h.Status))
 	fmt.Fprintf(rt.Out, "device_total: %s\n", strconv.Itoa(h.DeviceTotal))
 	fmt.Fprintf(rt.Out, "device_connected: %s\n", strconv.Itoa(h.DeviceConnected))
 	fmt.Fprintf(rt.Out, "client_total: %s\n", strconv.Itoa(h.ClientTotal))
 	for _, sub := range h.Subsystems {
-		fmt.Fprintf(rt.Out, "subsystem %s: %s\n", sub.Name, sub.Status)
+		fmt.Fprintf(rt.Out, "subsystem %s: %s\n", render.SafeText(sub.Name), render.SafeText(sub.Status))
 	}
 	return nil
 }

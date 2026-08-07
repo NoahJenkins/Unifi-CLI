@@ -27,6 +27,8 @@ type Client struct {
 	authMethod string
 }
 
+const maxResponseBodyBytes = 16 << 20
+
 func New(cfg config.Config) (*Client, error) {
 	return NewWithStore(cfg, authstore.NewStore(authstore.Options{}))
 }
@@ -155,9 +157,12 @@ func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) e
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return apperr.Newf(apperr.ControllerUnreachable, "read response: %v", err)
+	}
+	if len(respBody) > maxResponseBodyBytes {
+		return apperr.New(apperr.Internal, "controller response is too large")
 	}
 
 	if err := mapStatus(resp.StatusCode, respBody); err != nil {

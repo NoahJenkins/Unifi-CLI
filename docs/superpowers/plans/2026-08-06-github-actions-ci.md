@@ -1,5 +1,7 @@
 # GitHub Actions CI Implementation Plan
 
+> **Implemented historical plan.** The workflow and three-platform checks are implemented. Required-check governance is hosted in GitHub settings and is not represented by this historical file. Use the root documentation for current contribution requirements.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run the repo's existing local gate (`scripts/smoke.sh`) in GitHub Actions on every push to `main` and every PR, across ubuntu/macos/windows, and require those checks before merging.

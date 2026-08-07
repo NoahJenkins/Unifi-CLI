@@ -87,3 +87,22 @@ func TestWriteTableNonEmpty(t *testing.T) {
 		t.Fatalf("unexpected table: %q", out)
 	}
 }
+
+func TestWriteTableEscapesTerminalControlCharacters(t *testing.T) {
+	var buf bytes.Buffer
+	input := "guest\x1b]52;c;YXR0YWNr\a\tname\n"
+	if err := render.WriteTable(&buf, []string{"Name"}, [][]string{{input}}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, control := range []string{"\x1b", "\a", "\tname", "name\n\n"} {
+		if strings.Contains(out, control) {
+			t.Fatalf("table output contains terminal control sequence %q: %q", control, out)
+		}
+	}
+	for _, visible := range []string{`\x1b`, `\a`, `\t`, `\n`} {
+		if !strings.Contains(out, visible) {
+			t.Fatalf("table output does not visibly escape %q: %q", visible, out)
+		}
+	}
+}

@@ -1,5 +1,7 @@
 # Cross-Platform Session Persistence Design
 
+> **Superseded.** Cookie-session and password authentication were removed by the 2026-07-29 API-key-only design. This file is retained only as decision history.
+
 **Date:** 2026-07-28
 **Status:** Approved for implementation
 

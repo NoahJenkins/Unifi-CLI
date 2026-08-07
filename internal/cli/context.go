@@ -37,7 +37,7 @@ func (rt *Runtime) Emit(resource, action string, data any, p *plan.Plan, err err
 		if rt.JSON {
 			_ = render.WriteJSON(rt.Out, render.Fail(resource, action, site, err))
 		} else {
-			fmt.Fprintln(rt.Err, err.Error())
+			fmt.Fprintln(rt.Err, render.SafeText(err.Error()))
 		}
 		return render.ExitCode(err)
 	}
@@ -50,7 +50,7 @@ func (rt *Runtime) Emit(resource, action string, data any, p *plan.Plan, err err
 	if rt.JSON {
 		_ = render.WriteJSON(rt.Out, env)
 	} else if p != nil && dry {
-		fmt.Fprintf(rt.Out, "DRY-RUN: %s\n", p.Summary)
+		fmt.Fprintf(rt.Out, "DRY-RUN: %s\n", render.SafeText(p.Summary))
 		rows := make([][]string, 0, len(p.Changes))
 		for _, c := range p.Changes {
 			rows = append(rows, []string{c.Op, c.Resource, c.ID, c.Name})
@@ -74,29 +74,29 @@ func printData(w io.Writer, data any) {
 		seen := map[string]bool{}
 		for _, k := range order {
 			if val, ok := v[k]; ok {
-				fmt.Fprintf(w, "%s: %v\n", k, val)
+				fmt.Fprintf(w, "%s: %s\n", k, render.SafeText(fmt.Sprint(val)))
 				seen[k] = true
 			}
 		}
 		for _, k := range keys {
 			if !seen[k] {
-				fmt.Fprintf(w, "%s: %v\n", k, v[k])
+				fmt.Fprintf(w, "%s: %s\n", k, render.SafeText(fmt.Sprint(v[k])))
 			}
 		}
 	case map[string]string:
 		seen := map[string]bool{}
 		for _, k := range []string{"host", "site", "auth_method", "path"} {
 			if val, ok := v[k]; ok {
-				fmt.Fprintf(w, "%s: %s\n", k, val)
+				fmt.Fprintf(w, "%s: %s\n", k, render.SafeText(val))
 				seen[k] = true
 			}
 		}
 		for k, val := range v {
 			if !seen[k] {
-				fmt.Fprintf(w, "%s: %s\n", k, val)
+				fmt.Fprintf(w, "%s: %s\n", k, render.SafeText(val))
 			}
 		}
 	default:
-		fmt.Fprintf(w, "%v\n", data)
+		fmt.Fprintln(w, render.SafeText(fmt.Sprint(data)))
 	}
 }

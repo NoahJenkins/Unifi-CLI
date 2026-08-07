@@ -3,8 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/render"
@@ -51,20 +54,34 @@ func newWlanGetCmd() *cobra.Command {
 
 func newWlanCreateCmd() *cobra.Command {
 	var (
-		name     string
-		security string
-		network  string
-		password string
+		name          string
+		security      string
+		network       string
+		password      bool
+		passwordStdin bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a WLAN",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return apperr.New(apperr.ValidationFailed, "wlan create does not accept positional arguments")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			secret, err := resolveWlanPassword(cmd, password, passwordStdin)
+			if err != nil {
+				return emitErr("wlan", "create", err)
+			}
+			if err := validateWlanCreatePassword(security, secret); err != nil {
+				return emitErr("wlan", "create", err)
+			}
 			in := domain.WlanInput{
 				Name:     name,
 				Security: security,
 				Network:  network,
-				Password: password,
+				Password: secret,
 			}
 			return runWlanCreate(in)
 		},
@@ -72,28 +89,34 @@ func newWlanCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "SSID name")
 	cmd.Flags().StringVar(&security, "security", "wpapsk", "security mode (wpapsk|open|…)")
 	cmd.Flags().StringVar(&network, "network", "", "network id")
-	cmd.Flags().StringVar(&password, "password", "", "WLAN password (masked in plans)")
+	cmd.Flags().BoolVar(&password, "password", false, "prompt for the WLAN password")
+	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the WLAN password from stdin")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
 
 func newWlanUpdateCmd() *cobra.Command {
 	var (
-		name     string
-		security string
-		network  string
-		password string
+		name          string
+		security      string
+		network       string
+		password      bool
+		passwordStdin bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
 		Short: "Update a WLAN",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			secret, err := resolveWlanPassword(cmd, password, passwordStdin)
+			if err != nil {
+				return emitErr("wlan", "update", err)
+			}
 			in := domain.WlanInput{
 				Name:     name,
 				Security: security,
 				Network:  network,
-				Password: password,
+				Password: secret,
 			}
 			return runWlanUpdate(args[0], in)
 		},
@@ -101,8 +124,32 @@ func newWlanUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "SSID name")
 	cmd.Flags().StringVar(&security, "security", "", "security mode (wpapsk|open|…)")
 	cmd.Flags().StringVar(&network, "network", "", "network id")
-	cmd.Flags().StringVar(&password, "password", "", "WLAN password (masked in plans)")
+	cmd.Flags().BoolVar(&password, "password", false, "prompt for the WLAN password")
+	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the WLAN password from stdin")
 	return cmd
+}
+
+func resolveWlanPassword(cmd *cobra.Command, prompt, stdin bool) (string, error) {
+	if prompt && stdin {
+		return "", apperr.New(apperr.ValidationFailed, "choose only one WLAN password source")
+	}
+	if prompt {
+		return promptWlanPassword(os.Stdin, cmd.ErrOrStderr())
+	}
+	if stdin {
+		return readWlanPasswordFromStdin(cmd.InOrStdin())
+	}
+	return "", nil
+}
+
+func validateWlanCreatePassword(security, password string) error {
+	if !strings.EqualFold(security, "open") && password == "" {
+		return apperr.WithHint(
+			apperr.New(apperr.ValidationFailed, "secured WLAN creation requires a password"),
+			"pass --password or --password-stdin",
+		)
+	}
+	return nil
 }
 
 func newWlanDeleteCmd() *cobra.Command {
@@ -195,12 +242,12 @@ func runWlanGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", w.ID)
-	fmt.Fprintf(rt.Out, "name: %s\n", w.Name)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(w.ID))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(w.Name))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(w.Enabled))
-	fmt.Fprintf(rt.Out, "security: %s\n", w.Security)
-	fmt.Fprintf(rt.Out, "network_id: %s\n", w.NetworkID)
-	fmt.Fprintf(rt.Out, "band: %s\n", w.Band)
+	fmt.Fprintf(rt.Out, "security: %s\n", render.SafeText(w.Security))
+	fmt.Fprintf(rt.Out, "network_id: %s\n", render.SafeText(w.NetworkID))
+	fmt.Fprintf(rt.Out, "band: %s\n", render.SafeText(w.Band))
 	fmt.Fprintf(rt.Out, "guest: %s\n", strconv.FormatBool(w.Guest))
 	return nil
 }

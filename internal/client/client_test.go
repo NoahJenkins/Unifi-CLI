@@ -298,6 +298,23 @@ func TestDoMapsConnectionError(t *testing.T) {
 	}
 }
 
+func TestDoRejectsOversizedControllerResponse(t *testing.T) {
+	const responseLimit = 16 << 20
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.CopyN(w, strings.NewReader(strings.Repeat("x", responseLimit+1)), responseLimit+1)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "response is too large") {
+		t.Fatalf("Do error = %v, want bounded-response failure", err)
+	}
+}
+
 func TestSitePath(t *testing.T) {
 	c, err := client.NewWithAPIKey(config.Config{
 		Host: "127.0.0.1",

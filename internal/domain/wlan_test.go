@@ -275,6 +275,27 @@ func TestWlanUpdatePlanAndApply(t *testing.T) {
 	}
 }
 
+func TestWlanUpdateRequiresPasswordWhenTransitioningFromOpenToSecured(t *testing.T) {
+	api := &fakeWlanAPI{wlans: fixtureWlans(t)}
+	svc := domain.NewWlanService(api)
+	ctx := context.Background()
+
+	_, _, err := svc.Update(ctx, "wlan3", domain.WlanInput{Security: "wpapsk"})
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("open-to-secured update error = %v", err)
+	}
+
+	_, _, err = svc.Update(ctx, "wlan3", domain.WlanInput{Security: "wpapsk", Password: "secret"})
+	if err != nil {
+		t.Fatalf("open-to-secured update with password: %v", err)
+	}
+
+	_, _, err = svc.Update(ctx, "wlan2", domain.WlanInput{Security: "wpapsk"})
+	if err != nil {
+		t.Fatalf("secured update without password should preserve the existing password: %v", err)
+	}
+}
+
 func TestWlanDeletePlanAndApply(t *testing.T) {
 	api := &fakeWlanAPI{wlans: fixtureWlans(t)}
 	svc := domain.NewWlanService(api)

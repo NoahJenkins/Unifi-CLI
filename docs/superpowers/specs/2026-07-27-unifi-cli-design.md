@@ -1,5 +1,7 @@
 # UniFi CLI Design
 
+> **Historical record.** The core CLI was implemented, but the authentication sections were superseded by the 2026-07-29 API-key-only design. Use the root `README.md` for current behavior.
+
 **Date:** 2026-07-27  
 **Status:** Approved for implementation planning  
 **Binary name:** `unifi`

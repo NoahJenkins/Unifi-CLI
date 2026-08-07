@@ -149,6 +149,9 @@ func Validate(command Command, stdout []byte) (Envelope, []map[string]any, error
 	if err := json.Unmarshal(env.Data, &items); err != nil {
 		return Envelope{}, nil, fmt.Errorf("expected array data: %w", err)
 	}
+	if items == nil {
+		return Envelope{}, nil, errors.New("expected array data")
+	}
 	if env.Meta.Count != nil && *env.Meta.Count != len(items) {
 		return Envelope{}, nil, fmt.Errorf("meta count %d does not match data length %d", *env.Meta.Count, len(items))
 	}
@@ -168,6 +171,7 @@ type Result struct {
 	Status     Status `json:"status"`
 	Summary    string `json:"summary"`
 	DurationMS int64  `json:"duration_ms"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
 }
 
 type Report struct {
@@ -236,14 +240,15 @@ func (r Runner) runCommand(ctx context.Context, now func() time.Time, executor E
 	result = Result{Command: command.Name, Status: Fail}
 	defer func() { result.DurationMS = now().Sub(started).Milliseconds() }()
 
-	if !commandIsSafe(command) {
+	args, err := safeCommandArgs(command)
+	if err != nil {
 		result.Summary = "invalid command configuration"
 		return result, nil, false
 	}
-	args := append(append([]string{}, command.Args...), "--json")
 	stdout, _, exitCode, err := executor.Run(ctx, r.Binary, args...)
 	if err != nil || exitCode != 0 {
-		result.Summary = exitSummary(exitCode, err)
+		result.Summary = "command execution failed"
+		result.ExitCode = &exitCode
 		return result, nil, false
 	}
 	_, items, err = Validate(command, stdout)
@@ -279,30 +284,31 @@ func deriveGetCommand(spec GetSpec, item map[string]any) (Command, error) {
 	return command, nil
 }
 
-func commandIsSafe(command Command) bool {
-	forbidden := map[string]bool{
-		"create": true, "update": true, "delete": true, "rename": true,
+func safeCommandArgs(command Command) ([]string, error) {
+	forbiddenVerbs := map[string]bool{
+		"apply": true, "create": true, "update": true, "delete": true, "rename": true,
 		"restart": true, "locate": true, "upgrade": true, "adopt": true,
 		"forget": true, "reconnect": true, "block": true, "unblock": true,
 		"enable": true, "disable": true, "reorder": true, "set": true,
-		"--yes": true, "--dry-run": true, "--raw": true, "--json": true,
 	}
-	for _, token := range append(append([]string{}, command.Args...), strings.Fields(command.Name)...) {
-		if forbidden[token] {
-			return false
+	forbiddenFlags := []string{"--yes", "--dry-run", "--raw"}
+	normalized := make([]string, 0, len(command.Args)+1)
+	for _, token := range command.Args {
+		lower := strings.ToLower(token)
+		if forbiddenVerbs[lower] {
+			return nil, errors.New("mutation verb is prohibited")
 		}
+		for _, flag := range forbiddenFlags {
+			if lower == flag || strings.HasPrefix(lower, flag+"=") {
+				return nil, errors.New("apply or raw flag is prohibited")
+			}
+		}
+		if lower == "--json" || strings.HasPrefix(lower, "--json=") {
+			continue
+		}
+		normalized = append(normalized, token)
 	}
-	return true
-}
-
-func exitSummary(exitCode int, err error) string {
-	if exitCode != 0 {
-		return fmt.Sprintf("command exited with status %d", exitCode)
-	}
-	if err != nil {
-		return "process execution failed"
-	}
-	return "check failed"
+	return append(normalized, "--json"), nil
 }
 
 func WriteReport(dir string, report Report) (string, error) {
@@ -313,10 +319,26 @@ func WriteReport(dir string, report Report) (string, error) {
 	if startedAt.IsZero() {
 		startedAt = time.Now()
 	}
-	path := filepath.Join(dir, "read-only-"+startedAt.UTC().Format("20060102T150405.000000000Z")+".json")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", err
+	base := "read-only-" + startedAt.UTC().Format("20060102T150405.000000000Z")
+	var (
+		file *os.File
+		path string
+		err  error
+	)
+	for suffix := 0; ; suffix++ {
+		name := base + ".json"
+		if suffix > 0 {
+			name = fmt.Sprintf("%s-%d.json", base, suffix)
+		}
+		path = filepath.Join(dir, name)
+		file, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		break
 	}
 	cleanup := func() {
 		file.Close()
@@ -332,6 +354,7 @@ func WriteReport(dir string, report Report) (string, error) {
 		Status     Status `json:"status"`
 		Summary    string `json:"summary"`
 		DurationMS int64  `json:"duration_ms"`
+		ExitCode   *int   `json:"exit_code,omitempty"`
 	}
 	output := struct {
 		StartedAt time.Time      `json:"started_at"`
@@ -340,6 +363,7 @@ func WriteReport(dir string, report Report) (string, error) {
 	for _, result := range report.Results {
 		output.Results = append(output.Results, outputResult{
 			Command: result.Command, Status: result.Status, Summary: reportSummary(result.Status), DurationMS: result.DurationMS,
+			ExitCode: result.ExitCode,
 		})
 	}
 	if err := json.NewEncoder(file).Encode(output); err != nil {

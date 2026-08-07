@@ -1,7 +1,7 @@
 # Read-Only Live Test Suite Design
 
 **Date:** 2026-07-28  
-**Status:** Approved for implementation planning  
+**Status:** Implemented; credential alternatives in this historical design were superseded by API-key-only authentication
 **Scope:** Live, authenticated, read-only verification of the `unifi` CLI
 
 ## Goal

@@ -1,7 +1,7 @@
 # API-Key-Only Persistent Authentication Design
 
 **Date:** 2026-07-29
-**Status:** Approved design — awaiting written-spec review
+**Status:** Implemented
 
 ## Goal
 

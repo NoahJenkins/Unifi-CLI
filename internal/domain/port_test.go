@@ -18,13 +18,13 @@ func sampleSwitchDevice() map[string]any {
 		"type": "usw",
 		"port_table": []any{
 			map[string]any{
-				"port_idx":     float64(1),
-				"name":         "Port 1",
-				"media":        "GE",
-				"speed":        float64(1000),
-				"poe_mode":     "auto",
-				"enable":       true,
-				"portconf_id":  "prof-all",
+				"port_idx":              float64(1),
+				"name":                  "Port 1",
+				"media":                 "GE",
+				"speed":                 float64(1000),
+				"poe_mode":              "auto",
+				"enable":                true,
+				"portconf_id":           "prof-all",
 				"native_networkconf_id": "net-lan",
 			},
 			map[string]any{
@@ -39,9 +39,9 @@ func sampleSwitchDevice() map[string]any {
 		},
 		"port_overrides": []any{
 			map[string]any{
-				"port_idx":  float64(12),
-				"name":      "AP-Uplink",
-				"poe_mode":  "pasv24",
+				"port_idx":    float64(12),
+				"name":        "AP-Uplink",
+				"poe_mode":    "pasv24",
 				"portconf_id": "prof-ap",
 			},
 		},
@@ -268,6 +268,24 @@ func TestPortServiceList(t *testing.T) {
 	}
 }
 
+func TestPortServiceListReturnsNonNilEmptyInventory(t *testing.T) {
+	api := &fakePortAPI{devices: []map[string]any{}}
+	ports, err := domain.NewPortService(api).List(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports == nil || len(ports) != 0 {
+		t.Fatalf("ports = %#v, want non-nil empty inventory", ports)
+	}
+	encoded, err := json.Marshal(ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("JSON = %s, want []", encoded)
+	}
+}
+
 func TestPortServiceGet(t *testing.T) {
 	api := &fakePortAPI{devices: devicesWithPorts()}
 	svc := domain.NewPortService(api)
@@ -380,9 +398,9 @@ func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
 	restSW := sampleSwitchDevice()
 	restSW["port_overrides"] = []any{
 		map[string]any{
-			"port_idx":  float64(5),
-			"name":      "Cam",
-			"poe_mode":  "auto",
+			"port_idx":    float64(5),
+			"name":        "Cam",
+			"poe_mode":    "auto",
 			"portconf_id": "prof-cam",
 		},
 		map[string]any{

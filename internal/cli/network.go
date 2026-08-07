@@ -181,17 +181,17 @@ func runNetworkGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", n.ID)
-	fmt.Fprintf(rt.Out, "name: %s\n", n.Name)
-	fmt.Fprintf(rt.Out, "purpose: %s\n", n.Purpose)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(n.ID))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(n.Name))
+	fmt.Fprintf(rt.Out, "purpose: %s\n", render.SafeText(n.Purpose))
 	if n.VLAN != nil {
 		fmt.Fprintf(rt.Out, "vlan: %d\n", *n.VLAN)
 	} else {
 		fmt.Fprintf(rt.Out, "vlan:\n")
 	}
-	fmt.Fprintf(rt.Out, "subnet: %s\n", n.Subnet)
+	fmt.Fprintf(rt.Out, "subnet: %s\n", render.SafeText(n.Subnet))
 	fmt.Fprintf(rt.Out, "dhcp_enabled: %s\n", strconv.FormatBool(n.DHCPEnabled))
-	fmt.Fprintf(rt.Out, "domain_name: %s\n", n.DomainName)
+	fmt.Fprintf(rt.Out, "domain_name: %s\n", render.SafeText(n.DomainName))
 	fmt.Fprintf(rt.Out, "wan: %s\n", strconv.FormatBool(n.WAN))
 	return nil
 }

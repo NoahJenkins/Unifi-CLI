@@ -104,10 +104,10 @@ func (f *fakeNetworkAPI) Do(ctx context.Context, method, path string, in, out an
 	if method == http.MethodPost && out != nil {
 		// simulate create returning created object
 		created := map[string]any{
-			"_id":          "net-new",
-			"name":         "Created",
-			"purpose":      "corporate",
-			"ip_subnet":    "10.0.0.1/24",
+			"_id":           "net-new",
+			"name":          "Created",
+			"purpose":       "corporate",
+			"ip_subnet":     "10.0.0.1/24",
 			"dhcpd_enabled": true,
 		}
 		if body, ok := in.(map[string]any); ok {

@@ -260,14 +260,14 @@ func runFirewallGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", r.ID)
-	fmt.Fprintf(rt.Out, "name: %s\n", r.Name)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(r.ID))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(r.Name))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(r.Enabled))
-	fmt.Fprintf(rt.Out, "action: %s\n", r.Action)
-	fmt.Fprintf(rt.Out, "ruleset: %s\n", r.Ruleset)
-	fmt.Fprintf(rt.Out, "src: %s\n", r.Src)
-	fmt.Fprintf(rt.Out, "dst: %s\n", r.Dst)
-	fmt.Fprintf(rt.Out, "protocol: %s\n", r.Protocol)
+	fmt.Fprintf(rt.Out, "action: %s\n", render.SafeText(r.Action))
+	fmt.Fprintf(rt.Out, "ruleset: %s\n", render.SafeText(r.Ruleset))
+	fmt.Fprintf(rt.Out, "src: %s\n", render.SafeText(r.Src))
+	fmt.Fprintf(rt.Out, "dst: %s\n", render.SafeText(r.Dst))
+	fmt.Fprintf(rt.Out, "protocol: %s\n", render.SafeText(r.Protocol))
 	fmt.Fprintf(rt.Out, "index: %d\n", r.Index)
 	return nil
 }

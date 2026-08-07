@@ -7,7 +7,7 @@
       "_id": "sta1",
       "mac": "11:22:33:44:55:01",
       "hostname": "laptop.local",
-      "name": "Noah-Laptop",
+      "name": "example-laptop",
       "ip": "192.168.1.50",
       "essid": "Home",
       "network": "LAN",

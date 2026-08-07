@@ -1,5 +1,7 @@
 # Read-Only Live Test Suite Implementation Plan
 
+> **Implemented historical plan.** The suite is current, but any username/password or cookie-session references below are obsolete. Use the root `README.md` for current invocation.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Add an authenticated, read-only live test runner that verifies every current read capability of unifi and emits a redacted local report.

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
@@ -104,6 +106,9 @@ func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan
 	if err != nil {
 		return plan.Plan{}, Wlan{}, err
 	}
+	if err := validateWlanSecurityTransition(w, in); err != nil {
+		return plan.Plan{}, Wlan{}, err
+	}
 	before := wlanSnapshot(w)
 	after := mergeWlanAfter(w, in)
 	p := plan.Update("wlan", w.ID, w.Name,
@@ -117,6 +122,9 @@ func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan
 func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) (Wlan, error) {
 	w, err := s.Get(ctx, id)
 	if err != nil {
+		return Wlan{}, err
+	}
+	if err := validateWlanSecurityTransition(w, in); err != nil {
 		return Wlan{}, err
 	}
 	path := s.api.SitePath(client.PathRestWlan, w.ID)
@@ -140,6 +148,14 @@ func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) 
 		w.Guest = in.Guest
 	}
 	return w, nil
+}
+
+func validateWlanSecurityTransition(current Wlan, in WlanInput) error {
+	if strings.EqualFold(current.Security, "open") && in.Security != "" &&
+		!strings.EqualFold(in.Security, "open") && in.Password == "" {
+		return apperr.New(apperr.ValidationFailed, "securing an open WLAN requires a password")
+	}
+	return nil
 }
 
 func (s *WlanService) Delete(ctx context.Context, id string) (plan.Plan, Wlan, error) {

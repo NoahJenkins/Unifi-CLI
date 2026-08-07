@@ -223,9 +223,9 @@ func runDNSGet(id string) error {
 		}
 		return nil
 	}
-	fmt.Fprintf(rt.Out, "id: %s\n", r.ID)
-	fmt.Fprintf(rt.Out, "name: %s\n", r.Name)
-	fmt.Fprintf(rt.Out, "ip: %s\n", r.IP)
+	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(r.ID))
+	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(r.Name))
+	fmt.Fprintf(rt.Out, "ip: %s\n", render.SafeText(r.IP))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(r.Enabled))
 	return nil
 }

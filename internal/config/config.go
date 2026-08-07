@@ -70,10 +70,18 @@ func Load(path string) (Config, error) {
 		cfg.Port = p
 	}
 	if v := os.Getenv("UNIFI_INSECURE"); v != "" {
-		cfg.Insecure = v == "true" || v == "1"
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("UNIFI_INSECURE: %w", err)
+		}
+		cfg.Insecure = parsed
 	}
 	if v := os.Getenv("UNIFI_SAFE_MODE"); v != "" {
-		cfg.SafeMode = v == "true" || v == "1"
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("UNIFI_SAFE_MODE: %w", err)
+		}
+		cfg.SafeMode = parsed
 	}
 	if v := os.Getenv("UNIFI_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
