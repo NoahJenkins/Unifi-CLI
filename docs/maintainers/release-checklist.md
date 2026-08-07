@@ -39,7 +39,14 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       provenance attestation, and the exact tag is published only by the final
       successful `gh release edit` step. A failed verification or attestation
       must leave the release as a draft.
-- [ ] Verify SHA-256 checksums, SBOMs, source archive, and provenance.
+- [ ] Confirm the exact-tag preflight runs before Syft and GoReleaser. A missing
+      release or an existing draft may proceed; an existing published release,
+      malformed response, repository-access failure, authentication failure,
+      or unexpected API error must stop the workflow before release mutation.
+      Concurrent runs for the same repository and exact ref are serialized and
+      never cancel an in-progress release run.
+- [ ] Verify SHA-256 checksums, provenance, the source archive's exact full-commit
+      PAX binding, and every SBOM's exact archived-executable path and digest.
 - [ ] Run the authenticated read-only live suite with verified TLS.
 - [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.

@@ -45,20 +45,54 @@
     "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip",
     "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip.sbom.json"
   ],
-  "cyclonedx": {
-    "bomFormat": "CycloneDX",
-    "specVersion": "1.7",
-    "version": 1,
-    "metadata": {
-      "component": {
-        "type": "file",
-        "name": "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip",
-        "version": "0.0.0-SNAPSHOT-1aa4eee"
-      }
+  "cyclonedx_by_archive": {
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz": {
+      "bomFormat":"CycloneDX","specVersion":"1.7","version":1,
+      "metadata":{"component":{"type":"file","name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64.tar.gz","version":"0.0.0-SNAPSHOT-1aa4eee"}},
+      "components":[
+        {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+        {"type":"file","name":"/private/tmp/syft-archive-contents-sanitized/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_amd64/unifi","hashes":[{"alg":"SHA-256","content":"41ac616eee98beea425c0a18ca8648537c5e93185558405b1603c3348617f8d4"}]}
+      ]
     },
-    "components": [
-      {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
-      {"type":"file","name":"<syft-temp>/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64/unifi.exe","hashes":[{"alg":"SHA-256","content":"0000000000000000000000000000000000000000000000000000000000000000"}]}
-    ]
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz": {
+      "bomFormat":"CycloneDX","specVersion":"1.7","version":1,
+      "metadata":{"component":{"type":"file","name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64.tar.gz","version":"0.0.0-SNAPSHOT-1aa4eee"}},
+      "components":[
+        {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+        {"type":"file","name":"/private/tmp/syft-archive-contents-sanitized/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_darwin_arm64/unifi","hashes":[{"alg":"SHA-256","content":"00faf558d65c4f4314dbc4c2799bf5b0d0a956b4da29c9043f4b49072c19f8c5"}]}
+      ]
+    },
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz": {
+      "bomFormat":"CycloneDX","specVersion":"1.7","version":1,
+      "metadata":{"component":{"type":"file","name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64.tar.gz","version":"0.0.0-SNAPSHOT-1aa4eee"}},
+      "components":[
+        {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+        {"type":"file","name":"/private/tmp/syft-archive-contents-sanitized/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_amd64/unifi","hashes":[{"alg":"SHA-256","content":"4d03f8290ea2b4d136f0aaf412c37a3b53acae59fded61e9b03e0b6169127ff2"}]}
+      ]
+    },
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz": {
+      "bomFormat":"CycloneDX","specVersion":"1.7","version":1,
+      "metadata":{"component":{"type":"file","name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64.tar.gz","version":"0.0.0-SNAPSHOT-1aa4eee"}},
+      "components":[
+        {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+        {"type":"file","name":"/private/tmp/syft-archive-contents-sanitized/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_linux_arm64/unifi","hashes":[{"alg":"SHA-256","content":"25959a8fea7e628244d1cd89717a655c33d32db598ece4824dacec58aadc93ef"}]}
+      ]
+    },
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip": {
+      "bomFormat":"CycloneDX","specVersion":"1.7","version":1,
+      "metadata":{"component":{"type":"file","name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64.zip","version":"0.0.0-SNAPSHOT-1aa4eee"}},
+      "components":[
+        {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+        {"type":"file","name":"/private/tmp/syft-archive-contents-sanitized/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_amd64/unifi.exe","hashes":[{"alg":"SHA-256","content":"54eaba12a215b38510a78bf5e33488c6a0e573a5f161baa8af2ff3d0300c14ff"}]}
+      ]
+    },
+    "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip": {
+      "bomFormat":"CycloneDX","specVersion":"1.7","version":1,
+      "metadata":{"component":{"type":"file","name":"unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip","version":"0.0.0-SNAPSHOT-1aa4eee"}},
+      "components":[
+        {"type":"library","name":"github.com/spf13/cobra","version":"v1.10.2"},
+        {"type":"file","name":"/private/tmp/syft-archive-contents-sanitized/unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64/unifi.exe","hashes":[{"alg":"SHA-256","content":"458c4ff18a057216ee412c0a60b4b0bfba0e48b7031f51ac919e0a72c1d30372"}]}
+      ]
+    }
   }
 }

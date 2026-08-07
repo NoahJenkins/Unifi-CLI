@@ -10,6 +10,10 @@ permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: release
@@ -21,6 +25,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Refuse published release replacement
+        run: bash ./scripts/release-preflight.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

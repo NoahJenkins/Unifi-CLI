@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +48,9 @@ func TestVerifyArtifactsAcceptsPinnedToolOutputSnapshot(t *testing.T) {
 
 func TestInspectCycloneDXSBOMAcceptsPinnedSyftFileComponent(t *testing.T) {
 	snapshot := loadPinnedOutputSnapshot(t)
-	data, err := json.Marshal(snapshot.CycloneDX)
+	archiveName := "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip"
+	bom := snapshot.CycloneDXByArchive[archiveName]
+	data, err := json.Marshal(bom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +58,15 @@ func TestInspectCycloneDXSBOMAcceptsPinnedSyftFileComponent(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	archiveName := "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64.zip"
-	if err := inspectCycloneDXSBOM(path, archiveName, "0.0.0-SNAPSHOT-1aa4eee"); err != nil {
+	components := bom["components"].([]any)
+	fileComponent := components[1].(map[string]any)
+	hashes := fileComponent["hashes"].([]any)
+	sha256Hash := hashes[0].(map[string]any)["content"].(string)
+	executable := archiveExecutable{
+		relativePath: "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64/unifi.exe",
+		sha256:       sha256Hash,
+	}
+	if err := inspectCycloneDXSBOM(path, archiveName, "0.0.0-SNAPSHOT-1aa4eee", executable); err != nil {
 		t.Fatalf("pinned Syft 1.48.0 CycloneDX shape rejected: %v", err)
 	}
 }
@@ -158,14 +169,50 @@ func TestInspectSourceArchiveAcceptsPinnedGoReleaserPAXHeader(t *testing.T) {
 	root := "unifi-cli_0.0.0-SNAPSHOT-1aa4eee"
 	path := filepath.Join(t.TempDir(), "source.tar.gz")
 	writeTarGz(t, path, []archiveEntry{
-		{typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": "1aa4eee2545655a1"}},
+		{name: "pax_global_header", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": smokeCommit}},
 		{name: root + "/LICENSE", mode: 0o664, body: []byte("license")},
 		{name: root + "/README.md", mode: 0o664, body: []byte("readme")},
 		{name: root + "/CHANGELOG.md", mode: 0o664, body: []byte("changelog")},
 		{name: root + "/go.mod", mode: 0o664, body: []byte("module github.com/noahjenkins/unifi-cli")},
 	})
-	if err := inspectSourceArchive(path, root); err != nil {
+	if err := inspectSourceArchive(path, root, smokeCommit); err != nil {
 		t.Fatalf("pinned GoReleaser source PAX header rejected: %v", err)
+	}
+}
+
+func TestVerifyArtifactsRejectsSourceArchiveWithoutExactCommitBinding(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	core := fixture.validSourceEntries()
+	tests := map[string][]archiveEntry{
+		"missing global header": core,
+		"wrong global header name": append([]archiveEntry{{
+			name: "GlobalHead.0.0", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": smokeCommit},
+		}}, core...),
+		"wrong commit": append([]archiveEntry{{
+			name: "pax_global_header", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": strings.Repeat("f", 40)},
+		}}, core...),
+		"truncated commit": append([]archiveEntry{{
+			name: "pax_global_header", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": smokeCommit[:12]},
+		}}, core...),
+		"extra PAX key": append([]archiveEntry{{
+			name: "pax_global_header", typeflag: tar.TypeXGlobalHeader,
+			paxRecords: map[string]string{"comment": smokeCommit, "path": "unexpected"},
+		}}, core...),
+		"multiple global headers": append([]archiveEntry{
+			{name: "pax_global_header", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": smokeCommit}},
+			{name: "pax_global_header", typeflag: tar.TypeXGlobalHeader, paxRecords: map[string]string{"comment": smokeCommit}},
+		}, core...),
+		"other header type": append([]archiveEntry{{
+			name: fixture.sourceRoot() + "/link", typeflag: tar.TypeSymlink, linkname: "LICENSE",
+		}}, core...),
+	}
+	for name, entries := range tests {
+		t.Run(name, func(t *testing.T) {
+			clone := fixture.clone(t)
+			clone.replaceSourceRaw(t, entries)
+			clone.writeMetadata(t)
+			verifyReleaseFixtureFails(t, clone)
+		})
 	}
 }
 
@@ -343,6 +390,50 @@ func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsRejectsSBOMExecutableMismatch(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	currentTarget := target{goos: "windows", goarch: "amd64"}
+	other := target{goos: "linux", goarch: "arm64"}
+	tests := map[string]func(map[string]any){
+		"wrong target root": func(file map[string]any) {
+			file["name"] = fixture.syftExecutablePath(other)
+		},
+		"wrong executable name": func(file map[string]any) {
+			file["name"] = "/private/tmp/syft-archive-contents-test/" + fixture.archiveRoot(currentTarget) + "/other.exe"
+		},
+		"missing file component": func(bom map[string]any) {
+			bom["components"] = []any{map[string]any{"type": "library", "name": "github.com/spf13/cobra", "version": "v1.10.2"}}
+		},
+		"duplicate matching file component": func(bom map[string]any) {
+			components := bom["components"].([]any)
+			file := components[1].(map[string]any)
+			duplicate := map[string]any{"type": file["type"], "name": file["name"], "hashes": file["hashes"]}
+			bom["components"] = append(components, duplicate)
+		},
+		"all-zero digest": func(file map[string]any) {
+			file["hashes"] = []any{map[string]any{"alg": "SHA-256", "content": strings.Repeat("0", 64)}}
+		},
+		"fabricated digest": func(file map[string]any) {
+			file["hashes"] = []any{map[string]any{"alg": "SHA-256", "content": strings.Repeat("f", 64)}}
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			clone := fixture.clone(t)
+			bom := clone.sbom(currentTarget, clone.archiveName(currentTarget), smokeVersion, true)
+			if strings.Contains(name, "file component") {
+				mutate(bom)
+			} else {
+				components := bom["components"].([]any)
+				mutate(components[1].(map[string]any))
+			}
+			clone.writeSBOM(t, currentTarget, bom)
+			clone.writeMetadata(t)
+			verifyReleaseFixtureFails(t, clone)
+		})
+	}
+}
+
 func TestVerifyArtifactsRejectsInvalidMetadataRecord(t *testing.T) {
 	fixture := newReleaseFixture(t)
 
@@ -480,6 +571,7 @@ type archiveEntry struct {
 	mode       fs.FileMode
 	body       []byte
 	typeflag   byte
+	linkname   string
 	paxRecords map[string]string
 }
 
@@ -491,11 +583,11 @@ type releaseFixture struct {
 }
 
 type pinnedOutputSnapshot struct {
-	Version         string         `json:"version"`
-	Commit          string         `json:"commit"`
-	ArtifactRecords []artifact     `json:"artifact_records"`
-	ChecksumNames   []string       `json:"checksum_names"`
-	CycloneDX       map[string]any `json:"cyclonedx"`
+	Version            string                    `json:"version"`
+	Commit             string                    `json:"commit"`
+	ArtifactRecords    []artifact                `json:"artifact_records"`
+	ChecksumNames      []string                  `json:"checksum_names"`
+	CycloneDXByArchive map[string]map[string]any `json:"cyclonedx_by_archive"`
 }
 
 func loadPinnedOutputSnapshot(t *testing.T) pinnedOutputSnapshot {
@@ -543,7 +635,8 @@ func materializePinnedOutputSnapshot(t *testing.T, fixture *releaseFixture) pinn
 		}
 	}
 	for _, target := range targets {
-		bomData, err := json.Marshal(snapshot.CycloneDX)
+		archiveName := fixture.archiveName(target)
+		bomData, err := json.Marshal(snapshot.CycloneDXByArchive[archiveName])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -551,19 +644,9 @@ func materializePinnedOutputSnapshot(t *testing.T, fixture *releaseFixture) pinn
 		if err := json.Unmarshal(bomData, &bom); err != nil {
 			t.Fatal(err)
 		}
-		metadata := bom["metadata"].(map[string]any)
-		component := metadata["component"].(map[string]any)
-		component["name"] = fixture.archiveName(target)
-		component["version"] = smokeVersion
-		data, err := json.Marshal(bom)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(fixture.dist, fixture.sbomName(target))
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		fixture.checksums[fixture.sbomName(target)] = fileSHA256(t, path)
+		components := bom["components"].([]any)
+		components[1] = fixture.sbomFileComponent(target)
+		fixture.writeSBOM(t, target, bom)
 	}
 	fixture.writeMetadata(t)
 	return snapshot
@@ -609,12 +692,7 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			Name: fixture.sbomName(target), Path: fixture.sbomName(target), Type: "SBOM",
 		})
 	}
-	fixture.replaceSource(t, []archiveEntry{
-		{name: fixture.sourceRoot() + "/LICENSE", mode: 0o644, body: []byte("license")},
-		{name: fixture.sourceRoot() + "/README.md", mode: 0o644, body: []byte("readme")},
-		{name: fixture.sourceRoot() + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
-		{name: fixture.sourceRoot() + "/go.mod", mode: 0o644, body: []byte("module github.com/noahjenkins/unifi-cli")},
-	})
+	fixture.replaceSource(t, fixture.validSourceEntries())
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: fixture.sourceName(), Path: fixture.sourceName(), Type: "Source"})
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: "checksums.txt", Path: "checksums.txt", Type: "Checksum"})
 	metadata := fmt.Sprintf(`{"project_name":"unifi-cli","version":%q,"commit":%q}`, smokeVersion, smokeCommit)
@@ -686,6 +764,15 @@ func (f *releaseFixture) validArchiveEntries(target target) []archiveEntry {
 	}
 }
 
+func (f *releaseFixture) validSourceEntries() []archiveEntry {
+	return []archiveEntry{
+		{name: f.sourceRoot() + "/LICENSE", mode: 0o644, body: []byte("license")},
+		{name: f.sourceRoot() + "/README.md", mode: 0o644, body: []byte("readme")},
+		{name: f.sourceRoot() + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
+		{name: f.sourceRoot() + "/go.mod", mode: 0o644, body: []byte("module github.com/noahjenkins/unifi-cli")},
+	}
+}
+
 func (f *releaseFixture) replaceArchive(t *testing.T, target target, entries []archiveEntry) {
 	t.Helper()
 	name := f.archiveName(target)
@@ -711,6 +798,16 @@ func (f *releaseFixture) replaceArchive(t *testing.T, target target, entries []a
 }
 
 func (f *releaseFixture) replaceSource(t *testing.T, entries []archiveEntry) {
+	t.Helper()
+	entries = append([]archiveEntry{{
+		name:       "pax_global_header",
+		typeflag:   tar.TypeXGlobalHeader,
+		paxRecords: map[string]string{"comment": smokeCommit},
+	}}, entries...)
+	f.replaceSourceRaw(t, entries)
+}
+
+func (f *releaseFixture) replaceSourceRaw(t *testing.T, entries []archiveEntry) {
 	t.Helper()
 	path := filepath.Join(f.dist, f.sourceName())
 	writeTarGz(t, path, entries)
@@ -770,9 +867,40 @@ func (f *releaseFixture) sbom(target target, name, version string, components bo
 		"components": []any{},
 	}
 	if components {
-		bom["components"] = []any{map[string]any{"type": "library", "name": "github.com/spf13/cobra", "version": "v1.10.2"}}
+		bom["components"] = []any{
+			map[string]any{"type": "library", "name": "github.com/spf13/cobra", "version": "v1.10.2"},
+			f.sbomFileComponent(target),
+		}
 	}
 	return bom
+}
+
+func (f *releaseFixture) sbomFileComponent(target target) map[string]any {
+	digest := sha256.Sum256(f.binaries[target])
+	return map[string]any{
+		"type": "file",
+		"name": f.syftExecutablePath(target),
+		"hashes": []any{
+			map[string]any{"alg": "SHA-256", "content": hex.EncodeToString(digest[:])},
+		},
+	}
+}
+
+func (f *releaseFixture) syftExecutablePath(target target) string {
+	return "/private/tmp/syft-archive-contents-test/" + f.archiveRoot(target) + "/" + target.executableName()
+}
+
+func (f *releaseFixture) writeSBOM(t *testing.T, target target, bom map[string]any) {
+	t.Helper()
+	data, err := json.Marshal(bom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(f.dist, f.sbomName(target))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.checksums[f.sbomName(target)] = fileSHA256(t, path)
 }
 
 func (f *releaseFixture) writeMetadata(t *testing.T) {
@@ -818,12 +946,8 @@ func verifyReleaseFixtureFails(t *testing.T, fixture *releaseFixture) {
 
 func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
 	t.Helper()
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gzipWriter := gzip.NewWriter(file)
-	tarWriter := tar.NewWriter(gzipWriter)
+	var raw bytes.Buffer
+	tarWriter := tar.NewWriter(&raw)
 	for _, entry := range entries {
 		typeflag := entry.typeflag
 		if typeflag == 0 {
@@ -835,7 +959,7 @@ func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
 			}
 			continue
 		}
-		header := &tar.Header{Name: entry.name, Mode: int64(entry.mode.Perm()), Size: int64(len(entry.body)), Typeflag: typeflag}
+		header := &tar.Header{Name: entry.name, Linkname: entry.linkname, Mode: int64(entry.mode.Perm()), Size: int64(len(entry.body)), Typeflag: typeflag}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}
@@ -846,6 +970,15 @@ func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
 	if err := tarWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
+	patchPAXHeaderNames(t, raw.Bytes(), entries)
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	if _, err := gzipWriter.Write(raw.Bytes()); err != nil {
+		t.Fatal(err)
+	}
 	if err := gzipWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -853,6 +986,58 @@ func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
 		t.Fatal(err)
 	}
 }
+
+func patchPAXHeaderNames(t *testing.T, data []byte, entries []archiveEntry) {
+	t.Helper()
+	names := make([]string, 0)
+	for _, entry := range entries {
+		if entry.typeflag == tar.TypeXGlobalHeader {
+			names = append(names, entry.name)
+		}
+	}
+	nameIndex := 0
+	for offset := 0; offset+tarBlockSize <= len(data); {
+		header := data[offset : offset+tarBlockSize]
+		if bytes.Equal(header, make([]byte, tarBlockSize)) {
+			break
+		}
+		sizeText := strings.Trim(string(header[124:136]), " \x00")
+		size := int64(0)
+		if sizeText != "" {
+			var err error
+			size, err = strconv.ParseInt(sizeText, 8, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if header[156] == tar.TypeXGlobalHeader {
+			if nameIndex >= len(names) {
+				t.Fatal("generated an unexpected PAX global header")
+			}
+			name := names[nameIndex]
+			nameIndex++
+			if len(name) == 0 || len(name) > 100 {
+				t.Fatalf("invalid test PAX header name %q", name)
+			}
+			clear(header[:100])
+			copy(header[:100], name)
+			for i := 148; i < 156; i++ {
+				header[i] = ' '
+			}
+			checksum := 0
+			for _, value := range header {
+				checksum += int(value)
+			}
+			copy(header[148:156], fmt.Sprintf("%06o\x00 ", checksum))
+		}
+		offset += tarBlockSize + int((size+tarBlockSize-1)/tarBlockSize)*tarBlockSize
+	}
+	if nameIndex != len(names) {
+		t.Fatalf("patched %d PAX global headers, want %d", nameIndex, len(names))
+	}
+}
+
+const tarBlockSize = 512
 
 func writeZip(t *testing.T, path string, entries []archiveEntry) {
 	t.Helper()

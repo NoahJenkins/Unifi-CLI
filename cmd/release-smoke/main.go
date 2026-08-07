@@ -381,7 +381,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 	if err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
-	if err := inspectSourceArchive(sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion)); err != nil {
+	if err := inspectSourceArchive(sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion), expectedCommit); err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
 
@@ -437,23 +437,24 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit 
 		if err != nil {
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
-		if err := inspectCycloneDXSBOM(sbomPath, wantName, expectedVersion); err != nil {
-			return fmt.Errorf("%s SBOM: %w", target, err)
-		}
 		if err := verifyChecksum(sbomPath, checksums[sbom.Name]); err != nil {
 			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
 		expectedRoot := strings.TrimSuffix(strings.TrimSuffix(wantName, ".tar.gz"), ".zip")
-		extracted, cleanup, err := inspectReleaseArchive(archivePath, target, expectedRoot)
+		executable, cleanup, err := inspectReleaseArchive(archivePath, target, expectedRoot)
 		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
-		if err := verifyStructure(extracted, target); err != nil {
+		if err := inspectCycloneDXSBOM(sbomPath, wantName, expectedVersion, executable); err != nil {
+			cleanup()
+			return fmt.Errorf("%s SBOM: %w", target, err)
+		}
+		if err := verifyStructure(executable.extractedPath, target); err != nil {
 			cleanup()
 			return err
 		}
 		if target.goos == runtime.GOOS && target.goarch == runtime.GOARCH {
-			if err := verifyNativeCommands(ctx, root, extracted, expectedVersion, expectedCommit, ""); err != nil {
+			if err := verifyNativeCommands(ctx, root, executable.extractedPath, expectedVersion, expectedCommit, ""); err != nil {
 				cleanup()
 				return err
 			}
@@ -601,10 +602,16 @@ func verifyChecksum(path, want string) error {
 	return nil
 }
 
-func inspectReleaseArchive(archivePath string, target target, expectedRoot string) (string, func(), error) {
+type archiveExecutable struct {
+	extractedPath string
+	relativePath  string
+	sha256        string
+}
+
+func inspectReleaseArchive(archivePath string, target target, expectedRoot string) (archiveExecutable, func(), error) {
 	dir, err := os.MkdirTemp("", "unifi-release-artifact-")
 	if err != nil {
-		return "", func() {}, err
+		return archiveExecutable{}, func() {}, err
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	destination := filepath.Join(dir, target.executableName())
@@ -615,9 +622,18 @@ func inspectReleaseArchive(archivePath string, target target, expectedRoot strin
 	}
 	if err != nil {
 		cleanup()
-		return "", func() {}, err
+		return archiveExecutable{}, func() {}, err
 	}
-	return destination, cleanup, nil
+	digest, err := sha256File(destination)
+	if err != nil {
+		cleanup()
+		return archiveExecutable{}, func() {}, err
+	}
+	return archiveExecutable{
+		extractedPath: destination,
+		relativePath:  expectedRoot + "/" + target.executableName(),
+		sha256:        digest,
+	}, cleanup, nil
 }
 
 func inspectZipArchive(archivePath string, target target, expectedRoot, destination string) error {
@@ -839,7 +855,7 @@ func resolveArtifactPath(dist, artifactPath string) (string, error) {
 	return resolved, nil
 }
 
-func inspectSourceArchive(archivePath, expectedRoot string) error {
+func inspectSourceArchive(archivePath, expectedRoot, expectedCommit string) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -870,8 +886,14 @@ func inspectSourceArchive(archivePath, expectedRoot string) error {
 		}
 		if header.Typeflag == tar.TypeXGlobalHeader {
 			globalHeaders++
-			if globalHeaders > 1 || header.Name == "" || archivepath.IsAbs(header.Name) || strings.ContainsAny(header.Name, "/\\") {
-				return fmt.Errorf("unsafe source PAX global header %q", header.Name)
+			if globalHeaders > 1 {
+				return fmt.Errorf("source archive has multiple PAX global headers")
+			}
+			if header.Name != "pax_global_header" {
+				return fmt.Errorf("source PAX global header name = %q, want pax_global_header", header.Name)
+			}
+			if len(header.PAXRecords) != 1 || header.PAXRecords["comment"] != expectedCommit {
+				return fmt.Errorf("source PAX records = %#v, want exact commit comment", header.PAXRecords)
 			}
 			continue
 		}
@@ -901,6 +923,9 @@ func inspectSourceArchive(archivePath, expectedRoot string) error {
 	if regularFiles == 0 {
 		return fmt.Errorf("source archive has no files")
 	}
+	if globalHeaders != 1 {
+		return fmt.Errorf("source archive PAX global header count = %d, want 1", globalHeaders)
+	}
 	for name, present := range core {
 		if !present {
 			return fmt.Errorf("source archive is missing %q", name)
@@ -924,7 +949,7 @@ func validateSourceEntry(name, expectedRoot string, directory bool) (string, boo
 	return clean, directory, nil
 }
 
-func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
+func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executable archiveExecutable) error {
 	file, err := os.Open(sbomPath)
 	if err != nil {
 		return err
@@ -968,6 +993,7 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
 	if len(bom.Components) == 0 {
 		return fmt.Errorf("SBOM components are empty")
 	}
+	executableComponents := 0
 	for i, component := range bom.Components {
 		if component.Name == "" {
 			return fmt.Errorf("SBOM component %d has empty name", i)
@@ -981,6 +1007,7 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
 			if len(component.Hashes) == 0 {
 				return fmt.Errorf("SBOM file component %d has no hashes", i)
 			}
+			sha256Hashes := 0
 			for _, hash := range component.Hashes {
 				wantBytes := 0
 				switch hash.Algorithm {
@@ -995,12 +1022,53 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
 				if err != nil || len(decoded) != wantBytes {
 					return fmt.Errorf("SBOM file component %d has invalid %s hash", i, hash.Algorithm)
 				}
+				if hash.Algorithm == "SHA-256" {
+					sha256Hashes++
+					if matchesSyftExecutablePath(component.Name, executable.relativePath) && !strings.EqualFold(hash.Content, executable.sha256) {
+						return fmt.Errorf("SBOM executable SHA-256 = %s, want %s", hash.Content, executable.sha256)
+					}
+				}
+			}
+			if matchesSyftExecutablePath(component.Name, executable.relativePath) {
+				executableComponents++
+				if sha256Hashes != 1 {
+					return fmt.Errorf("SBOM executable component has %d SHA-256 hashes, want 1", sha256Hashes)
+				}
 			}
 		default:
 			return fmt.Errorf("SBOM component %d has unsupported type %q", i, component.Type)
 		}
 	}
+	if executableComponents != 1 {
+		return fmt.Errorf("SBOM matching executable component count = %d, want 1", executableComponents)
+	}
 	return nil
+}
+
+func matchesSyftExecutablePath(name, relativePath string) bool {
+	if name == "" || !archivepath.IsAbs(name) || strings.Contains(name, "\\") || archivepath.Clean(name) != name {
+		return false
+	}
+	suffix := "/" + relativePath
+	if !strings.HasSuffix(name, suffix) {
+		return false
+	}
+	prefix := strings.TrimSuffix(name, suffix)
+	tempDir := archivepath.Base(prefix)
+	return strings.HasPrefix(tempDir, "syft-archive-contents-") && len(tempDir) > len("syft-archive-contents-")
+}
+
+func sha256File(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func inspectGoReleaserMetadata(path, expectedVersion, expectedCommit string) error {

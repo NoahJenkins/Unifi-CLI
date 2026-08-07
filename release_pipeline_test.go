@@ -219,6 +219,13 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	if fmt.Sprint(permissions) != fmt.Sprint(wantPermissions) {
 		t.Errorf("release permissions = %v, want %v", permissions, wantPermissions)
 	}
+	concurrency := mapValue(t, workflow, "concurrency")
+	if fmt.Sprint(concurrency["group"]) != "release-${{ github.repository }}-${{ github.ref }}" {
+		t.Errorf("release concurrency group = %q", concurrency["group"])
+	}
+	if cancel, ok := concurrency["cancel-in-progress"].(bool); !ok || cancel {
+		t.Errorf("release cancel-in-progress = %#v, want false", concurrency["cancel-in-progress"])
+	}
 
 	uses := allUses(workflow)
 	pin := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
@@ -259,12 +266,22 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 
 	steps := releaseSteps(t, workflow)
+	preflight := stepIndex(t, steps, "Refuse published release replacement")
+	syft := stepIndex(t, steps, "Install pinned Syft for archive SBOMs")
 	build := stepIndex(t, steps, "Build and upload draft release artifacts")
 	verify := stepIndex(t, steps, "Verify draft artifact set")
 	attest := stepIndex(t, steps, "Attest release provenance")
 	publish := stepIndex(t, steps, "Publish verified release")
-	if !(build < verify && verify < attest && attest < publish) {
-		t.Errorf("unsafe release ordering: build=%d verify=%d attest=%d publish=%d", build, verify, attest, publish)
+	if !(preflight < syft && syft < build && build < verify && verify < attest && attest < publish) {
+		t.Errorf("unsafe release ordering: preflight=%d syft=%d build=%d verify=%d attest=%d publish=%d", preflight, syft, build, verify, attest, publish)
+	}
+	preflightStep := steps[preflight].(map[string]any)
+	if fmt.Sprint(preflightStep["run"]) != "bash ./scripts/release-preflight.sh" {
+		t.Errorf("preflight command = %q", preflightStep["run"])
+	}
+	preflightEnv := mapValue(t, preflightStep, "env")
+	if fmt.Sprint(preflightEnv["GH_TOKEN"]) != "${{ secrets.GITHUB_TOKEN }}" {
+		t.Errorf("preflight GH_TOKEN = %q", preflightEnv["GH_TOKEN"])
 	}
 	if publish != len(steps)-1 {
 		t.Errorf("publish step index = %d, want final step %d", publish, len(steps)-1)
