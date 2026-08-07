@@ -43,6 +43,18 @@ const (
 	maxReleaseSourceEntries  = 10000
 )
 
+type sourceManifest struct {
+	SchemaVersion string                `json:"schema_version"`
+	Commit        string                `json:"commit"`
+	Files         []sourceManifestEntry `json:"files"`
+}
+
+type sourceManifestEntry struct {
+	Path   string `json:"path"`
+	Mode   string `json:"mode"`
+	SHA256 string `json:"sha256"`
+}
+
 var targets = []target{
 	{goos: "darwin", goarch: "amd64"},
 	{goos: "darwin", goarch: "arm64"},
@@ -75,28 +87,36 @@ func main() {
 	var artifacts string
 	var expectedVersion string
 	var expectedCommit string
-	var trustedNative string
+	var trustedBinaries string
+	var trustedSourceManifest string
+	var writeSourceManifest string
 	flag.BoolVar(&describe, "describe", false, "print the target and smoke-command contract")
 	flag.BoolVar(&all, "all", false, "cross-build and structurally verify all release targets")
 	flag.BoolVar(&native, "native", false, "build and execute the current native release target")
 	flag.StringVar(&artifacts, "artifacts", "", "verify an existing GoReleaser dist directory")
 	flag.StringVar(&expectedVersion, "expected-version", "", "exact release version without a leading v")
 	flag.StringVar(&expectedCommit, "expected-commit", "", "exact release commit")
-	flag.StringVar(&trustedNative, "trusted-native", "", "trusted native binary built from the exact checkout before artifact generation")
+	flag.StringVar(&trustedBinaries, "trusted-binaries", "", "directory of trusted binaries cross-built from the exact checkout before artifact generation")
+	flag.StringVar(&trustedSourceManifest, "trusted-source-manifest", "", "trusted source manifest generated from the exact release commit")
+	flag.StringVar(&writeSourceManifest, "write-source-manifest", "", "write a trusted source manifest for --expected-commit")
 	flag.Parse()
 
 	selected := 0
-	for _, enabled := range []bool{describe, all, native, artifacts != ""} {
+	for _, enabled := range []bool{describe, all, native, artifacts != "", writeSourceManifest != ""} {
 		if enabled {
 			selected++
 		}
 	}
 	if selected != 1 || flag.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, or --artifacts DIR")
+		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, --artifacts DIR, or --write-source-manifest FILE")
 		os.Exit(2)
 	}
-	if artifacts != "" && (expectedVersion == "" || expectedCommit == "" || trustedNative == "") {
-		fmt.Fprintln(os.Stderr, "--artifacts requires --expected-version, --expected-commit, and --trusted-native")
+	if artifacts != "" && (expectedVersion == "" || expectedCommit == "" || trustedBinaries == "" || trustedSourceManifest == "") {
+		fmt.Fprintln(os.Stderr, "--artifacts requires --expected-version, --expected-commit, --trusted-binaries, and --trusted-source-manifest")
+		os.Exit(2)
+	}
+	if writeSourceManifest != "" && expectedCommit == "" {
+		fmt.Fprintln(os.Stderr, "--write-source-manifest requires --expected-commit")
 		os.Exit(2)
 	}
 
@@ -108,8 +128,15 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	var err error
-	if artifacts != "" {
-		err = verifyArtifacts(ctx, artifacts, expectedVersion, expectedCommit, trustedNative)
+	if writeSourceManifest != "" {
+		root, rootErr := repositoryRoot()
+		if rootErr != nil {
+			err = rootErr
+		} else {
+			err = writeTrustedSourceManifest(ctx, root, expectedCommit, writeSourceManifest)
+		}
+	} else if artifacts != "" {
+		err = verifyArtifacts(ctx, artifacts, expectedVersion, expectedCommit, trustedBinaries, trustedSourceManifest)
 	} else {
 		err = buildAndVerify(ctx, all)
 	}
@@ -124,7 +151,7 @@ func describeContract(w io.Writer) {
 		fmt.Fprintln(w, target)
 	}
 	fmt.Fprintln(w, "native commands: --version | version --json | --help | --config configs/config.example.yaml --json config show")
-	fmt.Fprintln(w, "non-native policy: structural verification only; execution skipped")
+	fmt.Fprintln(w, "all-target policy: every archived executable must equal its independently cross-built trusted binary; only the native trusted binary is executed")
 }
 
 func buildAndVerify(ctx context.Context, buildAll bool) error {
@@ -308,7 +335,7 @@ type artifact struct {
 	} `json:"extra"`
 }
 
-func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit, trustedNative string) error {
+func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit, trustedBinariesDir, trustedSourceManifestPath string) error {
 	root, err := repositoryRoot()
 	if err != nil {
 		return err
@@ -320,11 +347,19 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 	if err := validateExpectedMetadata(expectedVersion, expectedCommit); err != nil {
 		return err
 	}
-	trustedNative, err = canonicalTrustedNative(dist, trustedNative)
+	trustedBinaries, err := canonicalTrustedBinaries(dist, trustedBinariesDir)
+	if err != nil {
+		return err
+	}
+	manifest, err := loadTrustedSourceManifest(dist, trustedSourceManifestPath, expectedCommit)
 	if err != nil {
 		return err
 	}
 	nativeTarget := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
+	trustedNative, ok := trustedBinaries[nativeTarget]
+	if !ok {
+		return fmt.Errorf("release verifier host %s has no trusted binary target", nativeTarget)
+	}
 	if err := verifyStructure(trustedNative, nativeTarget); err != nil {
 		return fmt.Errorf("trusted native binary: %w", err)
 	}
@@ -405,7 +440,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 	if err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
-	if err := inspectSourceArchive(ctx, sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion), expectedCommit); err != nil {
+	if err := inspectSourceArchive(ctx, sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion), expectedCommit, manifest); err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
 
@@ -477,55 +512,281 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 			cleanup()
 			return err
 		}
-		if target.goos == runtime.GOOS && target.goarch == runtime.GOARCH {
-			if err := verifyTrustedNativeArtifact(ctx, trustedNative, executable); err != nil {
-				cleanup()
-				return err
-			}
-			fmt.Printf("%s archive: checksum, SBOM, structure, and trusted-binary equality verified\n", target)
-		} else {
-			fmt.Printf("%s archive: checksum, SBOM, and structure verified; execution skipped (non-native on %s/%s)\n", target, runtime.GOOS, runtime.GOARCH)
+		if err := verifyTrustedArtifact(ctx, trustedBinaries[target], executable, target); err != nil {
+			cleanup()
+			return err
 		}
+		fmt.Printf("%s archive: checksum, SBOM, structure, and trusted-binary equality verified\n", target)
 		cleanup()
 	}
 	return nil
 }
 
-func canonicalTrustedNative(dist, path string) (string, error) {
+func canonicalTrustedBinaries(dist, path string) (map[target]string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return "", fmt.Errorf("resolve trusted native binary: %w", err)
+		return nil, fmt.Errorf("resolve trusted binaries directory: %w", err)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("stat trusted native binary: %w", err)
+		return nil, fmt.Errorf("stat trusted binaries directory: %w", err)
 	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("trusted native binary is not a regular file")
+	if !info.IsDir() {
+		return nil, fmt.Errorf("trusted binaries path is not a directory")
 	}
 	rel, err := filepath.Rel(dist, resolved)
 	if err != nil {
-		return "", fmt.Errorf("compare trusted native binary and artifact directory: %w", err)
+		return nil, fmt.Errorf("compare trusted binaries and artifact directory: %w", err)
 	}
 	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
-		return "", fmt.Errorf("trusted native binary must be outside the untrusted artifact directory")
+		return nil, fmt.Errorf("trusted binaries must be outside the untrusted artifact directory")
 	}
-	return resolved, nil
+	result := make(map[target]string, len(targets))
+	for _, target := range targets {
+		candidate := filepath.Join(resolved, target.goos+"_"+target.goarch, target.executableName())
+		trustedPath, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return nil, fmt.Errorf("resolve trusted binary for %s: %w", target, err)
+		}
+		entryInfo, err := os.Stat(trustedPath)
+		if err != nil || !entryInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("trusted binary for %s is not a regular file", target)
+		}
+		inside, err := filepath.Rel(resolved, trustedPath)
+		if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) || filepath.IsAbs(inside) {
+			return nil, fmt.Errorf("trusted binary for %s resolves outside trusted directory", target)
+		}
+		result[target] = trustedPath
+	}
+	return result, nil
 }
 
 func validateExpectedMetadata(version, commit string) error {
 	if !releaseVersionPattern.MatchString(version) || strings.HasPrefix(version, "v") || strings.ContainsAny(version, "/\\") || archivepath.Clean(version) != version {
 		return fmt.Errorf("invalid expected version %q", version)
 	}
+	return validateExpectedCommit(commit)
+}
+
+func validateExpectedCommit(commit string) error {
 	if len(commit) != 40 {
 		return fmt.Errorf("invalid expected commit %q", commit)
 	}
 	if _, err := hex.DecodeString(commit); err != nil {
 		return fmt.Errorf("invalid expected commit %q", commit)
+	}
+	return nil
+}
+
+func writeTrustedSourceManifest(ctx context.Context, root, commit, outputPath string) error {
+	if err := validateExpectedCommit(commit); err != nil {
+		return err
+	}
+	manifest, err := buildTrustedSourceManifest(ctx, root, commit)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode trusted source manifest: %w", err)
+	}
+	if len(encoded) > maxReleaseManifestBytes {
+		return fmt.Errorf("trusted source manifest exceeds %d bytes", maxReleaseManifestBytes)
+	}
+	abs, err := filepath.Abs(outputPath)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create trusted source manifest: %w", err)
+	}
+	wrote := false
+	defer func() {
+		file.Close()
+		if !wrote {
+			_ = os.Remove(abs)
+		}
+	}()
+	if _, err := file.Write(append(encoded, '\n')); err != nil {
+		return fmt.Errorf("write trusted source manifest: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync trusted source manifest: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close trusted source manifest: %w", err)
+	}
+	wrote = true
+	return nil
+}
+
+func buildTrustedSourceManifest(ctx context.Context, root, commit string) (sourceManifest, error) {
+	if err := validateExpectedCommit(commit); err != nil {
+		return sourceManifest{}, err
+	}
+	resolved, err := gitOutput(ctx, root, maxReleaseManifestBytes, "rev-parse", "--verify", commit+"^{commit}")
+	if err != nil {
+		return sourceManifest{}, fmt.Errorf("resolve source commit: %w", err)
+	}
+	if strings.TrimSpace(string(resolved)) != commit {
+		return sourceManifest{}, fmt.Errorf("resolved source commit does not match expected commit")
+	}
+	tree, err := gitOutput(ctx, root, maxReleaseManifestBytes, "ls-tree", "-r", "-z", "--full-tree", commit)
+	if err != nil {
+		return sourceManifest{}, fmt.Errorf("list source commit: %w", err)
+	}
+	manifest := sourceManifest{SchemaVersion: "1", Commit: commit}
+	seen := make(map[string]struct{})
+	var aggregate int64
+	for _, raw := range bytes.Split(tree, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		metadata, pathBytes, ok := bytes.Cut(raw, []byte{'\t'})
+		fields := strings.Fields(string(metadata))
+		if !ok || len(fields) != 3 || fields[1] != "blob" {
+			return sourceManifest{}, fmt.Errorf("malformed source tree entry")
+		}
+		mode, objectID, path := fields[0], fields[2], string(pathBytes)
+		if mode != "100644" && mode != "100755" {
+			return sourceManifest{}, fmt.Errorf("unsupported Git mode %q for %q", mode, path)
+		}
+		if err := validateManifestPath(path); err != nil {
+			return sourceManifest{}, err
+		}
+		if _, exists := seen[path]; exists {
+			return sourceManifest{}, fmt.Errorf("duplicate source manifest path %q", path)
+		}
+		seen[path] = struct{}{}
+		if len(manifest.Files) >= maxReleaseSourceEntries {
+			return sourceManifest{}, fmt.Errorf("source commit exceeds maximum of %d files", maxReleaseSourceEntries)
+		}
+		digest, size, err := hashGitBlob(ctx, root, objectID)
+		if err != nil {
+			return sourceManifest{}, fmt.Errorf("hash source file %q: %w", path, err)
+		}
+		if aggregate > maxReleaseExpandedBytes-size {
+			return sourceManifest{}, fmt.Errorf("source commit exceeds expanded byte limit")
+		}
+		aggregate += size
+		manifest.Files = append(manifest.Files, sourceManifestEntry{Path: path, Mode: mode, SHA256: digest})
+	}
+	if len(manifest.Files) == 0 {
+		return sourceManifest{}, fmt.Errorf("source commit has no files")
+	}
+	slices.SortFunc(manifest.Files, func(a, b sourceManifestEntry) int { return strings.Compare(a.Path, b.Path) })
+	return manifest, nil
+}
+
+func gitOutput(ctx context.Context, root string, limit int64, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	if readErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, readErr
+	}
+	if int64(len(data)) > limit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("Git output exceeds %d bytes", limit)
+	}
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		return nil, waitErr
+	}
+	return data, nil
+}
+
+func hashGitBlob(ctx context.Context, root, objectID string) (string, int64, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", objectID)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", 0, err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", 0, err
+	}
+	hash := sha256.New()
+	size, readErr := io.Copy(hash, io.LimitReader(contextReader{ctx: ctx, reader: stdout}, maxReleaseEntryBytes+1))
+	if readErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", 0, readErr
+	}
+	if size > maxReleaseEntryBytes {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", 0, fmt.Errorf("Git blob exceeds %d bytes", maxReleaseEntryBytes)
+	}
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		return "", 0, waitErr
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+func loadTrustedSourceManifest(dist, path, expectedCommit string) (sourceManifest, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return sourceManifest{}, err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return sourceManifest{}, fmt.Errorf("resolve trusted source manifest: %w", err)
+	}
+	rel, err := filepath.Rel(dist, resolved)
+	if err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
+		return sourceManifest{}, fmt.Errorf("trusted source manifest must be outside the untrusted artifact directory")
+	}
+	data, err := fileutil.ReadRegularFile(resolved, maxReleaseManifestBytes)
+	if err != nil {
+		return sourceManifest{}, fmt.Errorf("read trusted source manifest: %w", err)
+	}
+	var manifest sourceManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return sourceManifest{}, fmt.Errorf("decode trusted source manifest: %w", err)
+	}
+	if manifest.SchemaVersion != "1" || manifest.Commit != expectedCommit || len(manifest.Files) == 0 || len(manifest.Files) > maxReleaseSourceEntries {
+		return sourceManifest{}, fmt.Errorf("trusted source manifest metadata does not match release")
+	}
+	seen := make(map[string]struct{}, len(manifest.Files))
+	for _, entry := range manifest.Files {
+		if err := validateManifestPath(entry.Path); err != nil {
+			return sourceManifest{}, err
+		}
+		if entry.Mode != "100644" && entry.Mode != "100755" {
+			return sourceManifest{}, fmt.Errorf("trusted source manifest has unsupported mode %q", entry.Mode)
+		}
+		if len(entry.SHA256) != sha256.Size*2 {
+			return sourceManifest{}, fmt.Errorf("trusted source manifest has invalid digest for %q", entry.Path)
+		}
+		if _, err := hex.DecodeString(entry.SHA256); err != nil {
+			return sourceManifest{}, fmt.Errorf("trusted source manifest has invalid digest for %q", entry.Path)
+		}
+		if _, exists := seen[entry.Path]; exists {
+			return sourceManifest{}, fmt.Errorf("trusted source manifest has duplicate path %q", entry.Path)
+		}
+		seen[entry.Path] = struct{}{}
+	}
+	return manifest, nil
+}
+
+func validateManifestPath(path string) error {
+	if path == "" || filepath.IsAbs(path) || archivepath.IsAbs(path) || strings.Contains(path, "\\") || archivepath.Clean(path) != path || path == "." || path == ".." || strings.HasPrefix(path, "../") {
+		return fmt.Errorf("unsafe source manifest path %q", path)
 	}
 	return nil
 }
@@ -656,7 +917,7 @@ type archiveExecutable struct {
 	sha256        string
 }
 
-func verifyTrustedNativeArtifact(ctx context.Context, trustedPath string, artifact archiveExecutable) error {
+func verifyTrustedArtifact(ctx context.Context, trustedPath string, artifact archiveExecutable, target target) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -664,10 +925,10 @@ func verifyTrustedNativeArtifact(ctx context.Context, trustedPath string, artifa
 	}
 	trustedSHA256, err := sha256File(ctx, trustedPath, maxReleaseEntryBytes)
 	if err != nil {
-		return fmt.Errorf("hash trusted native binary: %w", err)
+		return fmt.Errorf("hash trusted binary for %s: %w", target, err)
 	}
 	if !strings.EqualFold(artifact.sha256, trustedSHA256) {
-		return fmt.Errorf("native artifact SHA-256 does not match trusted native binary")
+		return fmt.Errorf("%s artifact SHA-256 does not match trusted binary", target)
 	}
 	return nil
 }
@@ -963,7 +1224,7 @@ func resolveArtifactPath(dist, artifactPath string) (string, error) {
 	return resolved, nil
 }
 
-func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expectedCommit string) error {
+func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expectedCommit string, manifest sourceManifest) error {
 	file, _, err := openReleaseFile(archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return err
@@ -976,6 +1237,10 @@ func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expect
 	defer gzipReader.Close()
 	reader := tar.NewReader(gzipReader)
 	seen := make(map[string]struct{})
+	want := make(map[string]sourceManifestEntry, len(manifest.Files))
+	for _, entry := range manifest.Files {
+		want[entry.Path] = entry
+	}
 	core := map[string]bool{
 		expectedRoot + "/LICENSE":      false,
 		expectedRoot + "/README.md":    false,
@@ -1034,15 +1299,28 @@ func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expect
 			continue
 		}
 		regularFiles++
+		relative := strings.TrimPrefix(clean, expectedRoot+"/")
+		expected, ok := want[relative]
+		if !ok {
+			return fmt.Errorf("source archive contains untracked file %q", relative)
+		}
+		if gotMode, wantMode := fs.FileMode(header.Mode).Perm(), sourceArchiveMode(expected.Mode); gotMode != wantMode {
+			return fmt.Errorf("source entry %q mode = %04o, want %04o", clean, gotMode, wantMode)
+		}
 		if _, ok := core[clean]; ok {
 			if header.Size == 0 {
 				return fmt.Errorf("source core file %q is empty", clean)
 			}
 			core[clean] = true
 		}
-		if _, err := io.CopyN(io.Discard, contextReader{ctx: ctx, reader: reader}, header.Size); err != nil {
+		hash := sha256.New()
+		if _, err := io.CopyN(hash, contextReader{ctx: ctx, reader: reader}, header.Size); err != nil {
 			return fmt.Errorf("read source entry %q: %w", header.Name, err)
 		}
+		if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, expected.SHA256) {
+			return fmt.Errorf("source entry %q SHA-256 does not match trusted commit manifest", clean)
+		}
+		delete(want, relative)
 	}
 	if regularFiles == 0 {
 		return fmt.Errorf("source archive has no files")
@@ -1055,7 +1333,22 @@ func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expect
 			return fmt.Errorf("source archive is missing %q", name)
 		}
 	}
+	if len(want) != 0 {
+		missing := make([]string, 0, len(want))
+		for path := range want {
+			missing = append(missing, path)
+		}
+		slices.Sort(missing)
+		return fmt.Errorf("source archive is missing tracked file %q", missing[0])
+	}
 	return nil
+}
+
+func sourceArchiveMode(gitMode string) fs.FileMode {
+	if gitMode == "100755" {
+		return 0o775
+	}
+	return 0o664
 }
 
 type contextReader struct {

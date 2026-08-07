@@ -27,15 +27,18 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
 - [ ] Rebase and ensure hosted CI passes on the unchanged candidate commit.
 - [ ] Run GoReleaser 2.17.1 checks and smoke every generated platform artifact.
-- [ ] Before GoReleaser, build the native smoke binary from the exact checkout
-      with the release version, commit, and commit-date linker values and keep
-      it outside `dist`. In the tag workflow, confirm
-      `go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-native "$RUNNER_TEMP/unifi-trusted"`
+- [ ] Before GoReleaser, cross-build all six trusted binaries from the exact
+      checkout with the release version, commit, and commit-date linker values;
+      generate an exact path, Git-mode, and SHA-256 source manifest from the
+      release commit; and keep all trusted inputs outside `dist`. In the tag
+      workflow, confirm
+      `go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/unifi-trusted" --trusted-source-manifest "$RUNNER_TEMP/unifi-source-manifest.json"`
       verifies the source archive, all six exact archive names and layouts,
       their exhaustive SHA-256 entries, bound CycloneDX SBOMs, embedded build
-      settings, and byte-for-byte equality between the native archive and the
-      trusted binary before provenance attestation. The verifier never executes
-      an extracted artifact.
+      settings, byte-for-byte equality between every archived executable and
+      its corresponding trusted cross-build, and exact source-manifest equality
+      before provenance attestation. The verifier never executes an extracted
+      artifact.
       The macOS and Windows CI runners separately run the same four-command
       native executable contract before release.
 - [ ] Confirm GoReleaser creates and uploads only a draft release using

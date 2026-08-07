@@ -31,7 +31,7 @@ func TestReleaseSmokeDescribesExactTargetAndCommandContract(t *testing.T) {
 		"windows/amd64",
 		"windows/arm64",
 		"native commands: --version | version --json | --help | --config configs/config.example.yaml --json config show",
-		"non-native policy: structural verification only; execution skipped",
+		"all-target policy: every archived executable must equal its independently cross-built trusted binary; only the native trusted binary is executed",
 		"",
 	}, "\n")
 	if string(output) != want {
@@ -259,8 +259,10 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		"dist/*.zip",
 		"dist/checksums.txt",
 		"RELEASE_COMMIT_DATE=\"$(date -u -d \"@$RELEASE_COMMIT_TIMESTAMP\" +%Y-%m-%dT%H:%M:%SZ)\"",
-		"go build -trimpath -ldflags \"$RELEASE_LDFLAGS\" -o \"$RUNNER_TEMP/unifi-trusted\" ./cmd/unifi",
-		"go run ./cmd/release-smoke --artifacts dist --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-native \"$RUNNER_TEMP/unifi-trusted\"",
+		"for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do",
+		"GOOS=\"$GOOS\" GOARCH=\"$GOARCH\" go build -trimpath -ldflags \"$RELEASE_LDFLAGS\" -o \"$OUTPUT\" ./cmd/unifi",
+		"go run ./cmd/release-smoke --write-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\" --expected-commit \"$GITHUB_SHA\"",
+		"go run ./cmd/release-smoke --artifacts dist --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-binaries \"$RUNNER_TEMP/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\"",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("release workflow missing %q", want)
@@ -269,7 +271,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 
 	steps := releaseSteps(t, workflow)
 	preflight := stepIndex(t, steps, "Refuse published release replacement")
-	trusted := stepIndex(t, steps, "Build trusted native smoke binary")
+	trusted := stepIndex(t, steps, "Build trusted all-target binaries and source manifest")
 	syft := stepIndex(t, steps, "Install pinned Syft for archive SBOMs")
 	build := stepIndex(t, steps, "Build and upload draft release artifacts")
 	verify := stepIndex(t, steps, "Verify draft artifact set")

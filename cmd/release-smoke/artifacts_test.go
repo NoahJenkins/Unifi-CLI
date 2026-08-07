@@ -29,6 +29,71 @@ func TestVerifyArtifactsAcceptsExactHardenedRelease(t *testing.T) {
 	verifyReleaseFixture(t, fixture)
 }
 
+func TestVerifyArtifactsRejectsNonNativeBinaryThatDiffersFromTrustedBuild(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	var selected target
+	for _, candidate := range targets {
+		if candidate.goos != runtime.GOOS || candidate.goarch != runtime.GOARCH {
+			selected = candidate
+			break
+		}
+	}
+	fixture.binaries = cloneFixtureBinaries(fixture.binaries)
+	fixture.binaries[selected] = append(slices.Clone(fixture.binaries[selected]), 0)
+	fixture.replaceArchive(t, selected, fixture.validArchiveEntries(selected))
+	fixture.writeSBOM(t, selected, fixture.sbom(selected, fixture.archiveName(selected), smokeVersion, true))
+	fixture.writeMetadata(t)
+	verifyReleaseFixtureFails(t, fixture)
+}
+
+func TestVerifyArtifactsRejectsSourceContentNotInTrustedCommitManifest(t *testing.T) {
+	fixture := newReleaseFixture(t)
+	entries := fixture.validSourceEntries()
+	entries[1].body = []byte("backdoored readme")
+	fixture.replaceSource(t, entries)
+	fixture.writeMetadata(t)
+	verifyReleaseFixtureFails(t, fixture)
+}
+
+func TestBuildTrustedSourceManifestUsesExactGitCommitObjects(t *testing.T) {
+	root, err := repositoryRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headRaw, err := gitOutput(context.Background(), root, 128, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	manifest, err := buildTrustedSourceManifest(context.Background(), root, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme, err := gitOutput(context.Background(), root, maxReleaseEntryBytes, "show", head+":README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(readme)
+	want := hex.EncodeToString(digest[:])
+	for _, entry := range manifest.Files {
+		if entry.Path == "README.md" {
+			if entry.Mode != "100644" || entry.SHA256 != want {
+				t.Fatalf("README manifest entry = %+v, want mode 100644 and SHA-256 %s", entry, want)
+			}
+			return
+		}
+	}
+	t.Fatal("trusted source manifest omitted README.md")
+}
+
+func cloneFixtureBinaries(in map[target][]byte) map[target][]byte {
+	out := make(map[target][]byte, len(in))
+	for key, value := range in {
+		out[key] = slices.Clone(value)
+	}
+	return out
+}
+
 func TestWriteExtractedRejectsEntryLimitOverflow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unifi")
 	err := writeExtracted(path, bytes.NewReader([]byte("123456789")), 0o755, 8)
@@ -91,7 +156,7 @@ func TestArchiveInspectionRejectsDeclaredEntryExpansionBeforeReadingBody(t *test
 		writeTruncatedTarGzHeader(t, path, &tar.Header{
 			Name: root + "/huge", Mode: 0o644, Typeflag: tar.TypeReg, Size: maxReleaseEntryBytes + 1,
 		})
-		err := inspectSourceArchive(context.Background(), path, root, smokeCommit)
+		err := inspectSourceArchive(context.Background(), path, root, smokeCommit, sourceManifest{})
 		if err == nil || !strings.Contains(err.Error(), "exceeds") {
 			t.Fatalf("inspectSourceArchive error = %v, want expansion-limit failure", err)
 		}
@@ -142,7 +207,7 @@ func TestSourceArchiveInspectionHonorsCanceledContext(t *testing.T) {
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := inspectSourceArchive(ctx, path, "unifi-cli_1.0.0", smokeCommit)
+	err := inspectSourceArchive(ctx, path, "unifi-cli_1.0.0", smokeCommit, sourceManifest{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("inspectSourceArchive error = %v, want context.Canceled", err)
 	}
@@ -186,9 +251,9 @@ func TestNativeArtifactMustMatchTrustedBinaryWithoutExecution(t *testing.T) {
 	digest := sha256.Sum256([]byte(script))
 	artifact := archiveExecutable{extractedPath: artifactPath, sha256: hex.EncodeToString(digest[:])}
 
-	err := verifyTrustedNativeArtifact(context.Background(), trusted, artifact)
-	if err == nil || !strings.Contains(err.Error(), "trusted native binary") {
-		t.Fatalf("verifyTrustedNativeArtifact error = %v, want hash mismatch", err)
+	err := verifyTrustedArtifact(context.Background(), trusted, artifact, target{goos: runtime.GOOS, goarch: runtime.GOARCH})
+	if err == nil || !strings.Contains(err.Error(), "trusted binary") {
+		t.Fatalf("verifyTrustedArtifact error = %v, want hash mismatch", err)
 	}
 	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 		t.Fatalf("untrusted artifact was executed: %v", statErr)
@@ -197,16 +262,16 @@ func TestNativeArtifactMustMatchTrustedBinaryWithoutExecution(t *testing.T) {
 
 func TestVerifyArtifactsRejectsNativeArchiveThatDiffersFromTrustedBuild(t *testing.T) {
 	fixture := newReleaseFixture(t)
-	trusted, err := os.ReadFile(fixture.trustedNative)
+	native := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
+	trustedPath := fixture.trustedBinaryPath(native)
+	trusted, err := os.ReadFile(trustedPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	altered := filepath.Join(t.TempDir(), "trusted-unifi")
 	trusted = append(trusted, []byte("different-build")...)
-	if err := os.WriteFile(altered, trusted, 0o755); err != nil {
+	if err := os.WriteFile(trustedPath, trusted, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fixture.trustedNative = altered
 	verifyReleaseFixtureFails(t, fixture)
 }
 
@@ -302,7 +367,7 @@ func TestVerifyArtifactsRejectsWrongExpectedVersion(t *testing.T) {
 	fixture := newReleaseFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := verifyArtifacts(ctx, fixture.dist, "9.9.9", smokeCommit, fixture.trustedNative); err == nil {
+	if err := verifyArtifacts(ctx, fixture.dist, "9.9.9", smokeCommit, fixture.trustedBinaries, fixture.trustedSourceManifest); err == nil {
 		t.Fatal("artifact verification accepted a release built for a different version")
 	}
 }
@@ -357,7 +422,13 @@ func TestInspectSourceArchiveAcceptsPinnedGoReleaserPAXHeader(t *testing.T) {
 		{name: root + "/CHANGELOG.md", mode: 0o664, body: []byte("changelog")},
 		{name: root + "/go.mod", mode: 0o664, body: []byte("module github.com/noahjenkins/unifi-cli")},
 	})
-	if err := inspectSourceArchive(context.Background(), path, root, smokeCommit); err != nil {
+	manifest := manifestForSourceEntries(t, root, []archiveEntry{
+		{name: root + "/LICENSE", mode: 0o664, body: []byte("license")},
+		{name: root + "/README.md", mode: 0o664, body: []byte("readme")},
+		{name: root + "/CHANGELOG.md", mode: 0o664, body: []byte("changelog")},
+		{name: root + "/go.mod", mode: 0o664, body: []byte("module github.com/noahjenkins/unifi-cli")},
+	})
+	if err := inspectSourceArchive(context.Background(), path, root, smokeCommit, manifest); err != nil {
 		t.Fatalf("pinned GoReleaser source PAX header rejected: %v", err)
 	}
 }
@@ -758,11 +829,12 @@ type archiveEntry struct {
 }
 
 type releaseFixture struct {
-	dist          string
-	artifacts     []artifact
-	checksums     map[string]string
-	binaries      map[target][]byte
-	trustedNative string
+	dist                  string
+	artifacts             []artifact
+	checksums             map[string]string
+	binaries              map[target][]byte
+	trustedBinaries       string
+	trustedSourceManifest string
 }
 
 type pinnedOutputSnapshot struct {
@@ -875,12 +947,20 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			Name: fixture.sbomName(target), Path: fixture.sbomName(target), Type: "SBOM",
 		})
 	}
-	native := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
-	fixture.trustedNative = filepath.Join(t.TempDir(), native.executableName())
-	if err := os.WriteFile(fixture.trustedNative, fixture.binaries[native], 0o755); err != nil {
-		t.Fatal(err)
+	fixture.trustedBinaries = t.TempDir()
+	for _, target := range targets {
+		path := fixture.trustedBinaryPath(target)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, fixture.binaries[target], 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	fixture.replaceSource(t, fixture.validSourceEntries())
+	sourceEntries := fixture.validSourceEntries()
+	fixture.replaceSource(t, sourceEntries)
+	fixture.trustedSourceManifest = filepath.Join(t.TempDir(), "source-manifest.json")
+	writeFixtureSourceManifest(t, fixture.trustedSourceManifest, manifestForSourceEntries(t, fixture.sourceRoot(), sourceEntries))
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: fixture.sourceName(), Path: fixture.sourceName(), Type: "Source"})
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: "checksums.txt", Path: "checksums.txt", Type: "Checksum"})
 	metadata := fmt.Sprintf(`{"project_name":"unifi-cli","version":%q,"commit":%q}`, smokeVersion, smokeCommit)
@@ -895,11 +975,12 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 func (f *releaseFixture) clone(t *testing.T) *releaseFixture {
 	t.Helper()
 	clone := &releaseFixture{
-		dist:          t.TempDir(),
-		artifacts:     slices.Clone(f.artifacts),
-		checksums:     make(map[string]string, len(f.checksums)),
-		binaries:      f.binaries,
-		trustedNative: f.trustedNative,
+		dist:                  t.TempDir(),
+		artifacts:             slices.Clone(f.artifacts),
+		checksums:             make(map[string]string, len(f.checksums)),
+		binaries:              f.binaries,
+		trustedBinaries:       f.trustedBinaries,
+		trustedSourceManifest: f.trustedSourceManifest,
 	}
 	for name, checksum := range f.checksums {
 		clone.checksums[name] = checksum
@@ -943,6 +1024,10 @@ func (f *releaseFixture) sourceName() string            { return "unifi-cli_" + 
 func (f *releaseFixture) sourceRoot() string            { return "unifi-cli_" + smokeVersion }
 func (f *releaseFixture) sbomName(target target) string { return f.archiveName(target) + ".sbom.json" }
 
+func (f *releaseFixture) trustedBinaryPath(target target) string {
+	return filepath.Join(f.trustedBinaries, target.goos+"_"+target.goarch, target.executableName())
+}
+
 func (f *releaseFixture) validArchiveEntries(target target) []archiveEntry {
 	root := f.archiveRoot(target)
 	return []archiveEntry{
@@ -955,10 +1040,42 @@ func (f *releaseFixture) validArchiveEntries(target target) []archiveEntry {
 
 func (f *releaseFixture) validSourceEntries() []archiveEntry {
 	return []archiveEntry{
-		{name: f.sourceRoot() + "/LICENSE", mode: 0o644, body: []byte("license")},
-		{name: f.sourceRoot() + "/README.md", mode: 0o644, body: []byte("readme")},
-		{name: f.sourceRoot() + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
-		{name: f.sourceRoot() + "/go.mod", mode: 0o644, body: []byte("module github.com/noahjenkins/unifi-cli")},
+		{name: f.sourceRoot() + "/LICENSE", mode: 0o664, body: []byte("license")},
+		{name: f.sourceRoot() + "/README.md", mode: 0o664, body: []byte("readme")},
+		{name: f.sourceRoot() + "/CHANGELOG.md", mode: 0o664, body: []byte("changelog")},
+		{name: f.sourceRoot() + "/go.mod", mode: 0o664, body: []byte("module github.com/noahjenkins/unifi-cli")},
+	}
+}
+
+func manifestForSourceEntries(t *testing.T, root string, entries []archiveEntry) sourceManifest {
+	t.Helper()
+	manifest := sourceManifest{SchemaVersion: "1", Commit: smokeCommit}
+	for _, entry := range entries {
+		if entry.typeflag == tar.TypeXGlobalHeader || entry.typeflag == tar.TypeDir {
+			continue
+		}
+		path := strings.TrimPrefix(entry.name, root+"/")
+		mode := "100644"
+		if entry.mode&0o111 != 0 {
+			mode = "100755"
+		}
+		digest := sha256.Sum256(entry.body)
+		manifest.Files = append(manifest.Files, sourceManifestEntry{
+			Path: path, Mode: mode, SHA256: hex.EncodeToString(digest[:]),
+		})
+	}
+	slices.SortFunc(manifest.Files, func(a, b sourceManifestEntry) int { return strings.Compare(a.Path, b.Path) })
+	return manifest
+}
+
+func writeFixtureSourceManifest(t *testing.T, path string, manifest sourceManifest) {
+	t.Helper()
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1119,7 +1236,7 @@ func verifyReleaseFixture(t *testing.T, fixture *releaseFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit, fixture.trustedNative); err != nil {
+	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit, fixture.trustedBinaries, fixture.trustedSourceManifest); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1128,7 +1245,7 @@ func verifyReleaseFixtureFails(t *testing.T, fixture *releaseFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit, fixture.trustedNative); err == nil {
+	if err := verifyArtifacts(ctx, fixture.dist, smokeVersion, smokeCommit, fixture.trustedBinaries, fixture.trustedSourceManifest); err == nil {
 		t.Fatal("artifact verification unexpectedly accepted invalid release")
 	}
 }
