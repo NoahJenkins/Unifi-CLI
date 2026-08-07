@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -11,7 +12,7 @@ import (
 )
 
 type detailBudgetAPI struct {
-	requests      int
+	requests      atomic.Int64
 	response      map[string]any
 	responseBytes int
 	echoPathID    bool
@@ -33,7 +34,7 @@ func (f *detailBudgetAPI) FetchOfficialObjects(context.Context, string) ([]map[s
 }
 
 func (f *detailBudgetAPI) DoOfficial(_ context.Context, _ string, path string, _ any, out any) error {
-	f.requests++
+	f.requests.Add(1)
 	if f.echoPathID {
 		item := out.(*map[string]any)
 		*item = map[string]any{"id": path[strings.LastIndex(path, "/")+1:]}
@@ -54,8 +55,8 @@ func TestFetchOfficialSiteDetailsRejectsExcessiveFanoutBeforeRequests(t *testing
 	if !apperr.Is(err, apperr.Internal) || err == nil {
 		t.Fatalf("error = %v, want typed fanout-budget failure", err)
 	}
-	if api.requests != 0 {
-		t.Fatalf("detail requests = %d, want 0", api.requests)
+	if api.requests.Load() != 0 {
+		t.Fatalf("detail requests = %d, want 0", api.requests.Load())
 	}
 }
 
@@ -65,8 +66,8 @@ func TestFetchOfficialSiteDetailsRejectsMismatchedDetailIdentity(t *testing.T) {
 	if !apperr.Is(err, apperr.Internal) {
 		t.Fatalf("error = %v, want typed identity failure", err)
 	}
-	if api.requests != 1 {
-		t.Fatalf("detail requests = %d, want 1", api.requests)
+	if api.requests.Load() != 1 {
+		t.Fatalf("detail requests = %d, want 1", api.requests.Load())
 	}
 }
 
