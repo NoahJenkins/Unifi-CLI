@@ -149,17 +149,22 @@ non-DNS mutations in this RC.
 
 ## Mutation safety
 
-Every mutation first resolves its target, validates input, and emits a plan.
-It applies only when `--yes` is present. `--dry-run` always wins over `--yes`.
-Experimental plans do not need opt-in, but experimental applies require both
-`--experimental` and `--yes`. With `safe_mode: true`, high-impact and
-destructive applies also require `--force`. `--force` never implies `--yes` or
-`--experimental`.
+Every mutation validates input and emits a plan. It applies only when `--yes`
+is present. `--dry-run` always wins over `--yes`. Experimental plans do not
+need opt-in, but experimental applies require both `--experimental` and
+`--yes`. With `safe_mode: true`, high-impact and destructive applies also
+require `--force`. `--force` never implies `--yes` or `--experimental`.
 
-Targeted operations bind the plan to an immutable ID and observed snapshot,
-revalidate immediately before one apply attempt, and fail on drift. Verified
-operations re-read controller state afterward; they do not retry an ambiguous
-write.
+Targeted operations—updates, deletes, actions, and reorder operations that
+first observe existing target state—bind the plan to an immutable ID or state
+identity and observed snapshot. They revalidate immediately before one apply
+attempt and fail on drift.
+
+Creates have no pre-existing target to revalidate. DNS, Network, WLAN, and
+firewall creates validate their inputs locally, emit an untargeted plan, make
+at most one non-retried write, require the controller to return an ID, and then
+re-read controller state to verify the requested result. No mutation retries
+an ambiguous write.
 
 ### Exact risk and support classification
 
@@ -269,7 +274,6 @@ and `port get` resolve one device and make one detail request.
   "data": [],
   "meta": {
     "site": "default",
-    "count": 0,
     "dry_run": false
   }
 }
@@ -278,8 +282,9 @@ and `port get` resolve one device and make one detail request.
 Top-level `schema_version`, `ok`, `resource`, `action`, `data`, and `meta` are
 always present. `data` remains present on failures (as `null`). `error` is
 present only for failures and `plan` only for plan output. List responses may
-include `meta.count`. The v1 surface has no `--raw` flag and never embeds
-upstream controller payloads.
+include optional `meta.count`, but current typed resource-list commands omit
+it. The v1 surface has no `--raw` flag and never embeds upstream controller
+payloads.
 
 Version interfaces are:
 

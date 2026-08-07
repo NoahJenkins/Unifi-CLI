@@ -13,8 +13,8 @@ official 10.3.58+ surface lacks the capability and all of the following are
 true:
 
 - the command is explicitly classified experimental;
-- the plan, immutable target, risk, gate, and verification behavior are
-  documented and tested;
+- the plan, risk, gate, and verification behavior are documented and tested,
+  including immutable-target behavior when a pre-existing target exists;
 - no stable official command is silently routed through the legacy endpoint;
 - the contribution explains the compatibility need and removal path.
 

@@ -22,7 +22,9 @@ All notable changes to this project are documented here. The format follows
 - Stable site, device, client, network, WiFi, port, firewall, DNS, resolver,
   and derived-health reads use the official local integration API.
 - Network and WiFi CRUD plus supported device lifecycle actions use official
-  endpoints and verified immutable targets.
+  endpoints. Creates capture returned IDs and verify controller-observed state;
+  operations on pre-existing targets bind and revalidate immutable identities
+  and snapshots before apply.
 - Network writes use `--management gateway|switch|unmanaged`; the legacy
   `--purpose` write vocabulary is removed.
 - All non-DNS writes are experimental for this RC. Unsupported official create
@@ -35,8 +37,10 @@ All notable changes to this project are documented here. The format follows
 - TLS verification is the default; custom CA and insecure mode conflict.
 - Controller origins are structurally constructed from validated bare
   host/port values, and automatic redirects are rejected.
-- Every write is plan-first, requires `--yes`, respects dry-run precedence,
-  and revalidates immutable targets before a single apply attempt.
+- Every write is plan-first, requires `--yes`, and respects dry-run precedence.
+  Operations on pre-existing targets revalidate immutable identities and
+  snapshots before one apply attempt. Creates validate input, write once
+  without retry, capture returned IDs, and verify controller-observed state.
 - High-impact and destructive writes require `--force` while `safe_mode` is
   enabled. API keys and WLAN passphrases remain out of argv and output.
 
