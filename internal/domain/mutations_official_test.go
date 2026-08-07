@@ -572,7 +572,7 @@ func TestOfficialMutationVerificationRejectsMismatchedObservedIdentity(t *testin
 
 func assertIdentityConflict(t *testing.T, err error, calls []officialMutationCall) {
 	t.Helper()
-	if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "id") {
+	if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verif") {
 		t.Fatalf("error = %v, want observed-ID conflict", err)
 	}
 	if got := len(nonGetMutationCalls(calls)); got != 1 {
@@ -962,6 +962,24 @@ func TestOfficialDeviceActionsUseAcceptedSemantics(t *testing.T) {
 				t.Fatalf("body = %#v, want %#v", writes[0].body, tt.wantBody)
 			}
 		})
+	}
+}
+
+func TestOfficialDeviceDetailCannotSubstituteActionTarget(t *testing.T) {
+	deviceA := map[string]any{"id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "macAddress": "00:11:22:33:44:55", "name": "AP A", "state": "ONLINE"}
+	deviceB := map[string]any{"id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "macAddress": "00:11:22:33:44:66", "name": "AP B", "state": "ONLINE"}
+	collection := client.OfficialPath("sites", mutationSiteID, "devices")
+	detail := client.OfficialPath("sites", mutationSiteID, "devices", deviceA["id"].(string))
+	api := &officialMutationAPI{
+		collections: map[string][]map[string]any{collection: {deviceA, deviceB}},
+		details:     map[string]map[string]any{detail: deviceB},
+	}
+	_, err := domain.NewDeviceService(api).ApplyRestart(context.Background(), deviceA["id"].(string))
+	if !apperr.Is(err, apperr.Internal) && !apperr.Is(err, apperr.Conflict) {
+		t.Fatalf("error = %v, want detail identity failure", err)
+	}
+	if got := len(nonGetMutationCalls(api.official)); got != 0 {
+		t.Fatalf("mutation attempts = %d, want 0", got)
 	}
 }
 

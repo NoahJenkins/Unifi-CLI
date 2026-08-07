@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
 )
 
 type mutateClientAPI struct {
-	sta   []map[string]any
-	calls []mutateCall
-	err   error
+	sta              []map[string]any
+	calls            []mutateCall
+	err              error
+	afterMutationMAC string
 }
 
 func (f *mutateClientAPI) Do(ctx context.Context, method, path string, in, out any) error {
@@ -35,6 +38,9 @@ func (f *mutateClientAPI) Do(ctx context.Context, method, path string, in, out a
 			for _, client := range f.sta {
 				if strFieldTest(client, "mac") == body["mac"] {
 					client["blocked"] = blocked
+					if f.afterMutationMAC != "" {
+						client["mac"] = f.afterMutationMAC
+					}
 				}
 			}
 		}
@@ -106,7 +112,7 @@ func TestClientBlockPlanAndApply(t *testing.T) {
 	}
 	before, _ := p.Changes[0].Before.(map[string]any)
 	after, _ := p.Changes[0].After.(map[string]any)
-	if before["blocked"] != false || after["blocked"] != true {
+	if before["blocked"] != false || after["blocked"] != true || before["mac"] != "112233445501" || after["mac"] != "112233445501" {
 		t.Fatalf("before/after: %+v %+v", before, after)
 	}
 
@@ -132,6 +138,14 @@ func TestClientBlockPlanAndApply(t *testing.T) {
 	}
 }
 
+func TestClientBlockRejectsPostWriteMACSubstitution(t *testing.T) {
+	api := &mutateClientAPI{sta: fixtureSta(t), afterMutationMAC: "11:22:33:44:55:99"}
+	_, err := domain.NewClientService(api).ApplyBlock(context.Background(), "sta1")
+	if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "mac") {
+		t.Fatalf("error = %v, want MAC verification conflict", err)
+	}
+}
+
 func TestClientUnblockPlanAndApply(t *testing.T) {
 	api := &mutateClientAPI{sta: fixtureSta(t)}
 	svc := domain.NewClientService(api)
@@ -146,7 +160,7 @@ func TestClientUnblockPlanAndApply(t *testing.T) {
 	}
 	before, _ := p.Changes[0].Before.(map[string]any)
 	after, _ := p.Changes[0].After.(map[string]any)
-	if before["blocked"] != true || after["blocked"] != false {
+	if before["blocked"] != true || after["blocked"] != false || before["mac"] != "112233445503" || after["mac"] != "112233445503" {
 		t.Fatalf("before/after: %+v %+v", before, after)
 	}
 

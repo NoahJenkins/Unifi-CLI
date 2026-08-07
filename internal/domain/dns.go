@@ -337,6 +337,8 @@ func (s *DNSService) ApplyDelete(ctx context.Context, id string) (DNSRecord, err
 }
 
 func (s *DNSService) ListResolvers(ctx context.Context) ([]DNSResolver, error) {
+	ctx, cancel := officialOperationContext(ctx)
+	defer cancel()
 	overviews, official, err := fetchOfficialSite(s.api, ctx, "networks")
 	if err != nil {
 		return nil, err

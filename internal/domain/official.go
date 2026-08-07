@@ -111,6 +111,10 @@ type officialDetailAPI interface {
 	DoOfficial(context.Context, string, string, any, any) error
 }
 
+type officialSizedDetailAPI interface {
+	DoOfficialSized(context.Context, string, string, any, any) (int, error)
+}
+
 type officialMutationAPI interface {
 	officialSiteCollectionAPI
 	officialDetailAPI
@@ -122,6 +126,10 @@ const (
 	officialDetailByteLimit        = 32 << 20
 	officialDetailOperationTimeout = 2 * time.Minute
 )
+
+func officialOperationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, officialDetailOperationTimeout)
+}
 
 func fetchOfficialGlobal(api any, ctx context.Context, parts ...string) ([]map[string]any, bool, error) {
 	fetcher, ok := api.(officialCollectionAPI)
@@ -146,21 +154,42 @@ func fetchOfficialSite(api any, ctx context.Context, parts ...string) ([]map[str
 }
 
 func fetchOfficialSiteDetail(api any, ctx context.Context, id string, parts ...string) (map[string]any, error) {
+	item, _, err := fetchOfficialSiteDetailSized(api, ctx, id, parts...)
+	return item, err
+}
+
+func fetchOfficialSiteDetailSized(api any, ctx context.Context, id string, parts ...string) (map[string]any, int, error) {
 	fetcher, collectionOK := api.(officialSiteCollectionAPI)
 	detailer, detailOK := api.(officialDetailAPI)
 	if !collectionOK || !detailOK {
-		return nil, apperr.New(apperr.Internal, "official resource detail transport is unavailable")
+		return nil, 0, apperr.New(apperr.Internal, "official resource detail transport is unavailable")
 	}
 	pathParts := append(append([]string(nil), parts...), id)
 	path, err := fetcher.IntegrationSitePath(ctx, pathParts...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var item map[string]any
-	if err := detailer.DoOfficial(ctx, http.MethodGet, path, nil, &item); err != nil {
-		return nil, err
+	responseBytes := 0
+	if sized, ok := api.(officialSizedDetailAPI); ok {
+		responseBytes, err = sized.DoOfficialSized(ctx, http.MethodGet, path, nil, &item)
+	} else {
+		err = detailer.DoOfficial(ctx, http.MethodGet, path, nil, &item)
+		if err == nil {
+			encoded, encodeErr := json.Marshal(item)
+			if encodeErr != nil {
+				return nil, 0, apperr.Newf(apperr.Internal, "encode official detail size: %v", encodeErr)
+			}
+			responseBytes = len(encoded)
+		}
 	}
-	return item, nil
+	if err != nil {
+		return nil, 0, err
+	}
+	if strField(item, "id") != id {
+		return nil, 0, apperr.New(apperr.Internal, "official resource detail ID does not match requested resource")
+	}
+	return item, responseBytes, nil
 }
 
 func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[string]any, parts ...string) ([]map[string]any, error) {
@@ -211,7 +240,7 @@ func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[stri
 					if !ok {
 						return
 					}
-					detail, err := fetchOfficialSiteDetail(api, workCtx, job.id, parts...)
+					detail, responseBytes, err := fetchOfficialSiteDetailSized(api, workCtx, job.id, parts...)
 					if err != nil {
 						errOnce.Do(func() {
 							firstErr = err
@@ -226,16 +255,8 @@ func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[stri
 						})
 						return
 					}
-					encoded, err := json.Marshal(detail)
-					if err != nil {
-						errOnce.Do(func() {
-							firstErr = apperr.Newf(apperr.Internal, "encode official detail for aggregate budget: %v", err)
-							cancel()
-						})
-						return
-					}
 					budgetMu.Lock()
-					if aggregateBytes > officialDetailByteLimit-len(encoded) {
+					if responseBytes < 0 || aggregateBytes > officialDetailByteLimit-responseBytes {
 						budgetMu.Unlock()
 						errOnce.Do(func() {
 							firstErr = apperr.Newf(apperr.Internal, "official detail aggregate bytes exceed maximum of %d", officialDetailByteLimit)
@@ -243,7 +264,7 @@ func fetchOfficialSiteDetails(ctx context.Context, api any, overviews []map[stri
 						})
 						return
 					}
-					aggregateBytes += len(encoded)
+					aggregateBytes += responseBytes
 					budgetMu.Unlock()
 					results[job.index] = detail
 				}

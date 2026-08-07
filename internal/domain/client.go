@@ -135,8 +135,8 @@ func (s *ClientService) Block(ctx context.Context, id string) (plan.Plan, Client
 	}
 	p := plan.Update("client", c.ID, c.GetName(),
 		fmt.Sprintf("block client %s", c.GetName()),
-		map[string]any{"blocked": c.Blocked},
-		map[string]any{"blocked": true},
+		map[string]any{"blocked": c.Blocked, "mac": resolve.NormalizeMAC(c.MAC)},
+		map[string]any{"blocked": true, "mac": resolve.NormalizeMAC(c.MAC)},
 	)
 	return p, c, nil
 }
@@ -155,8 +155,8 @@ func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Clie
 	}
 	p := plan.Update("client", c.ID, c.GetName(),
 		fmt.Sprintf("unblock client %s", c.GetName()),
-		map[string]any{"blocked": c.Blocked},
-		map[string]any{"blocked": false},
+		map[string]any{"blocked": c.Blocked, "mac": resolve.NormalizeMAC(c.MAC)},
+		map[string]any{"blocked": false, "mac": resolve.NormalizeMAC(c.MAC)},
 	)
 	return p, c, nil
 }
@@ -186,6 +186,10 @@ func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, 
 	if c.Blocked == blocked {
 		return Client{}, apperr.New(apperr.ValidationFailed, "client action would not change controller state")
 	}
+	actionMAC := resolve.NormalizeMAC(c.MAC)
+	if actionMAC == "" {
+		return Client{}, apperr.New(apperr.Conflict, "client action target has no valid MAC address")
+	}
 	path := s.api.SitePath(client.PathCmdStaMgr)
 	body := map[string]any{"cmd": cmd, "mac": c.MAC}
 	if err := s.api.Do(ctx, http.MethodPost, path, body, nil); err != nil {
@@ -197,6 +201,9 @@ func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, 
 	}
 	if observed.Blocked != blocked {
 		return Client{}, apperr.New(apperr.Conflict, "client action verification failed: observed blocked state differs from requested state")
+	}
+	if resolve.NormalizeMAC(observed.MAC) != actionMAC {
+		return Client{}, apperr.New(apperr.Conflict, "client action verification failed: observed MAC differs from action target")
 	}
 	return observed, nil
 }

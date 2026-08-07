@@ -80,6 +80,8 @@ func NewPortService(api PortAPI) *PortService {
 }
 
 func (s *PortService) List(ctx context.Context, deviceQuery string) ([]Port, error) {
+	ctx, cancel := officialOperationContext(ctx)
+	defer cancel()
 	if raw, official, err := fetchOfficialSite(s.api, ctx, "devices"); official {
 		if err != nil {
 			return nil, err
