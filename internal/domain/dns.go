@@ -12,20 +12,24 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/resolve"
 )
 
-// DNSAPI is the transport for local DNS records and networkconf resolvers.
-// Endpoint discovery (dnsrecord vs future fallbacks) lives in DNSService.
+// DNSAPI is the transport for official DNS policies and legacy networkconf
+// resolvers.
 type DNSAPI interface {
 	Do(ctx context.Context, method, path string, in, out any) error
 	SitePath(parts ...string) string
+	IntegrationSitePath(ctx context.Context, parts ...string) (string, error)
 }
 
 // DNSRecord is a local name→IP mapping.
 type DNSRecord struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	IP      string `json:"ip"`
-	Enabled bool   `json:"enabled"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IP         string `json:"ip"`
+	Enabled    bool   `json:"enabled"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
 }
+
+const defaultDNSTTLSeconds = 300
 
 func (r DNSRecord) GetID() string   { return r.ID }
 func (r DNSRecord) GetMAC() string  { return "" }
@@ -83,26 +87,29 @@ func (s *DNSService) Create(ctx context.Context, in DNSInput) (plan.Plan, error)
 	}
 	p := plan.Create("dns", in.Name,
 		fmt.Sprintf("create dns record %s → %s", in.Name, in.IP),
-		dnsRecordSnapshot(DNSRecord{Name: in.Name, IP: in.IP, Enabled: enabled}),
+		dnsRecordSnapshot(DNSRecord{Name: in.Name, IP: in.IP, Enabled: enabled, TTLSeconds: defaultDNSTTLSeconds}),
 	)
 	return p, nil
 }
 
 func (s *DNSService) ApplyCreate(ctx context.Context, in DNSInput) (DNSRecord, error) {
-	path := s.api.SitePath(client.PathRestDNSRecord)
+	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies")
+	if err != nil {
+		return DNSRecord{}, err
+	}
 	if !in.SetEnabled {
 		in.Enabled = true
 		in.SetEnabled = true
 	}
 	body := dnsInputBody(in)
-	var raw []map[string]any
+	var raw map[string]any
 	if err := s.api.Do(ctx, http.MethodPost, path, body, &raw); err != nil {
 		return DNSRecord{}, mapDNSEndpointErr(err, "create dns record")
 	}
 	if len(raw) > 0 {
-		return NormalizeDNSRecord(raw[0]), nil
+		return NormalizeDNSRecord(raw), nil
 	}
-	return DNSRecord{Name: in.Name, IP: in.IP, Enabled: in.Enabled}, nil
+	return DNSRecord{Name: in.Name, IP: in.IP, Enabled: in.Enabled, TTLSeconds: defaultDNSTTLSeconds}, nil
 }
 
 func (s *DNSService) Update(ctx context.Context, id string, in DNSInput) (plan.Plan, DNSRecord, error) {
@@ -125,10 +132,17 @@ func (s *DNSService) ApplyUpdate(ctx context.Context, id string, in DNSInput) (D
 	if err != nil {
 		return DNSRecord{}, err
 	}
-	path := s.api.SitePath(client.PathRestDNSRecord, rec.ID)
+	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies", rec.ID)
+	if err != nil {
+		return DNSRecord{}, err
+	}
 	body := dnsInputBodyMerged(rec, in)
-	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
+	var raw map[string]any
+	if err := s.api.Do(ctx, http.MethodPut, path, body, &raw); err != nil {
 		return DNSRecord{}, mapDNSEndpointErr(err, "update dns record")
+	}
+	if len(raw) > 0 {
+		return NormalizeDNSRecord(raw), nil
 	}
 	if in.Name != "" {
 		rec.Name = in.Name
@@ -159,7 +173,10 @@ func (s *DNSService) ApplyDelete(ctx context.Context, id string) (DNSRecord, err
 	if err != nil {
 		return DNSRecord{}, err
 	}
-	path := s.api.SitePath(client.PathRestDNSRecord, rec.ID)
+	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies", rec.ID)
+	if err != nil {
+		return DNSRecord{}, err
+	}
 	if err := s.api.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
 		return DNSRecord{}, mapDNSEndpointErr(err, "delete dns record")
 	}
@@ -238,9 +255,11 @@ func (s *DNSService) getResolver(ctx context.Context, networkQuery string) (DNSR
 }
 
 func (s *DNSService) fetchRecords(ctx context.Context) ([]map[string]any, error) {
-	// Prefer rest/dnsrecord. No silent empty success on 404.
 	var raw []map[string]any
-	path := s.api.SitePath(client.PathRestDNSRecord)
+	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies")
+	if err != nil {
+		return nil, err
+	}
 	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return nil, mapDNSEndpointErr(err, "list dns records")
 	}
@@ -251,7 +270,7 @@ func mapDNSEndpointErr(err error, op string) error {
 	if apperr.Is(err, apperr.NotFound) {
 		return apperr.WithHint(
 			apperr.Newf(apperr.NotImplemented, "dns records endpoint unavailable on this controller (%s)", op),
-			"controller returned 404 for rest/dnsrecord; upgrade controller mapping or use a firmware that exposes local DNS REST",
+			"controller returned 404 for the official DNS policies API; upgrade UniFi Network to a version that exposes DNS policies",
 		)
 	}
 	return err
@@ -259,10 +278,11 @@ func mapDNSEndpointErr(err error, op string) error {
 
 func NormalizeDNSRecord(m map[string]any) DNSRecord {
 	return DNSRecord{
-		ID:      strField(m, "_id", "id"),
-		Name:    strField(m, "key", "name", "host_name", "hostname"),
-		IP:      strField(m, "value", "ip", "content", "record_value"),
-		Enabled: boolFieldDefault(m, "enabled", true),
+		ID:         strField(m, "_id", "id"),
+		Name:       strField(m, "domain", "key", "name", "host_name", "hostname"),
+		IP:         strField(m, "ipv4Address", "value", "ip", "content", "record_value"),
+		Enabled:    boolFieldDefault(m, "enabled", true),
+		TTLSeconds: intField(m, "ttlSeconds", "ttl_seconds"),
 	}
 }
 
@@ -325,16 +345,15 @@ func dnsInputBody(in DNSInput) map[string]any {
 		enabled = true
 	}
 	body := map[string]any{
-		"enabled":     enabled,
-		"record_type": "A",
+		"enabled":    enabled,
+		"type":       "A_RECORD",
+		"ttlSeconds": defaultDNSTTLSeconds,
 	}
 	if in.Name != "" {
-		body["key"] = in.Name
-		body["name"] = in.Name
+		body["domain"] = in.Name
 	}
 	if in.IP != "" {
-		body["value"] = in.IP
-		body["ip"] = in.IP
+		body["ipv4Address"] = in.IP
 	}
 	return body
 }
@@ -352,22 +371,26 @@ func dnsInputBodyMerged(rec DNSRecord, in DNSInput) map[string]any {
 	if in.SetEnabled {
 		enabled = in.Enabled
 	}
+	ttlSeconds := rec.TTLSeconds
+	if ttlSeconds <= 0 {
+		ttlSeconds = defaultDNSTTLSeconds
+	}
 	return map[string]any{
-		"key":         name,
-		"name":        name,
-		"value":       ip,
-		"ip":          ip,
+		"type":        "A_RECORD",
+		"domain":      name,
+		"ipv4Address": ip,
 		"enabled":     enabled,
-		"record_type": "A",
+		"ttlSeconds":  ttlSeconds,
 	}
 }
 
 func dnsRecordSnapshot(r DNSRecord) map[string]any {
 	return map[string]any{
-		"id":      r.ID,
-		"name":    r.Name,
-		"ip":      r.IP,
-		"enabled": r.Enabled,
+		"id":          r.ID,
+		"name":        r.Name,
+		"ip":          r.IP,
+		"enabled":     r.Enabled,
+		"ttl_seconds": r.TTLSeconds,
 	}
 }
 

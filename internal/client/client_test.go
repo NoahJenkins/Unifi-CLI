@@ -338,3 +338,29 @@ func TestSitePath(t *testing.T) {
 		t.Fatalf("SitePath multi = %q, want %q", got, want)
 	}
 }
+
+func TestIntegrationSitePathResolvesConfiguredInternalReference(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/proxy/network/integration/v1/sites" {
+			t.Fatalf("request path = %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("limit"); got != "100" {
+			t.Fatalf("limit = %q, want 100", got)
+		}
+		_, _ = io.WriteString(w, `{"offset":0,"limit":100,"count":1,"totalCount":1,"data":[{"id":"site-uuid","internalReference":"default","name":"Default"}]}`)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	got, err := c.IntegrationSitePath(context.Background(), "dns", "policies")
+	if err != nil {
+		t.Fatalf("IntegrationSitePath: %v", err)
+	}
+	want := "/proxy/network/integration/v1/sites/site-uuid/dns/policies"
+	if got != want {
+		t.Fatalf("IntegrationSitePath = %q, want %q", got, want)
+	}
+}

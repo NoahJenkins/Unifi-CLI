@@ -89,8 +89,6 @@ func ReadOnlyCommands() []Command {
 		optionalListWithGet("dns", "dns", "id"),
 		listCommand("dns resolvers list", "dns", "resolvers list", "dns", "resolvers", "list"),
 		objectCommand("system health", "system", "health", "system", "health"),
-		listCommand("system events", "system", "events", "system", "events"),
-		listCommand("system alerts", "system", "alerts", "system", "alerts"),
 	}
 }
 

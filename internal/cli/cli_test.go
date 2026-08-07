@@ -68,6 +68,22 @@ func TestDeviceHelp(t *testing.T) {
 	}
 }
 
+func TestSystemExposesOnlySupportedHealthCommand(t *testing.T) {
+	root := cli.NewRoot()
+	system, _, err := root.Find([]string{"system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subcommands := system.Commands()
+	if len(subcommands) != 1 || subcommands[0].Name() != "health" {
+		names := make([]string, 0, len(subcommands))
+		for _, command := range subcommands {
+			names = append(names, command.Name())
+		}
+		t.Fatalf("system subcommands = %v, want only health", names)
+	}
+}
+
 func TestConfigPath(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)

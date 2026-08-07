@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -33,6 +34,14 @@ func fixtureDNSRecords(t *testing.T) []map[string]any {
 	return raw
 }
 
+func fixtureDNSPolicies() []map[string]any {
+	return []map[string]any{
+		{"id": "dns1", "type": "A_RECORD", "enabled": true, "metadata": map[string]any{"origin": "USER"}, "domain": "nas.lan", "ipv4Address": "192.168.1.50", "ttlSeconds": float64(300)},
+		{"id": "dns2", "type": "A_RECORD", "enabled": false, "metadata": map[string]any{"origin": "USER"}, "domain": "printer.lan", "ipv4Address": "192.168.1.60", "ttlSeconds": float64(300)},
+		{"id": "dns3", "type": "A_RECORD", "enabled": true, "metadata": map[string]any{"origin": "USER"}, "domain": "cam.lan", "ipv4Address": "192.168.1.70", "ttlSeconds": float64(300)},
+	}
+}
+
 func TestNormalizeDNSRecord(t *testing.T) {
 	raw := fixtureDNSRecords(t)
 	if len(raw) < 3 {
@@ -55,12 +64,19 @@ func TestNormalizeDNSRecord(t *testing.T) {
 	}
 }
 
+func TestNormalizeDNSPolicyTTL(t *testing.T) {
+	r := domain.NormalizeDNSRecord(fixtureDNSPolicies()[0])
+	if r.TTLSeconds != 300 {
+		t.Fatalf("ttl_seconds = %d, want 300", r.TTLSeconds)
+	}
+}
+
 type fakeDNSAPI struct {
-	records   []map[string]any
-	networks  []map[string]any
-	calls     []dnsCall
-	errByPath map[string]error
-	err       error
+	integrationRecords []map[string]any
+	networks           []map[string]any
+	calls              []dnsCall
+	errByPath          map[string]error
+	err                error
 }
 
 type dnsCall struct {
@@ -80,30 +96,38 @@ func (f *fakeDNSAPI) Do(ctx context.Context, method, path string, in, out any) e
 		}
 	}
 	switch {
-	case method == http.MethodGet && strings.Contains(path, "rest/dnsrecord"):
-		return decodeInto(f.records, out)
-	case method == http.MethodGet && strings.Contains(path, "rest/networkconf"):
-		return decodeInto(f.networks, out)
-	case method == http.MethodPost && strings.Contains(path, "rest/dnsrecord") && out != nil:
-		created := map[string]any{
-			"_id":     "dns-new",
-			"key":     "new.lan",
-			"value":   "10.0.0.1",
-			"enabled": true,
-		}
+	case method == http.MethodGet && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies"):
+		return decodeInto(f.integrationRecords, out)
+	case method == http.MethodPost && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies"):
+		created := map[string]any{"id": "dns-policy-new"}
 		if body, ok := in.(map[string]any); ok {
 			for k, v := range body {
 				created[k] = v
 			}
-			created["_id"] = "dns-new"
 		}
-		return decodeInto([]map[string]any{created}, out)
+		return decodeInto(created, out)
+	case method == http.MethodPut && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies/"):
+		updated := map[string]any{"id": path[strings.LastIndex(path, "/")+1:]}
+		if body, ok := in.(map[string]any); ok {
+			for k, v := range body {
+				updated[k] = v
+			}
+		}
+		return decodeInto(updated, out)
+	case method == http.MethodDelete && strings.Contains(path, "integration/v1/sites/site-uuid/dns/policies/"):
+		return nil
+	case method == http.MethodGet && strings.Contains(path, "rest/networkconf"):
+		return decodeInto(f.networks, out)
 	default:
 		if out != nil {
 			_ = json.Unmarshal([]byte(`[]`), out)
 		}
 		return nil
 	}
+}
+
+func (f *fakeDNSAPI) IntegrationSitePath(_ context.Context, parts ...string) (string, error) {
+	return "/proxy/network/integration/v1/sites/site-uuid/" + strings.Join(parts, "/"), nil
 }
 
 func (f *fakeDNSAPI) SitePath(parts ...string) string {
@@ -126,7 +150,7 @@ func decodeInto(src any, out any) error {
 }
 
 func TestDNSServiceList(t *testing.T) {
-	api := &fakeDNSAPI{records: fixtureDNSRecords(t)}
+	api := &fakeDNSAPI{integrationRecords: fixtureDNSPolicies()}
 	svc := domain.NewDNSService(api)
 	got, err := svc.List(context.Background())
 	if err != nil {
@@ -138,7 +162,7 @@ func TestDNSServiceList(t *testing.T) {
 	if api.calls[0].method != http.MethodGet {
 		t.Fatalf("method = %q", api.calls[0].method)
 	}
-	if api.calls[0].path != "/proxy/network/api/s/default/rest/dnsrecord" {
+	if api.calls[0].path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
 		t.Fatalf("path = %q", api.calls[0].path)
 	}
 	if len(got) != 3 {
@@ -149,10 +173,38 @@ func TestDNSServiceList(t *testing.T) {
 	}
 }
 
+func TestDNSServiceListUsesOfficialDNSPolicies(t *testing.T) {
+	api := &fakeDNSAPI{
+		integrationRecords: []map[string]any{{
+			"id":          "dns-policy-1",
+			"type":        "A_RECORD",
+			"enabled":     true,
+			"metadata":    map[string]any{"origin": "USER"},
+			"domain":      "router.example.test",
+			"ipv4Address": "192.0.2.1",
+			"ttlSeconds":  float64(300),
+		}},
+	}
+	svc := domain.NewDNSService(api)
+	got, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].ID != "dns-policy-1" || got[0].Name != "router.example.test" || got[0].IP != "192.0.2.1" || !got[0].Enabled || got[0].TTLSeconds != 300 {
+		t.Fatalf("record = %+v", got[0])
+	}
+	if len(api.calls) != 1 || api.calls[0].path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
+		t.Fatalf("calls = %+v", api.calls)
+	}
+}
+
 func TestDNSServiceListNotImplementedOn404(t *testing.T) {
 	api := &fakeDNSAPI{
 		errByPath: map[string]error{
-			"/proxy/network/api/s/default/rest/dnsrecord": apperr.New(apperr.NotFound, "not found"),
+			"/proxy/network/integration/v1/sites/site-uuid/dns/policies": apperr.New(apperr.NotFound, "not found"),
 		},
 	}
 	svc := domain.NewDNSService(api)
@@ -167,7 +219,7 @@ func TestDNSServiceListNotImplementedOn404(t *testing.T) {
 }
 
 func TestDNSServiceGet(t *testing.T) {
-	api := &fakeDNSAPI{records: fixtureDNSRecords(t)}
+	api := &fakeDNSAPI{integrationRecords: fixtureDNSPolicies()}
 	svc := domain.NewDNSService(api)
 
 	byID, err := svc.Get(context.Background(), "dns1")
@@ -193,7 +245,7 @@ func TestDNSServiceGet(t *testing.T) {
 }
 
 func TestDNSCreatePlanAndApply(t *testing.T) {
-	api := &fakeDNSAPI{records: fixtureDNSRecords(t)}
+	api := &fakeDNSAPI{integrationRecords: fixtureDNSPolicies()}
 	svc := domain.NewDNSService(api)
 	ctx := context.Background()
 
@@ -227,20 +279,55 @@ func TestDNSCreatePlanAndApply(t *testing.T) {
 	if last.method != http.MethodPost {
 		t.Fatalf("method = %q", last.method)
 	}
-	if last.path != "/proxy/network/api/s/default/rest/dnsrecord" {
+	if last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
 		t.Fatalf("path = %q", last.path)
 	}
 	body, _ := last.body.(map[string]any)
-	if body["key"] != "media.lan" && body["name"] != "media.lan" {
+	if body["domain"] != "media.lan" {
 		t.Fatalf("body name field: %+v", body)
 	}
-	if body["value"] != "192.168.1.80" && body["ip"] != "192.168.1.80" {
+	if body["ipv4Address"] != "192.168.1.80" {
 		t.Fatalf("body ip field: %+v", body)
 	}
 }
 
+func TestDNSCreateUsesOfficialDNSPolicyShape(t *testing.T) {
+	api := &fakeDNSAPI{}
+	svc := domain.NewDNSService(api)
+	in := domain.DNSInput{Name: "service.example.test", IP: "192.0.2.20", Enabled: false, SetEnabled: true}
+
+	got, err := svc.ApplyCreate(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "dns-policy-new" || got.Name != in.Name || got.IP != in.IP || got.Enabled || got.TTLSeconds != 300 {
+		t.Fatalf("created = %+v", got)
+	}
+	if len(api.calls) != 1 {
+		t.Fatalf("calls = %+v", api.calls)
+	}
+	call := api.calls[0]
+	if call.method != http.MethodPost || call.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
+		t.Fatalf("call = %+v", call)
+	}
+	body, ok := call.body.(map[string]any)
+	if !ok {
+		t.Fatalf("body type = %T", call.body)
+	}
+	want := map[string]any{
+		"type":        "A_RECORD",
+		"domain":      in.Name,
+		"ipv4Address": in.IP,
+		"enabled":     false,
+		"ttlSeconds":  300,
+	}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body = %#v, want %#v", body, want)
+	}
+}
+
 func TestDNSUpdatePlanAndApply(t *testing.T) {
-	api := &fakeDNSAPI{records: fixtureDNSRecords(t)}
+	api := &fakeDNSAPI{integrationRecords: fixtureDNSPolicies()}
 	svc := domain.NewDNSService(api)
 	ctx := context.Background()
 
@@ -272,13 +359,52 @@ func TestDNSUpdatePlanAndApply(t *testing.T) {
 	if last.method != http.MethodPut {
 		t.Fatalf("method = %q", last.method)
 	}
-	if last.path != "/proxy/network/api/s/default/rest/dnsrecord/dns1" {
+	if last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns1" {
 		t.Fatalf("path = %q", last.path)
 	}
 }
 
+func TestDNSUpdateUsesOfficialDNSPolicyShape(t *testing.T) {
+	api := &fakeDNSAPI{integrationRecords: []map[string]any{{
+		"id":          "dns-policy-1",
+		"type":        "A_RECORD",
+		"enabled":     false,
+		"metadata":    map[string]any{"origin": "USER"},
+		"domain":      "service.example.test",
+		"ipv4Address": "192.0.2.20",
+		"ttlSeconds":  float64(900),
+	}}}
+	svc := domain.NewDNSService(api)
+
+	got, err := svc.ApplyUpdate(context.Background(), "dns-policy-1", domain.DNSInput{IP: "192.0.2.21"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "dns-policy-1" || got.Name != "service.example.test" || got.IP != "192.0.2.21" || got.Enabled {
+		t.Fatalf("updated = %+v", got)
+	}
+	last := api.calls[len(api.calls)-1]
+	if last.method != http.MethodPut || last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns-policy-1" {
+		t.Fatalf("last call = %+v", last)
+	}
+	body, ok := last.body.(map[string]any)
+	if !ok {
+		t.Fatalf("body type = %T", last.body)
+	}
+	want := map[string]any{
+		"type":        "A_RECORD",
+		"domain":      "service.example.test",
+		"ipv4Address": "192.0.2.21",
+		"enabled":     false,
+		"ttlSeconds":  900,
+	}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body = %#v, want %#v", body, want)
+	}
+}
+
 func TestDNSDeletePlanAndApply(t *testing.T) {
-	api := &fakeDNSAPI{records: fixtureDNSRecords(t)}
+	api := &fakeDNSAPI{integrationRecords: fixtureDNSPolicies()}
 	svc := domain.NewDNSService(api)
 	ctx := context.Background()
 
@@ -304,8 +430,33 @@ func TestDNSDeletePlanAndApply(t *testing.T) {
 	if last.method != http.MethodDelete {
 		t.Fatalf("method = %q", last.method)
 	}
-	if last.path != "/proxy/network/api/s/default/rest/dnsrecord/dns1" {
+	if last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns1" {
 		t.Fatalf("path = %q", last.path)
+	}
+}
+
+func TestDNSDeleteUsesOfficialDNSPolicyPath(t *testing.T) {
+	api := &fakeDNSAPI{integrationRecords: []map[string]any{{
+		"id":          "dns-policy-1",
+		"type":        "A_RECORD",
+		"enabled":     false,
+		"metadata":    map[string]any{"origin": "USER"},
+		"domain":      "service.example.test",
+		"ipv4Address": "192.0.2.20",
+		"ttlSeconds":  float64(300),
+	}}}
+	svc := domain.NewDNSService(api)
+
+	got, err := svc.ApplyDelete(context.Background(), "dns-policy-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "dns-policy-1" || got.Name != "service.example.test" {
+		t.Fatalf("deleted = %+v", got)
+	}
+	last := api.calls[len(api.calls)-1]
+	if last.method != http.MethodDelete || last.path != "/proxy/network/integration/v1/sites/site-uuid/dns/policies/dns-policy-1" {
+		t.Fatalf("last call = %+v", last)
 	}
 }
 

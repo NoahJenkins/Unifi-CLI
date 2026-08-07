@@ -16,28 +16,31 @@ const commandTestAPIKey = "command-test-api-key-not-for-output"
 func newCommandTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	responses := map[string]string{
-		"/proxy/network/api/self/sites":                           `[{"_id":"site-1","name":"default","desc":"Primary","role":"admin"}]`,
-		"/proxy/network/api/s/default/stat/device":                `[{"_id":"dev-1","mac":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","type":"ugw","state":1,"adopted":true,"ip":"192.0.2.1","version":"1.0","port_table":[{"port_idx":1,"name":"LAN 1","media":"GE","speed":1000,"poe_mode":"off","enable":true,"portconf_id":"profile-1"}]}]`,
-		"/proxy/network/api/s/default/rest/device/dev-1":          `[{"_id":"dev-1","name":"Gateway","port_overrides":[]}]`,
-		"/proxy/network/api/s/default/stat/sta":                   `[{"_id":"client-1","mac":"aa:bb:cc:dd:ee:02","hostname":"Laptop","name":"Laptop","ip":"192.0.2.2","essid":"Main","network":"LAN","is_wired":false,"blocked":false,"last_seen":"now"}]`,
-		"/proxy/network/api/s/default/rest/networkconf":           `[{"_id":"network-1","name":"LAN","purpose":"corporate","vlan":10,"ip_subnet":"192.0.2.1/24","dhcpd_enabled":true}]`,
-		"/proxy/network/api/s/default/rest/wlanconf":              `[{"_id":"wlan-1","name":"Main","enabled":true,"security":"wpapsk","networkconf_id":"network-1","wlan_band":"both","is_guest":false}]`,
-		"/proxy/network/api/s/default/rest/firewallrule":          `[{"_id":"rule-1","name":"Allow DNS","enabled":true,"action":"accept","ruleset":"LAN_IN","src_firewallgroup_ids":[],"dst_firewallgroup_ids":[],"protocol":"udp","rule_index":1}]`,
-		"/proxy/network/api/s/default/rest/dnsrecord":             `[{"_id":"dns-1","name":"router.example.test","value":"192.0.2.1","enabled":true}]`,
-		"/proxy/network/api/s/default/stat/health":                `[{"subsystem":"www","status":"ok"}]`,
-		"/proxy/network/api/s/default/stat/event":                 `[{"_id":"event-1","datetime":"now","msg":"Connected","severity":"info"}]`,
-		"/proxy/network/api/s/default/stat/alarm":                 `[{"_id":"alert-1","datetime":"now","msg":"Attention","severity":"warning"}]`,
-		"/proxy/network/api/s/default/cmd/devmgr":                 `[]`,
-		"/proxy/network/api/s/default/cmd/stamgr":                 `[]`,
-		"/proxy/network/api/s/default/rest/networkconf/network-1": `[]`,
-		"/proxy/network/api/s/default/rest/wlanconf/wlan-1":       `[]`,
-		"/proxy/network/api/s/default/rest/firewallrule/rule-1":   `[]`,
-		"/proxy/network/api/s/default/rest/dnsrecord/dns-1":       `[]`,
+		"/proxy/network/api/self/sites":                              `[{"_id":"site-1","name":"default","desc":"Primary","role":"admin"}]`,
+		"/proxy/network/integration/v1/sites":                        `[{"id":"site-uuid","internalReference":"default","name":"Default"}]`,
+		"/proxy/network/integration/v1/sites/site-uuid/dns/policies": `[{"id":"dns-1","type":"A_RECORD","domain":"router.example.test","ipv4Address":"192.0.2.1","enabled":true,"ttlSeconds":300,"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/api/s/default/stat/device":                   `[{"_id":"dev-1","mac":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","type":"ugw","state":1,"adopted":true,"ip":"192.0.2.1","version":"1.0","port_table":[{"port_idx":1,"name":"LAN 1","media":"GE","speed":1000,"poe_mode":"off","enable":true,"portconf_id":"profile-1"}]}]`,
+		"/proxy/network/api/s/default/rest/device/dev-1":             `[{"_id":"dev-1","name":"Gateway","port_overrides":[]}]`,
+		"/proxy/network/api/s/default/stat/sta":                      `[{"_id":"client-1","mac":"aa:bb:cc:dd:ee:02","hostname":"Laptop","name":"Laptop","ip":"192.0.2.2","essid":"Main","network":"LAN","is_wired":false,"blocked":false,"last_seen":"now"}]`,
+		"/proxy/network/api/s/default/rest/networkconf":              `[{"_id":"network-1","name":"LAN","purpose":"corporate","vlan":10,"ip_subnet":"192.0.2.1/24","dhcpd_enabled":true}]`,
+		"/proxy/network/api/s/default/rest/wlanconf":                 `[{"_id":"wlan-1","name":"Main","enabled":true,"security":"wpapsk","networkconf_id":"network-1","wlan_band":"both","is_guest":false}]`,
+		"/proxy/network/api/s/default/rest/firewallrule":             `[{"_id":"rule-1","name":"Allow DNS","enabled":true,"action":"accept","ruleset":"LAN_IN","src_firewallgroup_ids":[],"dst_firewallgroup_ids":[],"protocol":"udp","rule_index":1}]`,
+		"/proxy/network/api/s/default/stat/health":                   `[{"subsystem":"www","status":"ok"}]`,
+		"/proxy/network/api/s/default/cmd/devmgr":                    `[]`,
+		"/proxy/network/api/s/default/cmd/stamgr":                    `[]`,
+		"/proxy/network/api/s/default/rest/networkconf/network-1":    `[]`,
+		"/proxy/network/api/s/default/rest/wlanconf/wlan-1":          `[]`,
+		"/proxy/network/api/s/default/rest/firewallrule/rule-1":      `[]`,
 	}
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-API-KEY"); got != commandTestAPIKey {
 			t.Errorf("X-API-KEY = %q", got)
 			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/proxy/network/integration/v1/sites/site-uuid/dns/policies" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":{"id":"dns-new","type":"A_RECORD","domain":"service.example.test","ipv4Address":"192.0.2.20","enabled":true,"ttlSeconds":300,"metadata":{"origin":"USER"}}}`)
 			return
 		}
 		data, ok := responses[r.URL.Path]
@@ -96,8 +99,6 @@ func TestResourceReadCommandsRenderHumanAndJSONOutput(t *testing.T) {
 		{name: "dns get", resource: "dns", action: "get", humanMarker: "id: dns-1", run: func() error { return runDNSGet("dns-1") }},
 		{name: "dns resolvers", resource: "dns", action: "resolvers list", humanMarker: "LAN", run: runDNSResolversList},
 		{name: "system health", resource: "system", action: "health", humanMarker: "status: ok", run: runSystemHealth},
-		{name: "system events", resource: "system", action: "events", humanMarker: "Connected", run: runSystemEvents},
-		{name: "system alerts", resource: "system", action: "alerts", humanMarker: "Attention", run: runSystemAlerts},
 	}
 
 	for _, tt := range tests {

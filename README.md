@@ -176,7 +176,7 @@ unifi device forget <id> --force --yes
 | `firewall` | `list`, `get`, `create`, `update`, `delete`, `reorder` |
 | `dns` | `list`, `get`, `create`, `update`, `delete` |
 | `dns resolvers` | `list`, `set` |
-| `system` | `health`, `events`, `alerts` |
+| `system` | `health` |
 
 ## Agent usage examples
 
@@ -240,7 +240,7 @@ inside the Ubuntu matrix job.
 
 With `UNIFI_IT=1`, it also runs the authenticated read-only suite. The suite
 checks auth status, local configuration, every implemented list command,
-system health/events/alerts, and a derived `get` for each populated resource
+system health, and a derived `get` for each populated resource
 list. Empty firewall-rule and local-DNS lists are reported as `not_configured`
 rather than failures. It never calls `login`, a mutation command, or an
 apply/raw flag.
@@ -250,6 +250,11 @@ Each live run writes a private, collision-resistant redacted report to
 fixed safe summaries, and a numeric exit code when a command process fails.
 They do not contain stdout, stderr, process errors, controller payloads,
 identifiers, arguments, or credentials.
+
+Local DNS commands use the official Network DNS Policies API available in
+recent UniFi Network releases. Network 10.4.57 is verified. Events and alerts
+are not exposed as CLI commands because that Network release provides neither
+an official API-key endpoint nor a working legacy endpoint for them.
 
 ## Security and contributions
 

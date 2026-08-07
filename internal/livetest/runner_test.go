@@ -80,6 +80,18 @@ func TestReadOnlyCommandsRejectMutationTokens(t *testing.T) {
 	}
 }
 
+func TestReadOnlyCommandsContainOnlySupportedSystemReads(t *testing.T) {
+	var names []string
+	for _, command := range livetest.ReadOnlyCommands() {
+		if command.Resource == "system" {
+			names = append(names, command.Name)
+		}
+	}
+	if !reflect.DeepEqual(names, []string{"system health"}) {
+		t.Fatalf("system read commands = %v, want only system health", names)
+	}
+}
+
 func TestValidateAcceptsMatchingListEnvelope(t *testing.T) {
 	command := livetest.Command{Name: "device list", Resource: "device", Action: "list", Shape: livetest.ArrayData}
 	raw := []byte(`{"ok":true,"resource":"device","action":"list","data":[{"id":"dev-1"}],"meta":{"count":1}}`)
