@@ -12,15 +12,22 @@ import (
 
 func AssertDir(t *testing.T, path string) {
 	t.Helper()
-	assertPrivateDACL(t, path, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+	assertPrivateDACL(t, path, true)
 }
 
 func AssertFile(t *testing.T, path string) {
 	t.Helper()
-	assertPrivateDACL(t, path, windows.NO_INHERITANCE)
+	assertPrivateDACL(t, path, false)
 }
 
-func assertPrivateDACL(t *testing.T, path string, wantInheritance uint8) {
+type accessCoverage struct {
+	effective   bool
+	inheritable bool
+}
+
+const fileAllAccess windows.ACCESS_MASK = 0x1f01ff
+
+func assertPrivateDACL(t *testing.T, path string, directory bool) {
 	t.Helper()
 	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
@@ -41,26 +48,53 @@ func assertPrivateDACL(t *testing.T, path string, wantInheritance uint8) {
 		t.Fatal("DACL missing")
 	}
 	wantSIDs := approvedSIDs(t)
-	if got, want := int(dacl.AceCount), len(wantSIDs); got != want {
-		t.Fatalf("ACE count = %d, want %d", got, want)
+	coverage := make(map[string]accessCoverage, len(wantSIDs))
+	for sid := range wantSIDs {
+		coverage[sid] = accessCoverage{}
 	}
 	for index := uint16(0); index < dacl.AceCount; index++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, uint32(index), &ace); err != nil {
 			t.Fatal(err)
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != wantInheritance || ace.Mask != windows.GENERIC_ALL {
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !isFullControl(ace.Mask) {
 			t.Fatalf("ACE %d = type:%d flags:%#x mask:%#x", index, ace.Header.AceType, ace.Header.AceFlags, ace.Mask)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
 		if _, ok := wantSIDs[sid]; !ok {
 			t.Fatalf("ACE %d grants unapproved SID %s", index, sid)
 		}
-		delete(wantSIDs, sid)
+
+		entry := coverage[sid]
+		if !directory {
+			if ace.Header.AceFlags != windows.NO_INHERITANCE {
+				t.Fatalf("file ACE %d has inheritance flags %#x", index, ace.Header.AceFlags)
+			}
+			entry.effective = true
+		} else {
+			const inheritanceMask = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+			const permittedFlags = inheritanceMask | windows.INHERIT_ONLY_ACE
+			if ace.Header.AceFlags&^permittedFlags != 0 {
+				t.Fatalf("directory ACE %d has unexpected flags %#x", index, ace.Header.AceFlags)
+			}
+			if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE == 0 {
+				entry.effective = true
+			}
+			if ace.Header.AceFlags&inheritanceMask == inheritanceMask {
+				entry.inheritable = true
+			}
+		}
+		coverage[sid] = entry
 	}
-	if len(wantSIDs) != 0 {
-		t.Fatalf("DACL missing approved SIDs: %v", wantSIDs)
+	for sid, entry := range coverage {
+		if !entry.effective || directory && !entry.inheritable {
+			t.Errorf("SID %s coverage = %+v, want effective access and directory inheritance = %t", sid, entry, directory)
+		}
 	}
+}
+
+func isFullControl(mask windows.ACCESS_MASK) bool {
+	return mask == windows.GENERIC_ALL || mask == fileAllAccess
 }
 
 func approvedSIDs(t *testing.T) map[string]struct{} {
