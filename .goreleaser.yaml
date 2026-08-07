@@ -37,12 +37,31 @@ archives:
           - zip
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    wrap_in_directory: true
     builds_info:
       mtime: "{{ .CommitDate }}"
+      mode: 0755
+      owner: root
+      group: root
     files:
-      - LICENSE
-      - README.md
-      - CHANGELOG.md
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+          owner: root
+          group: root
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+          owner: root
+          group: root
+      - src: CHANGELOG.md
+        info:
+          mtime: "{{ .CommitDate }}"
+          mode: 0644
+          owner: root
+          group: root
 
 checksum:
   name_template: checksums.txt
@@ -60,6 +79,14 @@ sboms:
     cmd: syft
     documents:
       - "{{ .ArtifactName }}.sbom.json"
+    args:
+      - $artifact
+      - --source-name
+      - "{{ .ArtifactName }}"
+      - --source-version
+      - "{{ .Version }}"
+      - --output
+      - cyclonedx-json=$document
 
 changelog:
   use: git
@@ -71,4 +98,5 @@ changelog:
       - "^chore:"
 
 release:
+  draft: true
   prerelease: auto

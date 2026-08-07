@@ -55,6 +55,12 @@ type goreleaserConfig struct {
 		IDs             []string `yaml:"ids"`
 		Formats         []string `yaml:"formats"`
 		NameTemplate    string   `yaml:"name_template"`
+		WrapInDirectory bool     `yaml:"wrap_in_directory"`
+		BuildsInfo      fileInfo `yaml:"builds_info"`
+		Files           []struct {
+			Src  string   `yaml:"src"`
+			Info fileInfo `yaml:"info"`
+		} `yaml:"files"`
 		FormatOverrides []struct {
 			Goos    string   `yaml:"goos"`
 			Formats []string `yaml:"formats"`
@@ -74,12 +80,23 @@ type goreleaserConfig struct {
 		Artifacts string   `yaml:"artifacts"`
 		Cmd       string   `yaml:"cmd"`
 		Documents []string `yaml:"documents"`
+		Args      []string `yaml:"args"`
 	} `yaml:"sboms"`
 	Changelog struct {
 		Use string `yaml:"use"`
 	} `yaml:"changelog"`
-	Brews  []any `yaml:"brews"`
-	Scoops []any `yaml:"scoops"`
+	Brews   []any `yaml:"brews"`
+	Scoops  []any `yaml:"scoops"`
+	Release struct {
+		Draft bool `yaml:"draft"`
+	} `yaml:"release"`
+}
+
+type fileInfo struct {
+	Mtime string `yaml:"mtime"`
+	Mode  uint32 `yaml:"mode"`
+	Owner string `yaml:"owner"`
+	Group string `yaml:"group"`
 }
 
 func TestGoReleaserConfigEnforcesReleaseContract(t *testing.T) {
@@ -135,6 +152,23 @@ func TestGoReleaserConfigEnforcesReleaseContract(t *testing.T) {
 		!slices.Equal(archive.FormatOverrides[0].Formats, []string{"zip"}) {
 		t.Errorf("Windows archive override = %#v, want zip only", archive.FormatOverrides)
 	}
+	if !archive.WrapInDirectory {
+		t.Error("release archives must have one deterministic root directory")
+	}
+	wantBinaryInfo := fileInfo{Mtime: "{{ .CommitDate }}", Mode: 0o755, Owner: "root", Group: "root"}
+	if archive.BuildsInfo != wantBinaryInfo {
+		t.Errorf("binary archive metadata = %#v, want %#v", archive.BuildsInfo, wantBinaryInfo)
+	}
+	wantFiles := []string{"LICENSE", "README.md", "CHANGELOG.md"}
+	if len(archive.Files) != len(wantFiles) {
+		t.Fatalf("archive files = %#v, want %v", archive.Files, wantFiles)
+	}
+	wantFileInfo := fileInfo{Mtime: "{{ .CommitDate }}", Mode: 0o644, Owner: "root", Group: "root"}
+	for i, want := range wantFiles {
+		if archive.Files[i].Src != want || archive.Files[i].Info != wantFileInfo {
+			t.Errorf("archive file %d = %#v, want src=%q info=%#v", i, archive.Files[i], want, wantFileInfo)
+		}
+	}
 	if cfg.Checksum.Algorithm != "sha256" || cfg.Checksum.NameTemplate != "checksums.txt" {
 		t.Errorf("checksum config = %#v, want explicit SHA-256 checksums.txt", cfg.Checksum)
 	}
@@ -144,11 +178,22 @@ func TestGoReleaserConfigEnforcesReleaseContract(t *testing.T) {
 	if len(cfg.SBOMs) != 1 || cfg.SBOMs[0].Artifacts != "archive" || cfg.SBOMs[0].Cmd != "syft" || len(cfg.SBOMs[0].Documents) != 1 {
 		t.Errorf("archive SBOM config = %#v, want one Syft archive SBOM document", cfg.SBOMs)
 	}
+	if len(cfg.SBOMs) == 1 {
+		args := strings.Join(cfg.SBOMs[0].Args, " ")
+		for _, want := range []string{"$artifact", "--source-name", "{{ .ArtifactName }}", "--source-version", "{{ .Version }}", "cyclonedx-json=$document"} {
+			if !strings.Contains(args, want) {
+				t.Errorf("SBOM args missing %q: %v", want, cfg.SBOMs[0].Args)
+			}
+		}
+	}
 	if cfg.Changelog.Use != "git" {
 		t.Errorf("changelog source = %q, want git", cfg.Changelog.Use)
 	}
 	if len(cfg.Brews) != 0 || len(cfg.Scoops) != 0 {
 		t.Errorf("Homebrew/Scoop publication is out of scope: brews=%d scoops=%d", len(cfg.Brews), len(cfg.Scoops))
+	}
+	if !cfg.Release.Draft {
+		t.Error("GoReleaser must upload a draft release so failed gates cannot publish it")
 	}
 }
 
@@ -195,18 +240,41 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		"version: v2.17.1",
-		"args: release --clean",
+		"args: release --clean --release-notes docs/releases/v1.0.0-rc.1.md",
 		"fetch-depth: 0",
 		"persist-credentials: false",
 		"subject-path: |",
 		"dist/*.tar.gz",
 		"dist/*.zip",
 		"dist/checksums.txt",
-		"go run ./cmd/release-smoke --artifacts dist",
+		"go run ./cmd/release-smoke --artifacts dist --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\"",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("release workflow missing %q", want)
 		}
+	}
+
+	steps := releaseSteps(t, workflow)
+	build := stepIndex(t, steps, "Build and upload draft release artifacts")
+	verify := stepIndex(t, steps, "Verify draft artifact set")
+	attest := stepIndex(t, steps, "Attest release provenance")
+	publish := stepIndex(t, steps, "Publish verified release")
+	if !(build < verify && verify < attest && attest < publish) {
+		t.Errorf("unsafe release ordering: build=%d verify=%d attest=%d publish=%d", build, verify, attest, publish)
+	}
+	if publish != len(steps)-1 {
+		t.Errorf("publish step index = %d, want final step %d", publish, len(steps)-1)
+	}
+	publishStep := steps[publish].(map[string]any)
+	if fmt.Sprint(publishStep["if"]) != "${{ success() }}" {
+		t.Errorf("publish condition = %q, want success()", publishStep["if"])
+	}
+	if run := fmt.Sprint(publishStep["run"]); run != `gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"` {
+		t.Errorf("publish command = %q", run)
+	}
+	env := mapValue(t, publishStep, "env")
+	if fmt.Sprint(env["GH_TOKEN"]) != "${{ secrets.GITHUB_TOKEN }}" {
+		t.Errorf("publish GH_TOKEN = %q", env["GH_TOKEN"])
 	}
 }
 
@@ -279,6 +347,29 @@ func allUses(value any) []string {
 		}
 	}
 	return result
+}
+
+func releaseSteps(t *testing.T, workflow map[string]any) []any {
+	t.Helper()
+	jobs := mapValue(t, workflow, "jobs")
+	release := mapValue(t, jobs, "release")
+	steps, ok := release["steps"].([]any)
+	if !ok {
+		t.Fatalf("release steps = %#v, want list", release["steps"])
+	}
+	return steps
+}
+
+func stepIndex(t *testing.T, steps []any, name string) int {
+	t.Helper()
+	for i, raw := range steps {
+		step, ok := raw.(map[string]any)
+		if ok && fmt.Sprint(step["name"]) == name {
+			return i
+		}
+	}
+	t.Fatalf("release workflow missing step %q", name)
+	return -1
 }
 
 func assertStringSet(t *testing.T, label string, got, want []string) {

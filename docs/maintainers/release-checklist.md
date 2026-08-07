@@ -27,11 +27,18 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
 - [ ] Rebase and ensure hosted CI passes on the unchanged candidate commit.
 - [ ] Run GoReleaser 2.17.1 checks and smoke every generated platform artifact.
-- [ ] In the tag workflow, confirm `go run ./cmd/release-smoke --artifacts dist`
-      verifies all six archives, their SHA-256 entries, per-archive SBOMs,
-      embedded build settings, and the native Linux executable before
-      provenance attestation. The macOS and Windows CI runners separately run
-      the same four-command native executable contract before release.
+- [ ] In the tag workflow, confirm
+      `go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA"`
+      verifies the source archive, all six exact archive names and layouts,
+      their exhaustive SHA-256 entries, bound CycloneDX SBOMs, embedded build
+      settings, and the native Linux executable before provenance attestation.
+      The macOS and Windows CI runners separately run the same four-command
+      native executable contract before release.
+- [ ] Confirm GoReleaser creates and uploads only a draft release using
+      `docs/releases/v1.0.0-rc.1.md`, artifact verification completes before
+      provenance attestation, and the exact tag is published only by the final
+      successful `gh release edit` step. A failed verification or attestation
+      must leave the release as a draft.
 - [ ] Verify SHA-256 checksums, SBOMs, source archive, and provenance.
 - [ ] Run the authenticated read-only live suite with verified TLS.
 - [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
@@ -46,6 +53,8 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
 - [ ] Merge the reviewed PR after hosted checks.
 - [ ] Tag the unchanged merge commit `v1.0.0-rc.1`; do not create `v1.0.0`.
+      Confirm the workflow publishes that exact verified draft and no other
+      release.
 - [ ] Verify downloaded release artifacts and
       `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.1`.
 - [ ] Update compatibility/release notes only with evidence actually produced.

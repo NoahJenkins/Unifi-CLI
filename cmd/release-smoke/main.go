@@ -16,7 +16,9 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	archivepath "path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -38,6 +40,8 @@ var targets = []target{
 	{goos: "windows", goarch: "arm64"},
 }
 
+var releaseVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+
 type target struct {
 	goos   string
 	goarch string
@@ -57,10 +61,14 @@ func main() {
 	var all bool
 	var native bool
 	var artifacts string
+	var expectedVersion string
+	var expectedCommit string
 	flag.BoolVar(&describe, "describe", false, "print the target and smoke-command contract")
 	flag.BoolVar(&all, "all", false, "cross-build and structurally verify all release targets")
 	flag.BoolVar(&native, "native", false, "build and execute the current native release target")
 	flag.StringVar(&artifacts, "artifacts", "", "verify an existing GoReleaser dist directory")
+	flag.StringVar(&expectedVersion, "expected-version", "", "exact release version without a leading v")
+	flag.StringVar(&expectedCommit, "expected-commit", "", "exact release commit")
 	flag.Parse()
 
 	selected := 0
@@ -73,6 +81,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, or --artifacts DIR")
 		os.Exit(2)
 	}
+	if artifacts != "" && (expectedVersion == "" || expectedCommit == "") {
+		fmt.Fprintln(os.Stderr, "--artifacts requires --expected-version and --expected-commit")
+		os.Exit(2)
+	}
 
 	if describe {
 		describeContract(os.Stdout)
@@ -83,7 +95,7 @@ func main() {
 	defer cancel()
 	var err error
 	if artifacts != "" {
-		err = verifyArtifacts(ctx, artifacts)
+		err = verifyArtifacts(ctx, artifacts, expectedVersion, expectedCommit)
 	} else {
 		err = buildAndVerify(ctx, all)
 	}
@@ -263,7 +275,7 @@ func verifyNativeCommands(ctx context.Context, root, path, version, commit, buil
 func run(ctx context.Context, dir, path string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
-	cmd.Env = replaceEnv(os.Environ(), map[string]string{"UNIFI_API_KEY": ""})
+	cmd.Env = sanitizedCommandEnv(os.Environ())
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("run %s %s: %w\n%s", path, strings.Join(args, " "), err, output)
@@ -282,13 +294,16 @@ type artifact struct {
 	} `json:"extra"`
 }
 
-func verifyArtifacts(ctx context.Context, dist string) error {
+func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit string) error {
 	root, err := repositoryRoot()
 	if err != nil {
 		return err
 	}
-	dist, err = filepath.Abs(dist)
+	dist, err = canonicalDist(dist)
 	if err != nil {
+		return err
+	}
+	if err := validateExpectedMetadata(expectedVersion, expectedCommit); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(filepath.Join(dist, "artifacts.json"))
@@ -301,60 +316,117 @@ func verifyArtifacts(ctx context.Context, dist string) error {
 	}
 
 	archives := make(map[target]artifact)
+	sboms := make(map[target]artifact)
 	var sources []artifact
-	for _, artifact := range artifacts {
-		switch artifact.Type {
+	var checksumArtifacts []artifact
+	for _, current := range artifacts {
+		resolved, err := resolveArtifactPath(dist, current.Path)
+		if err != nil {
+			return fmt.Errorf("artifact %q: %w", current.Name, err)
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			return fmt.Errorf("artifact %q: %w", current.Name, err)
+		}
+		switch current.Type {
 		case "Archive":
-			t := target{goos: artifact.Goos, goarch: artifact.Goarch}
+			t := target{goos: current.Goos, goarch: current.Goarch}
 			if _, exists := archives[t]; exists {
 				return fmt.Errorf("duplicate archive for %s", t)
 			}
-			archives[t] = artifact
+			archives[t] = current
 		case "Source":
-			sources = append(sources, artifact)
+			sources = append(sources, current)
+		case "SBOM":
+			t := target{goos: current.Goos, goarch: current.Goarch}
+			if _, exists := sboms[t]; exists {
+				return fmt.Errorf("duplicate SBOM for %s", t)
+			}
+			sboms[t] = current
+		case "Checksum":
+			checksumArtifacts = append(checksumArtifacts, current)
+		case "Binary":
+			// GoReleaser records intermediate binaries. Their target structure is
+			// verified through the corresponding release archive below.
+		default:
+			return fmt.Errorf("unexpected artifact record type %q for %q", current.Type, current.Name)
 		}
 	}
 	if len(archives) != len(targets) {
 		return fmt.Errorf("archive target count = %d, want %d", len(archives), len(targets))
 	}
-	if len(sources) != 1 || !strings.HasSuffix(sources[0].Name, ".tar.gz") {
-		return fmt.Errorf("source artifacts = %#v, want one tar.gz", sources)
+	wantSourceName := fmt.Sprintf("unifi-cli_%s_source.tar.gz", expectedVersion)
+	if len(sources) != 1 || sources[0].Name != wantSourceName {
+		return fmt.Errorf("source artifacts = %#v, want exactly %q", sources, wantSourceName)
 	}
-	if _, err := os.Stat(resolveArtifactPath(root, dist, sources[0].Path)); err != nil {
+	if len(sboms) != len(targets) {
+		return fmt.Errorf("SBOM target count = %d, want %d", len(sboms), len(targets))
+	}
+	if len(checksumArtifacts) != 1 || checksumArtifacts[0].Name != "checksums.txt" {
+		return fmt.Errorf("checksum artifacts = %#v, want checksums.txt", checksumArtifacts)
+	}
+	sourcePath, err := resolveNamedArtifact(dist, sources[0])
+	if err != nil {
+		return fmt.Errorf("source archive: %w", err)
+	}
+	if err := inspectSourceArchive(sourcePath, fmt.Sprintf("unifi-cli_%s", expectedVersion)); err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
 
-	checksums, err := readChecksums(filepath.Join(dist, "checksums.txt"))
+	checksumsPath, err := resolveNamedArtifact(dist, checksumArtifacts[0])
+	if err != nil {
+		return fmt.Errorf("checksums: %w", err)
+	}
+	checksums, err := readChecksums(checksumsPath)
 	if err != nil {
 		return err
 	}
-	sourcePath := resolveArtifactPath(root, dist, sources[0].Path)
+	wantChecksums := map[string]struct{}{wantSourceName: {}}
+	for _, target := range targets {
+		wantChecksums[expectedArchiveName(expectedVersion, target)] = struct{}{}
+	}
+	if err := requireExactNames(checksums, wantChecksums, "checksum manifest"); err != nil {
+		return err
+	}
 	if err := verifyChecksum(sourcePath, checksums[sources[0].Name]); err != nil {
 		return fmt.Errorf("source archive: %w", err)
 	}
 	for _, target := range targets {
-		artifact, ok := archives[target]
+		current, ok := archives[target]
 		if !ok {
 			return fmt.Errorf("missing archive for %s", target)
 		}
 		wantFormat := "tar.gz"
-		wantSuffix := ".tar.gz"
 		if target.goos == "windows" {
 			wantFormat = "zip"
-			wantSuffix = ".zip"
 		}
-		if artifact.Extra.Format != wantFormat || !strings.HasSuffix(artifact.Name, wantSuffix) {
-			return fmt.Errorf("%s archive format/name = %q/%q", target, artifact.Extra.Format, artifact.Name)
+		wantName := expectedArchiveName(expectedVersion, target)
+		if current.Extra.Format != wantFormat || current.Name != wantName {
+			return fmt.Errorf("%s archive format/name = %q/%q, want %q/%q", target, current.Extra.Format, current.Name, wantFormat, wantName)
 		}
-		archivePath := resolveArtifactPath(root, dist, artifact.Path)
-		if err := verifyChecksum(archivePath, checksums[artifact.Name]); err != nil {
+		archivePath, err := resolveNamedArtifact(dist, current)
+		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
-		sbomPath := archivePath + ".sbom.json"
-		if info, err := os.Stat(sbomPath); err != nil || info.Size() == 0 {
-			return fmt.Errorf("%s archive SBOM missing or empty: %s", target, sbomPath)
+		if err := verifyChecksum(archivePath, checksums[current.Name]); err != nil {
+			return fmt.Errorf("%s: %w", target, err)
 		}
-		extracted, cleanup, err := extractExecutable(archivePath, target.executableName())
+		sbom, ok := sboms[target]
+		if !ok {
+			return fmt.Errorf("missing archive SBOM for %s", target)
+		}
+		wantSBOMName := wantName + ".sbom.json"
+		if sbom.Name != wantSBOMName {
+			return fmt.Errorf("%s SBOM name = %q, want %q", target, sbom.Name, wantSBOMName)
+		}
+		sbomPath, err := resolveNamedArtifact(dist, sbom)
+		if err != nil {
+			return fmt.Errorf("%s SBOM: %w", target, err)
+		}
+		if err := inspectCycloneDXSBOM(sbomPath, wantName, expectedVersion); err != nil {
+			return fmt.Errorf("%s SBOM: %w", target, err)
+		}
+		expectedRoot := strings.TrimSuffix(strings.TrimSuffix(wantName, ".tar.gz"), ".zip")
+		extracted, cleanup, err := inspectReleaseArchive(archivePath, target, expectedRoot)
 		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
@@ -363,7 +435,7 @@ func verifyArtifacts(ctx context.Context, dist string) error {
 			return err
 		}
 		if target.goos == runtime.GOOS && target.goarch == runtime.GOARCH {
-			if err := verifyNativeCommands(ctx, root, extracted, versionFromTag(), os.Getenv("GITHUB_SHA"), ""); err != nil {
+			if err := verifyNativeCommands(ctx, root, extracted, expectedVersion, expectedCommit, ""); err != nil {
 				cleanup()
 				return err
 			}
@@ -376,12 +448,72 @@ func verifyArtifacts(ctx context.Context, dist string) error {
 	return nil
 }
 
-func versionFromTag() string {
-	tag := strings.TrimPrefix(os.Getenv("GITHUB_REF_NAME"), "v")
-	if tag == "" {
-		return smokeVersion
+func validateExpectedMetadata(version, commit string) error {
+	if !releaseVersionPattern.MatchString(version) || strings.HasPrefix(version, "v") || strings.ContainsAny(version, "/\\") || archivepath.Clean(version) != version {
+		return fmt.Errorf("invalid expected version %q", version)
 	}
-	return tag
+	if len(commit) != 40 {
+		return fmt.Errorf("invalid expected commit %q", commit)
+	}
+	if _, err := hex.DecodeString(commit); err != nil {
+		return fmt.Errorf("invalid expected commit %q", commit)
+	}
+	return nil
+}
+
+func canonicalDist(dist string) (string, error) {
+	abs, err := filepath.Abs(dist)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve dist: %w", err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("dist is not a directory")
+	}
+	return resolved, nil
+}
+
+func expectedArchiveName(version string, target target) string {
+	extension := ".tar.gz"
+	if target.goos == "windows" {
+		extension = ".zip"
+	}
+	return fmt.Sprintf("unifi-cli_%s_%s_%s%s", version, target.goos, target.goarch, extension)
+}
+
+func resolveNamedArtifact(dist string, current artifact) (string, error) {
+	resolved, err := resolveArtifactPath(dist, current.Path)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Base(resolved) != current.Name {
+		return "", fmt.Errorf("artifact name %q does not match path %q", current.Name, current.Path)
+	}
+	return resolved, nil
+}
+
+func requireExactNames(got map[string]string, want map[string]struct{}, label string) error {
+	if len(got) != len(want) {
+		return fmt.Errorf("%s has %d entries, want %d", label, len(got), len(want))
+	}
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			return fmt.Errorf("%s contains unexpected entry %q", label, name)
+		}
+	}
+	for name := range want {
+		if _, ok := got[name]; !ok {
+			return fmt.Errorf("%s is missing entry %q", label, name)
+		}
+	}
+	return nil
 }
 
 func populatedOrEqual(got, want string) bool {
@@ -389,6 +521,17 @@ func populatedOrEqual(got, want string) bool {
 		return got == want
 	}
 	return got != "" && got != "unknown" && got != "dev"
+}
+
+func sanitizedCommandEnv(environ []string) []string {
+	result := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.HasPrefix(key, "UNIFI_") {
+			result = append(result, entry)
+		}
+	}
+	return result
 }
 
 func readChecksums(path string) (map[string]string, error) {
@@ -402,7 +545,20 @@ func readChecksums(path string) (map[string]string, error) {
 		if len(fields) != 2 || len(fields[0]) != sha256.Size*2 {
 			return nil, fmt.Errorf("malformed SHA-256 checksum line %q", strings.TrimSpace(line))
 		}
-		result[strings.TrimPrefix(fields[1], "*")] = fields[0]
+		name := strings.TrimPrefix(fields[1], "*")
+		if name == "" || filepath.Base(name) != name || filepath.IsAbs(name) || strings.ContainsAny(name, "/\\") {
+			return nil, fmt.Errorf("unsafe checksum artifact name %q", name)
+		}
+		if _, err := hex.DecodeString(fields[0]); err != nil {
+			return nil, fmt.Errorf("malformed SHA-256 checksum %q", fields[0])
+		}
+		if _, exists := result[name]; exists {
+			return nil, fmt.Errorf("duplicate checksum entry %q", name)
+		}
+		result[name] = strings.ToLower(fields[0])
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("checksum manifest is empty")
 	}
 	return result, nil
 }
@@ -427,17 +583,17 @@ func verifyChecksum(path, want string) error {
 	return nil
 }
 
-func extractExecutable(archivePath, executable string) (string, func(), error) {
+func inspectReleaseArchive(archivePath string, target target, expectedRoot string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "unifi-release-artifact-")
 	if err != nil {
 		return "", func() {}, err
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	destination := filepath.Join(dir, executable)
+	destination := filepath.Join(dir, target.executableName())
 	if strings.HasSuffix(archivePath, ".zip") {
-		err = extractZipFile(archivePath, executable, destination)
+		err = inspectZipArchive(archivePath, target, expectedRoot, destination)
 	} else {
-		err = extractTarFile(archivePath, executable, destination)
+		err = inspectTarArchive(archivePath, target, expectedRoot, destination)
 	}
 	if err != nil {
 		cleanup()
@@ -446,28 +602,57 @@ func extractExecutable(archivePath, executable string) (string, func(), error) {
 	return destination, cleanup, nil
 }
 
-func extractZipFile(archivePath, executable, destination string) error {
+func inspectZipArchive(archivePath string, target target, expectedRoot, destination string) error {
 	archive, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
+	want := expectedArchiveEntries(expectedRoot, target)
+	seenPaths := make(map[string]struct{})
+	seenNames := make(map[string]struct{})
 	for _, file := range archive.File {
-		if filepath.Base(file.Name) != executable {
+		clean, isDir, err := validateArchiveEntry(file.Name, expectedRoot, file.FileInfo().IsDir())
+		if err != nil {
+			return err
+		}
+		if !isDir && !file.Mode().IsRegular() {
+			return fmt.Errorf("archive entry %q has unsupported mode %s", file.Name, file.Mode())
+		}
+		if err := recordArchiveEntry(clean, isDir, seenPaths, seenNames); err != nil {
+			return err
+		}
+		if isDir {
+			continue
+		}
+		if _, ok := want[clean]; !ok {
+			return fmt.Errorf("unexpected archive entry %q", clean)
+		}
+		mode := file.Mode().Perm()
+		wantMode := expectedArchiveMode(clean, expectedRoot, target)
+		if mode != wantMode {
+			return fmt.Errorf("archive entry %q mode = %04o, want %04o", clean, mode, wantMode)
+		}
+		if clean != expectedRoot+"/"+target.executableName() {
 			continue
 		}
 		reader, err := file.Open()
 		if err != nil {
 			return err
 		}
-		err = writeExtracted(destination, reader, file.Mode())
-		reader.Close()
-		return err
+		err = writeExtracted(destination, reader, mode)
+		closeErr := reader.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 	}
-	return fs.ErrNotExist
+	return requireArchiveEntries(seenPaths, want, destination, expectedRoot)
 }
 
-func extractTarFile(archivePath, executable, destination string) error {
+func inspectTarArchive(archivePath string, target target, expectedRoot, destination string) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -479,22 +664,50 @@ func extractTarFile(archivePath, executable, destination string) error {
 	}
 	defer gzipReader.Close()
 	reader := tar.NewReader(gzipReader)
+	want := expectedArchiveEntries(expectedRoot, target)
+	seenPaths := make(map[string]struct{})
+	seenNames := make(map[string]struct{})
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			return fs.ErrNotExist
+			break
 		}
 		if err != nil {
 			return err
 		}
-		if filepath.Base(header.Name) == executable && header.Typeflag == tar.TypeReg {
-			return writeExtracted(destination, reader, fs.FileMode(header.Mode))
+		isDir := header.Typeflag == tar.TypeDir
+		if header.Typeflag != tar.TypeReg && !isDir {
+			return fmt.Errorf("archive entry %q has unsupported type %d", header.Name, header.Typeflag)
+		}
+		clean, isDir, err := validateArchiveEntry(header.Name, expectedRoot, isDir)
+		if err != nil {
+			return err
+		}
+		if err := recordArchiveEntry(clean, isDir, seenPaths, seenNames); err != nil {
+			return err
+		}
+		if isDir {
+			continue
+		}
+		if _, ok := want[clean]; !ok {
+			return fmt.Errorf("unexpected archive entry %q", clean)
+		}
+		mode := fs.FileMode(header.Mode).Perm()
+		wantMode := expectedArchiveMode(clean, expectedRoot, target)
+		if mode != wantMode {
+			return fmt.Errorf("archive entry %q mode = %04o, want %04o", clean, mode, wantMode)
+		}
+		if clean == expectedRoot+"/"+target.executableName() {
+			if err := writeExtracted(destination, reader, mode); err != nil {
+				return err
+			}
 		}
 	}
+	return requireArchiveEntries(seenPaths, want, destination, expectedRoot)
 }
 
 func writeExtracted(path string, reader io.Reader, mode fs.FileMode) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, mode|0o700)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -502,17 +715,233 @@ func writeExtracted(path string, reader io.Reader, mode fs.FileMode) error {
 		file.Close()
 		return err
 	}
-	return file.Close()
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
-func resolveArtifactPath(root, dist, path string) string {
-	if filepath.IsAbs(path) {
-		return path
+func expectedArchiveEntries(root string, target target) map[string]struct{} {
+	return map[string]struct{}{
+		root + "/" + target.executableName(): {},
+		root + "/LICENSE":                    {},
+		root + "/README.md":                  {},
+		root + "/CHANGELOG.md":               {},
 	}
-	if strings.HasPrefix(filepath.Clean(path), "dist"+string(filepath.Separator)) {
-		return filepath.Join(root, path)
+}
+
+func expectedArchiveMode(name, root string, target target) fs.FileMode {
+	if name == root+"/"+target.executableName() {
+		return 0o755
 	}
-	return filepath.Join(dist, path)
+	return 0o644
+}
+
+func validateArchiveEntry(name, expectedRoot string, directory bool) (string, bool, error) {
+	if name == "" || strings.Contains(name, "\\") || archivepath.IsAbs(name) {
+		return "", false, fmt.Errorf("unsafe archive entry %q", name)
+	}
+	trimmed := strings.TrimSuffix(name, "/")
+	clean := archivepath.Clean(trimmed)
+	if clean != trimmed || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false, fmt.Errorf("unsafe archive entry %q", name)
+	}
+	if clean != expectedRoot && !strings.HasPrefix(clean, expectedRoot+"/") {
+		return "", false, fmt.Errorf("archive entry %q is outside root %q", name, expectedRoot)
+	}
+	if directory && clean != expectedRoot {
+		return "", false, fmt.Errorf("unexpected archive directory %q", name)
+	}
+	return clean, directory, nil
+}
+
+func recordArchiveEntry(name string, directory bool, paths, basenames map[string]struct{}) error {
+	if _, exists := paths[name]; exists {
+		return fmt.Errorf("duplicate archive path %q", name)
+	}
+	paths[name] = struct{}{}
+	if directory {
+		return nil
+	}
+	base := archivepath.Base(name)
+	if _, exists := basenames[base]; exists {
+		return fmt.Errorf("duplicate archive basename %q", base)
+	}
+	basenames[base] = struct{}{}
+	return nil
+}
+
+func requireArchiveEntries(got, want map[string]struct{}, executable, expectedRoot string) error {
+	fileCount := len(got)
+	if _, hasRootDirectory := got[expectedRoot]; hasRootDirectory {
+		fileCount--
+	}
+	if fileCount != len(want) {
+		return fmt.Errorf("archive has %d files, want %d", fileCount, len(want))
+	}
+	for name := range want {
+		if _, ok := got[name]; !ok {
+			return fmt.Errorf("archive is missing %q", name)
+		}
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		return fmt.Errorf("archive executable: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("archive executable is empty")
+	}
+	return nil
+}
+
+func resolveArtifactPath(dist, artifactPath string) (string, error) {
+	if artifactPath == "" || filepath.IsAbs(artifactPath) || archivepath.IsAbs(artifactPath) || strings.Contains(artifactPath, "\\") {
+		return "", fmt.Errorf("unsafe artifact path %q", artifactPath)
+	}
+	clean := archivepath.Clean(artifactPath)
+	if clean != artifactPath || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("unsafe artifact path %q", artifactPath)
+	}
+	parts := strings.Split(clean, "/")
+	if len(parts) > 1 && parts[0] == "dist" {
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("unsafe artifact path %q", artifactPath)
+	}
+	candidate := filepath.Join(append([]string{dist}, parts...)...)
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(dist, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("artifact path %q resolves outside dist", artifactPath)
+	}
+	return resolved, nil
+}
+
+func inspectSourceArchive(archivePath, expectedRoot string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("open gzip: %w", err)
+	}
+	defer gzipReader.Close()
+	reader := tar.NewReader(gzipReader)
+	seen := make(map[string]struct{})
+	core := map[string]bool{
+		expectedRoot + "/LICENSE":      false,
+		expectedRoot + "/README.md":    false,
+		expectedRoot + "/CHANGELOG.md": false,
+		expectedRoot + "/go.mod":       false,
+	}
+	regularFiles := 0
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+		isDir := header.Typeflag == tar.TypeDir
+		if header.Typeflag != tar.TypeReg && !isDir {
+			return fmt.Errorf("source entry %q has unsupported type %d", header.Name, header.Typeflag)
+		}
+		clean, _, err := validateSourceEntry(header.Name, expectedRoot, isDir)
+		if err != nil {
+			return err
+		}
+		if _, exists := seen[clean]; exists {
+			return fmt.Errorf("duplicate source path %q", clean)
+		}
+		seen[clean] = struct{}{}
+		if isDir {
+			continue
+		}
+		regularFiles++
+		if _, ok := core[clean]; ok {
+			if header.Size == 0 {
+				return fmt.Errorf("source core file %q is empty", clean)
+			}
+			core[clean] = true
+		}
+	}
+	if regularFiles == 0 {
+		return fmt.Errorf("source archive has no files")
+	}
+	for name, present := range core {
+		if !present {
+			return fmt.Errorf("source archive is missing %q", name)
+		}
+	}
+	return nil
+}
+
+func validateSourceEntry(name, expectedRoot string, directory bool) (string, bool, error) {
+	if name == "" || strings.Contains(name, "\\") || archivepath.IsAbs(name) {
+		return "", false, fmt.Errorf("unsafe source entry %q", name)
+	}
+	trimmed := strings.TrimSuffix(name, "/")
+	clean := archivepath.Clean(trimmed)
+	if clean != trimmed || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false, fmt.Errorf("unsafe source entry %q", name)
+	}
+	if clean != expectedRoot && !strings.HasPrefix(clean, expectedRoot+"/") {
+		return "", false, fmt.Errorf("source entry %q is outside root %q", name, expectedRoot)
+	}
+	return clean, directory, nil
+}
+
+func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string) error {
+	file, err := os.Open(sbomPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	var bom struct {
+		BOMFormat   string `json:"bomFormat"`
+		SpecVersion string `json:"specVersion"`
+		Version     int    `json:"version"`
+		Metadata    struct {
+			Component struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"component"`
+		} `json:"metadata"`
+		Components []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"components"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, 32<<20))
+	if err := decoder.Decode(&bom); err != nil {
+		return fmt.Errorf("decode CycloneDX JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("CycloneDX JSON has trailing content")
+	}
+	if bom.BOMFormat != "CycloneDX" || bom.SpecVersion != "1.6" || bom.Version < 1 {
+		return fmt.Errorf("invalid CycloneDX identity: format=%q spec=%q version=%d", bom.BOMFormat, bom.SpecVersion, bom.Version)
+	}
+	if bom.Metadata.Component.Name != archiveName || bom.Metadata.Component.Version != expectedVersion {
+		return fmt.Errorf("SBOM source = %q@%q, want %q@%q", bom.Metadata.Component.Name, bom.Metadata.Component.Version, archiveName, expectedVersion)
+	}
+	if len(bom.Components) == 0 {
+		return fmt.Errorf("SBOM components are empty")
+	}
+	for i, component := range bom.Components {
+		if component.Name == "" || component.Version == "" {
+			return fmt.Errorf("SBOM component %d has empty name or version", i)
+		}
+	}
+	return nil
 }
 
 func repositoryRoot() (string, error) {

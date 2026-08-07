@@ -33,17 +33,18 @@ jobs:
         with:
           syft-version: v1.48.0
 
-      - name: Build and publish release artifacts
+      - name: Build and upload draft release artifacts
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           distribution: goreleaser
           version: v2.17.1
-          args: release --clean
+          args: release --clean --release-notes docs/releases/v1.0.0-rc.1.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify published artifact set
-        run: go run ./cmd/release-smoke --artifacts dist
+      - name: Verify draft artifact set
+        shell: bash
+        run: go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA"
 
       - name: Attest release provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
@@ -53,3 +54,9 @@ jobs:
             dist/*.zip
             dist/*.sbom.json
             dist/checksums.txt
+
+      - name: Publish verified release
+        if: ${{ success() }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
