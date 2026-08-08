@@ -62,15 +62,15 @@ func TestPublishReleaseUsesReleaseIDForDraftOperations(t *testing.T) {
 	}
 	for _, want := range []string{
 		"repos/owner/repo/releases?per_page=100",
-		"repos/owner/repo/releases/42/assets?name=asset.bin",
-		"repos/owner/repo/releases/42/assets?name=checksums.txt",
+		"https://uploads.github.com/repos/owner/repo/releases/42/assets?name=asset.bin",
+		"https://uploads.github.com/repos/owner/repo/releases/42/assets?name=checksums.txt",
 		"--method PATCH repos/owner/repo/releases/42",
 	} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("release publisher did not use the draft release ID for %q; calls:\n%s", want, calls)
 		}
 	}
-	for _, forbidden := range []string{"release upload ", "release edit "} {
+	for _, forbidden := range []string{"release upload ", "release edit ", "--hostname uploads.github.com"} {
 		if strings.Contains(calls, forbidden) {
 			t.Fatalf("draft operation used the tag lookup path %q; calls:\n%s", forbidden, calls)
 		}
