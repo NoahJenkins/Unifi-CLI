@@ -113,6 +113,21 @@ func TestExtractBundleRejectsSymlinkedBundleFile(t *testing.T) {
 	}
 }
 
+func TestExtractBundleRemovesDestinationAfterFailure(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "generated.tar")
+	writeTestBundle(t, bundle, []tar.Header{
+		{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "dist/../escape", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+	}, [][]byte{nil, []byte("x")})
+	destination := filepath.Join(t.TempDir(), "generated")
+	if err := extractBundle(bundle, destination, "generated"); err == nil {
+		t.Fatal("unsafe bundle unexpectedly extracted")
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("failed extraction destination status = %v", err)
+	}
+}
+
 func TestCreateBundleFileCannotEscapeThroughDestinationSymlink(t *testing.T) {
 	destination := t.TempDir()
 	outside := t.TempDir()

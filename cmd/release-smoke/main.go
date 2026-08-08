@@ -228,9 +228,9 @@ func extractBundle(bundlePath, destination, kind string) (err error) {
 	if err != nil {
 		return fmt.Errorf("open bundle destination root: %w", err)
 	}
-	defer destinationRoot.Close()
 	complete := false
 	defer func() {
+		_ = destinationRoot.Close()
 		if !complete {
 			_ = os.RemoveAll(destination)
 		}
