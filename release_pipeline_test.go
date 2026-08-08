@@ -264,7 +264,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		"if gh run download \"$GITHUB_RUN_ID\" --repo \"$GITHUB_REPOSITORY\" --name \"publication-release-$RELEASE_COMMIT\" --dir \"$DOWNLOAD_DIR\"; then",
 		"DOWNLOAD_OK=true",
 		"test \"$DOWNLOAD_OK\" = true",
-		"bash \"$RUNNER_TEMP/source/scripts/publish-release.sh\"",
+		"bash \"$RUNNER_TEMP/publisher-source/scripts/publish-release.sh\"",
 		"env -u GH_TOKEN go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/publication/dist\"",
 		"go run ./cmd/release-smoke --binary $binary --expected-version $releaseVersion --expected-commit $env:RELEASE_COMMIT",
 		"ubuntu-24.04-arm",
@@ -387,6 +387,9 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	for _, want := range []string{
 		"git -C \"$RUNNER_TEMP/source\" fetch --depth=1 origin \"refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG\"",
 		"test \"$(git -C \"$RUNNER_TEMP/source\" rev-parse \"$RELEASE_TAG^{}\")\" = \"$RELEASE_COMMIT\"",
+		"git -C \"$RUNNER_TEMP/publisher-source\" fetch --depth=1 origin \"$WORKFLOW_COMMIT\"",
+		"test \"$(git -C \"$RUNNER_TEMP/publisher-source\" rev-parse HEAD)\" = \"$WORKFLOW_COMMIT\"",
+		"bash \"$RUNNER_TEMP/publisher-source/scripts/publish-release.sh\"",
 	} {
 		if !strings.Contains(run, want) {
 			t.Errorf("publisher must preserve exact release tag identity: missing %q", want)
@@ -401,6 +404,9 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 	if fmt.Sprint(env["EXPECTED_BUNDLE_DIGEST"]) != "${{ needs.prepare_publication.outputs.bundle_digest }}" {
 		t.Errorf("publish expected digest = %q", env["EXPECTED_BUNDLE_DIGEST"])
+	}
+	if fmt.Sprint(env["WORKFLOW_COMMIT"]) != "${{ github.sha }}" {
+		t.Errorf("publisher workflow commit = %q", env["WORKFLOW_COMMIT"])
 	}
 	if strings.Contains(run, "needs.prepare_publication.outputs.bundle_digest") {
 		t.Error("publisher interpolates a preceding-job digest directly into shell source")
