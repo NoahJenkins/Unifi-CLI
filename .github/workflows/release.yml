@@ -562,11 +562,14 @@ jobs:
           EXPECTED_BUNDLE_DIGEST: ${{ needs.prepare_publication.outputs.bundle_digest }}
         run: |
           [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           mkdir -p "$RUNNER_TEMP/source"
           git -C "$RUNNER_TEMP/source" init
           git -C "$RUNNER_TEMP/source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
-          git -C "$RUNNER_TEMP/source" fetch --depth=1 origin "$RELEASE_COMMIT"
-          git -C "$RUNNER_TEMP/source" checkout --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/source" fetch --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git -C "$RUNNER_TEMP/source" rev-parse "$RELEASE_TAG^{}")" = "$RELEASE_COMMIT"
+          git -C "$RUNNER_TEMP/source" checkout --detach "$RELEASE_COMMIT"
           test "$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)" = "$RELEASE_COMMIT"
           GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/source/scripts/release-preflight.sh"
           DOWNLOAD_OK=false

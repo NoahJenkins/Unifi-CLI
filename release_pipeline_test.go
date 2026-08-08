@@ -384,6 +384,17 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 			t.Errorf("minimal publish step missing %q", want)
 		}
 	}
+	for _, want := range []string{
+		"git -C \"$RUNNER_TEMP/source\" fetch --depth=1 origin \"refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG\"",
+		"test \"$(git -C \"$RUNNER_TEMP/source\" rev-parse \"$RELEASE_TAG^{}\")\" = \"$RELEASE_COMMIT\"",
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("publisher must preserve exact release tag identity: missing %q", want)
+		}
+	}
+	if strings.Contains(run, "fetch --depth=1 origin \"$RELEASE_COMMIT\"") {
+		t.Error("publisher fetches a bare commit and loses the semantic version tag")
+	}
 	env := mapValue(t, publishStep, "env")
 	if fmt.Sprint(env["GH_TOKEN"]) != "${{ secrets.GITHUB_TOKEN }}" {
 		t.Errorf("publish GH_TOKEN = %q", env["GH_TOKEN"])
