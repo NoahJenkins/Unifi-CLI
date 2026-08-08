@@ -50,6 +50,7 @@ func runSystemHealth() error {
 		}
 		return nil
 	}
+	fmt.Fprintf(rt.Out, "application_version: %s\n", render.SafeText(h.ApplicationVersion))
 	fmt.Fprintf(rt.Out, "status: %s\n", render.SafeText(h.Status))
 	fmt.Fprintf(rt.Out, "device_total: %s\n", strconv.Itoa(h.DeviceTotal))
 	fmt.Fprintf(rt.Out, "device_connected: %s\n", strconv.Itoa(h.DeviceConnected))

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
+	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
 )
 
@@ -17,6 +18,13 @@ type fakeSystemAPI struct {
 
 func (f *fakeSystemAPI) Do(ctx context.Context, method, path string, in, out any) error {
 	f.calls = append(f.calls, method+" "+path)
+	if path == client.OfficialPath("info") {
+		b, err := json.Marshal(map[string]any{"applicationVersion": "10.4.57"})
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(b, out)
+	}
 	if f.errs != nil {
 		if err, ok := f.errs[path]; ok {
 			return err

@@ -70,6 +70,7 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones":    `[{"id":"ffffffff-ffff-4fff-8fff-fffffffffff2","name":"External","networkIds":[],"metadata":{"origin":"SYSTEM_DEFINED","configurable":false}},{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}]`,
 	}
 	officialDetails := map[string]string{
+		"/proxy/network/integration/v1/info": `{"applicationVersion":"10.4.57"}`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1":         `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","configurationId":"config-1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":{"switching":{"lags":[]}},"interfaces":{"ports":[{"idx":1,"connector":"RJ45","maxSpeedMbps":1000,"speedMbps":1000,"state":"UP","poe":{"enabled":false,"standard":"802.3at","state":"DOWN","type":2}}]},"firmwareUpdatable":false,"supported":true}`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc1":        `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"},"cellularBackupEnabled":false,"internetAccessEnabled":true,"isolationEnabled":false,"mdnsForwardingEnabled":true,"ipv4Configuration":{"hostIpAddress":"192.0.2.1","prefixLength":24,"autoScaleEnabled":false,"dhcpConfiguration":{"mode":"SERVER","domainName":"example.test","dnsServerIpAddressesOverride":["192.0.2.53"],"ipAddressRange":{"start":"192.0.2.10","stop":"192.0.2.200"},"leaseTimeSeconds":86400,"pingConflictDetectionEnabled":true}}}`,
 		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts/dddddddd-dddd-4ddd-8ddd-ddddddddddd1": `{"type":"STANDARD","id":"dddddddd-dddd-4ddd-8ddd-ddddddddddd1","name":"Main","enabled":true,"clientIsolationEnabled":false,"hideName":false,"multicastToUnicastConversionEnabled":false,"uapsdEnabled":true,"advertiseDeviceName":true,"arpProxyEnabled":false,"broadcastingFrequenciesGHz":[2.4,6],"bssTransitionEnabled":true,"metadata":{"origin":"USER"},"network":{"type":"SPECIFIC","networkId":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},"securityConfiguration":{"type":"WPA2_PERSONAL"}}`,
@@ -328,7 +329,7 @@ func TestResourceReadCommandsRenderHumanAndJSONOutput(t *testing.T) {
 		{name: "dns list", resource: "dns", action: "list", humanMarker: "router.example.test", run: runDNSList},
 		{name: "dns get", resource: "dns", action: "get", humanMarker: "id: " + commandDNSID, run: func() error { return runDNSGet(commandDNSID) }},
 		{name: "dns resolvers", resource: "dns", action: "resolvers list", humanMarker: "LAN", run: runDNSResolversList},
-		{name: "system health", resource: "system", action: "health", humanMarker: "status: ok", run: runSystemHealth},
+		{name: "system health", resource: "system", action: "health", humanMarker: "application_version: 10.4.57", run: runSystemHealth},
 	}
 
 	for _, tt := range tests {
@@ -422,8 +423,8 @@ func TestOfficialStableReadGoldenOutput(t *testing.T) {
 		},
 		{
 			name: "health", run: runSystemHealth,
-			humanWant: "status: ok\ndevice_total: 1\ndevice_connected: 1\nclient_total: 1\n",
-			jsonWant:  `{"status":"ok","device_total":1,"device_connected":1,"client_total":1}`,
+			humanWant: "application_version: 10.4.57\nstatus: ok\ndevice_total: 1\ndevice_connected: 1\nclient_total: 1\n",
+			jsonWant:  `{"application_version":"10.4.57","status":"ok","device_total":1,"device_connected":1,"client_total":1}`,
 		},
 	}
 
@@ -479,7 +480,7 @@ func TestStableReadEmptyOutputExactHumanAndJSONEnvelopes(t *testing.T) {
 		{name: "firewall", resource: "firewall", action: "list", run: runFirewallList, humanWant: "INDEX  NAME  ACTION  SOURCE ZONE  DESTINATION ZONE  PROTOCOL  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/firewall/policies": `[]`}}},
 		{name: "dns", resource: "dns", action: "list", run: runDNSList, humanWant: "TYPE  DOMAIN  VALUE  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{dnsPolicies: []map[string]any{}}},
 		{name: "resolvers", resource: "dns", action: "resolvers list", run: runDNSResolversList, humanWant: "NETWORK  DNS  WAN  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}}},
-		{name: "health", resource: "system", action: "health", run: runSystemHealth, humanWant: "status: ok\ndevice_total: 0\ndevice_connected: 0\nclient_total: 0\n", jsonData: `{"status":"ok","device_total":0,"device_connected":0,"client_total":0}`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`, sitePath + "/clients": `[]`}}},
+		{name: "health", resource: "system", action: "health", run: runSystemHealth, humanWant: "application_version: 10.4.57\nstatus: ok\ndevice_total: 0\ndevice_connected: 0\nclient_total: 0\n", jsonData: `{"application_version":"10.4.57","status":"ok","device_total":0,"device_connected":0,"client_total":0}`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`, sitePath + "/clients": `[]`}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+" human", func(t *testing.T) {
@@ -522,7 +523,7 @@ func TestStableReadPermissionErrorsUseExactHumanAndJSONEnvelopes(t *testing.T) {
 		{name: "ports", resource: "port", action: "get", forbiddenPath: sitePath + "/devices/" + commandDeviceID, run: func() error { return runPortGet(commandDeviceID, 1) }},
 		{name: "firewall", resource: "firewall", action: "list", forbiddenPath: sitePath + "/firewall/policies", run: runFirewallList},
 		{name: "dns", resource: "dns", action: "list", forbiddenPath: sitePath + "/dns/policies", run: runDNSList},
-		{name: "health", resource: "system", action: "health", forbiddenPath: sitePath + "/clients", run: runSystemHealth},
+		{name: "health", resource: "system", action: "health", forbiddenPath: "/proxy/network/integration/v1/info", run: runSystemHealth},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+" human", func(t *testing.T) {

@@ -49,6 +49,17 @@ const (
 )
 
 func (f *officialReadAPI) Do(_ context.Context, method, path string, in any, out any) error {
+	if method == http.MethodGet && path == client.OfficialPath("info") {
+		f.mu.Lock()
+		f.calls = append(f.calls, "OFFICIAL GET "+path)
+		f.requests = append(f.requests, officialTestRequest{method: method, path: path, body: cloneTestValue(in)})
+		f.mu.Unlock()
+		b, err := json.Marshal(map[string]any{"applicationVersion": "10.4.57"})
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(b, out)
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, "LEGACY "+method+" "+path)
 	f.requests = append(f.requests, officialTestRequest{method: method, path: path, body: cloneTestValue(in)})
@@ -429,13 +440,10 @@ func TestStableReadServicesUseOfficialNetworkAPI(t *testing.T) {
 			t.Fatalf("official health must not probe legacy subsystem endpoint: %+v", h.Subsystems)
 		}
 		assertOnlyOfficialCalls(t, api.calls,
+			"OFFICIAL GET "+client.OfficialPath("info"),
 			"OFFICIAL LIST "+sitePath+"/devices",
 			"OFFICIAL LIST "+sitePath+"/clients")
-		for _, call := range api.calls {
-			if strings.HasPrefix(call, "OFFICIAL GET ") {
-				t.Fatalf("health made detail call %q", call)
-			}
-		}
+		assertCallCount(t, api.calls, "OFFICIAL GET "+client.OfficialPath("info"), 1)
 	})
 }
 
