@@ -4,17 +4,64 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable release tag to resume
+        required: true
+        type: string
+      release_commit:
+        description: Exact 40-character commit resolved by the release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}-${{ github.ref }}
+  group: release-${{ github.repository }}-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
+
 jobs:
+  preflight:
+    name: bind immutable release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tag binding before checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          RESOLVED_COMMIT="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq '.sha')"
+          test "$RESOLVED_COMMIT" = "$RELEASE_COMMIT"
+
+      - name: Check out bound release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse published release replacement
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash ./scripts/release-preflight.sh
+
   trusted_inputs:
     name: build isolated trusted inputs
+    needs:
+      - preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -25,6 +72,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -39,10 +87,10 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
-          RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$GITHUB_SHA")"
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$RELEASE_COMMIT")"
           RELEASE_COMMIT_DATE="$(date -u -d "@$RELEASE_COMMIT_TIMESTAMP" +%Y-%m-%dT%H:%M:%SZ)"
-          RELEASE_LDFLAGS="-s -w -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version=$RELEASE_VERSION -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit=$GITHUB_SHA -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate=$RELEASE_COMMIT_DATE"
+          RELEASE_LDFLAGS="-s -w -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version=$RELEASE_VERSION -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit=$RELEASE_COMMIT -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate=$RELEASE_COMMIT_DATE"
           mkdir -p "$RUNNER_TEMP/unifi-trusted"
           for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             GOOS="${TARGET%/*}"
@@ -54,7 +102,7 @@ jobs:
             mkdir -p "$(dirname "$OUTPUT")"
             GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "$RELEASE_LDFLAGS" -o "$OUTPUT" ./cmd/unifi
           done
-          go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/unifi-source-manifest.json" --expected-commit "$GITHUB_SHA"
+          go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/unifi-source-manifest.json" --expected-commit "$RELEASE_COMMIT"
 
       - name: Seal trusted input bundle
         id: seal
@@ -68,13 +116,15 @@ jobs:
       - name: Transfer sealed trusted inputs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: trusted-release-${{ github.sha }}
+          name: trusted-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/trusted-release.tar
           if-no-files-found: error
           retention-days: 1
 
   generate:
     name: generate untrusted release artifacts
+    needs:
+      - preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -85,11 +135,12 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Refuse moved tags or published release replacement
-        run: bash ./scripts/release-preflight.sh
+        run: GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash ./scripts/release-preflight.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -123,7 +174,7 @@ jobs:
       - name: Transfer generated artifact bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: generated-release-${{ github.sha }}
+          name: generated-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/generated-release.tar
           if-no-files-found: error
           retention-days: 1
@@ -144,6 +195,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -156,13 +208,13 @@ jobs:
       - name: Download trusted input bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: trusted-release-${{ github.sha }}
+          name: trusted-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/release-downloads/trusted
 
       - name: Download generated artifact bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: generated-release-${{ github.sha }}
+          name: generated-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/release-downloads/generated
 
       - name: Verify bundle seals and extract
@@ -181,7 +233,7 @@ jobs:
 
       - name: Verify generated artifacts against isolated trusted inputs
         shell: bash
-        run: go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/release-inputs/generated/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/release-inputs/trusted/unifi-trusted" --trusted-source-manifest "$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json"
+        run: go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/release-inputs/generated/dist" --expected-version "${RELEASE_TAG#v}" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/release-inputs/trusted/unifi-trusted" --trusted-source-manifest "$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json"
 
       - name: Seal verified release bundle
         id: seal
@@ -199,7 +251,7 @@ jobs:
       - name: Transfer sealed verified release bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: verified-release-${{ github.sha }}
+          name: verified-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/verified-release.tar
           if-no-files-found: error
           retention-days: 1
@@ -239,6 +291,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -251,7 +304,7 @@ jobs:
       - name: Download sealed verified release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: verified-release-${{ github.sha }}
+          name: verified-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/verified-download
 
       - name: Verify bundle seal on Unix
@@ -278,22 +331,30 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/verified"
           go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/verified-download/verified-release.tar" --bundle-kind verified --destination "$RUNNER_TEMP/verified/release"
-          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/release/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/release/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/release/.release-verification/source-manifest.json"
+          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/release/dist" --expected-version "${RELEASE_TAG#v}" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/verified/release/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/release/.release-verification/source-manifest.json"
 
-      - name: Execute archived binary smoke contract
+      - name: Execute archived binary smoke contract on Unix
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_VERSION="${RELEASE_TAG#v}"
           ARCHIVE="$RUNNER_TEMP/verified/release/dist/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
-          EXECUTABLE="unifi"
-          if [ "${{ matrix.goos }}" = windows ]; then
-            ARCHIVE="$RUNNER_TEMP/verified/release/dist/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
-            EXECUTABLE="unifi.exe"
-          fi
           SMOKE_DIR="$(mktemp -d)"
           tar -xf "$ARCHIVE" -C "$SMOKE_DIR"
-          BINARY="$SMOKE_DIR/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}/$EXECUTABLE"
-          go run ./cmd/release-smoke --binary "$BINARY" --expected-version "$RELEASE_VERSION" --expected-commit "$GITHUB_SHA"
+          BINARY="$SMOKE_DIR/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}/unifi"
+          go run ./cmd/release-smoke --binary "$BINARY" --expected-version "$RELEASE_VERSION" --expected-commit "$RELEASE_COMMIT"
+
+      - name: Execute archived binary smoke contract on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $releaseVersion = $env:RELEASE_TAG.Substring(1)
+          $archive = Join-Path $env:RUNNER_TEMP "verified/release/dist/unifi-cli_${releaseVersion}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          $smokeDir = Join-Path $env:RUNNER_TEMP "archived-binary-smoke"
+          New-Item -ItemType Directory -Path $smokeDir -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $smokeDir
+          $binary = Join-Path $smokeDir "unifi-cli_${releaseVersion}_${{ matrix.goos }}_${{ matrix.goarch }}/unifi.exe"
+          go run ./cmd/release-smoke --binary $binary --expected-version $releaseVersion --expected-commit $env:RELEASE_COMMIT
 
   attest:
     name: attest verified artifacts
@@ -311,6 +372,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -323,7 +385,7 @@ jobs:
       - name: Download sealed verified release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: verified-release-${{ github.sha }}
+          name: verified-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/verified-download
 
       - name: Verify bundle seal, extract, and reverify
@@ -334,7 +396,7 @@ jobs:
           [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
           go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/verified-download/verified-release.tar" --bundle-kind verified --destination "$RUNNER_TEMP/verified"
-          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
+          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${RELEASE_TAG#v}" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
           mkdir -p "$RUNNER_TEMP/attest"
           cp "$RUNNER_TEMP/verified/dist/checksums.txt" "$RUNNER_TEMP/attest/checksums.txt"
           while read -r digest filename extra || [[ -n "${digest:-}${filename:-}${extra:-}" ]]; do
@@ -342,7 +404,65 @@ jobs:
             cp "$RUNNER_TEMP/verified/dist/$filename" "$RUNNER_TEMP/attest/$filename"
           done < "$RUNNER_TEMP/verified/dist/checksums.txt"
 
-      - name: Attest exact release assets
+      - name: Write resumed exact-source provenance predicate
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          WORKFLOW_COMMIT: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_ID: ${{ github.workflow_ref }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+        run: |
+          jq -n \
+            --arg repository "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg release_commit "$RELEASE_COMMIT" \
+            --arg workflow_commit "$WORKFLOW_COMMIT" \
+            --arg workflow_ref "$WORKFLOW_REF" \
+            --arg workflow_id "$GITHUB_SERVER_URL/$WORKFLOW_ID" \
+            --arg event_name "$GITHUB_EVENT_NAME" \
+            --arg repository_id "$REPOSITORY_ID" \
+            --arg repository_owner_id "$REPOSITORY_OWNER_ID" \
+            --arg invocation_id "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            '{
+              buildDefinition: {
+                buildType: "https://actions.github.io/buildtypes/workflow/v1",
+                externalParameters: {
+                  workflow: {
+                    ref: $workflow_ref,
+                    repository: $repository,
+                    path: ".github/workflows/release.yml"
+                  }
+                },
+                internalParameters: {
+                  github: {
+                    event_name: $event_name,
+                    repository_id: $repository_id,
+                    repository_owner_id: $repository_owner_id,
+                    runner_environment: "github-hosted"
+                  }
+                },
+                resolvedDependencies: [
+                  {
+                    uri: ("git+" + $repository + "@refs/tags/" + $release_tag),
+                    digest: {gitCommit: $release_commit}
+                  },
+                  {
+                    uri: ("git+" + $repository + "@" + $workflow_ref),
+                    digest: {gitCommit: $workflow_commit}
+                  }
+                ]
+              },
+              runDetails: {
+                builder: {id: $workflow_id},
+                metadata: {invocationId: $invocation_id}
+              }
+            }' > "$RUNNER_TEMP/resumed-provenance.json"
+          jq -e --arg commit "$RELEASE_COMMIT" '.buildDefinition.resolvedDependencies[0].digest.gitCommit == $commit' "$RUNNER_TEMP/resumed-provenance.json" >/dev/null
+
+      - name: Attest exact release assets from tag push
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: |
@@ -350,6 +470,18 @@ jobs:
             ${{ runner.temp }}/attest/*.zip
             ${{ runner.temp }}/attest/*.sbom.json
             ${{ runner.temp }}/attest/checksums.txt
+
+      - name: Attest resumed exact-source release assets
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            ${{ runner.temp }}/attest/*.tar.gz
+            ${{ runner.temp }}/attest/*.zip
+            ${{ runner.temp }}/attest/*.sbom.json
+            ${{ runner.temp }}/attest/checksums.txt
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/resumed-provenance.json
 
   prepare_publication:
     name: seal minimal publication bundle
@@ -367,6 +499,7 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -379,7 +512,7 @@ jobs:
       - name: Download sealed verified release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: verified-release-${{ github.sha }}
+          name: verified-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/verified-download
 
       - name: Reverify and stage exact publication files
@@ -390,7 +523,7 @@ jobs:
           [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
           go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/verified-download/verified-release.tar" --bundle-kind verified --destination "$RUNNER_TEMP/verified"
-          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
+          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${RELEASE_TAG#v}" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
           mkdir -p "$RUNNER_TEMP/publication"
           cp -R "$RUNNER_TEMP/verified/dist" "$RUNNER_TEMP/publication/dist"
 
@@ -406,7 +539,7 @@ jobs:
       - name: Transfer sealed publication bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: publication-release-${{ github.sha }}
+          name: publication-release-${{ env.RELEASE_COMMIT }}
           path: ${{ runner.temp }}/publication-release.tar
           if-no-files-found: error
           retention-days: 1
@@ -431,18 +564,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/source" "$RUNNER_TEMP/publication-download"
           git -C "$RUNNER_TEMP/source" init
           git -C "$RUNNER_TEMP/source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
-          git -C "$RUNNER_TEMP/source" fetch --depth=1 origin "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/source" fetch --depth=1 origin "$RELEASE_COMMIT"
           git -C "$RUNNER_TEMP/source" checkout --detach FETCH_HEAD
-          test "$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)" = "$GITHUB_SHA"
-          bash "$RUNNER_TEMP/source/scripts/release-preflight.sh"
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "publication-release-$GITHUB_SHA" --dir "$RUNNER_TEMP/publication-download"
+          test "$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)" = "$RELEASE_COMMIT"
+          GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/source/scripts/release-preflight.sh"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "publication-release-$RELEASE_COMMIT" --dir "$RUNNER_TEMP/publication-download"
           test "$(shasum -a 256 "$RUNNER_TEMP/publication-download/publication-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
           cd "$RUNNER_TEMP/source"
           env -u GH_TOKEN go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/publication-download/publication-release.tar" --bundle-kind publication --destination "$RUNNER_TEMP/publication"
-          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
-          RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$GITHUB_SHA")"
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$RELEASE_COMMIT")"
           RELEASE_COMMIT_DATE="$(date -u -d "@$RELEASE_COMMIT_TIMESTAMP" +%Y-%m-%dT%H:%M:%SZ)"
-          RELEASE_LDFLAGS="-s -w -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version=$RELEASE_VERSION -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit=$GITHUB_SHA -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate=$RELEASE_COMMIT_DATE"
+          RELEASE_LDFLAGS="-s -w -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version=$RELEASE_VERSION -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit=$RELEASE_COMMIT -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate=$RELEASE_COMMIT_DATE"
           mkdir -p "$RUNNER_TEMP/publisher-trusted"
           for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             GOOS="${TARGET%/*}"
@@ -454,6 +587,6 @@ jobs:
             mkdir -p "$(dirname "$OUTPUT")"
             env -u GH_TOKEN CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "$RELEASE_LDFLAGS" -o "$OUTPUT" ./cmd/unifi
           done
-          env -u GH_TOKEN go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json" --expected-commit "$GITHUB_SHA"
-          env -u GH_TOKEN go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/publication/dist" --expected-version "$RELEASE_VERSION" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/publisher-trusted" --trusted-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json"
-          bash "$RUNNER_TEMP/source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/docs/releases/v1.0.0-rc.1.md"
+          env -u GH_TOKEN go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json" --expected-commit "$RELEASE_COMMIT"
+          env -u GH_TOKEN go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/publication/dist" --expected-version "$RELEASE_VERSION" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/publisher-trusted" --trusted-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json"
+          GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/docs/releases/v1.0.0-rc.1.md"

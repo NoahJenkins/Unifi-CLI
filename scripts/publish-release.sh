@@ -3,7 +3,8 @@ set -euo pipefail
 
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-: "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
+release_tag="${RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
+: "${release_tag:?RELEASE_TAG or GITHUB_REF_NAME is required}"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: publish-release.sh DIST RELEASE_NOTES" >&2
@@ -13,7 +14,7 @@ if [[ ! "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   echo "release publish: invalid repository identity" >&2
   exit 2
 fi
-if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
   echo "release publish: invalid release tag" >&2
   exit 2
 fi
@@ -80,7 +81,7 @@ fi
 
 bash "$(dirname "$0")/release-preflight.sh"
 
-release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}"
+release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}"
 error_file="$(mktemp)"
 asset_file="$(mktemp)"
 readback_dir="$(mktemp -d)"
@@ -91,7 +92,7 @@ if ! release_id="$(gh api --method GET "$release_endpoint" --jq '.id' 2>"$error_
     cat "$error_file" >&2
     exit 1
   fi
-  gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY"
+  gh release create "$release_tag" --draft --prerelease --verify-tag --title "$release_tag" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY"
   release_id="$(gh api --method GET "$release_endpoint" --jq '.id')"
 fi
 if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
@@ -99,7 +100,7 @@ if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-gh release upload "$GITHUB_REF_NAME" "${asset_paths[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+gh release upload "$release_tag" "${asset_paths[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.id, .name, .size] | @tsv' > "$asset_file"
 
 remote_count="$(wc -l < "$asset_file" | tr -d ' ')"
@@ -134,7 +135,7 @@ done
 # Close the tag-move window after uploads and remote readback. A moved tag
 # leaves the release as a draft and cannot relabel artifacts from GITHUB_SHA.
 bash "$(dirname "$0")/release-preflight.sh"
-gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --repo "$GITHUB_REPOSITORY"
+gh release edit "$release_tag" --draft=false --prerelease --repo "$GITHUB_REPOSITORY"
 if [[ "$(gh api --method GET "$release_endpoint" --jq '.draft')" != "false" ]]; then
   echo "release publish: release did not become public" >&2
   exit 1

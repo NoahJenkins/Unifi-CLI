@@ -214,7 +214,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		t.Errorf("workflow-wide permissions = %v, want absent or contents: read", permissions)
 	}
 	concurrency := mapValue(t, workflow, "concurrency")
-	if fmt.Sprint(concurrency["group"]) != "release-${{ github.repository }}-${{ github.ref }}" {
+	if fmt.Sprint(concurrency["group"]) != "release-${{ github.repository }}-${{ inputs.release_tag || github.ref_name }}" {
 		t.Errorf("release concurrency group = %q", concurrency["group"])
 	}
 	if cancel, ok := concurrency["cancel-in-progress"].(bool); !ok || cancel {
@@ -257,13 +257,13 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		"RELEASE_COMMIT_DATE=\"$(date -u -d \"@$RELEASE_COMMIT_TIMESTAMP\" +%Y-%m-%dT%H:%M:%SZ)\"",
 		"for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do",
 		"GOOS=\"$GOOS\" GOARCH=\"$GOARCH\" go build -trimpath -ldflags \"$RELEASE_LDFLAGS\" -o \"$OUTPUT\" ./cmd/unifi",
-		"go run ./cmd/release-smoke --write-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\" --expected-commit \"$GITHUB_SHA\"",
+		"go run ./cmd/release-smoke --write-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\" --expected-commit \"$RELEASE_COMMIT\"",
 		"go run ./cmd/release-smoke --extract-bundle \"$RUNNER_TEMP/release-downloads/generated/generated-release.tar\" --bundle-kind generated --destination \"$RUNNER_TEMP/release-inputs/generated\"",
-		"go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/release-inputs/generated/dist\" --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-binaries \"$RUNNER_TEMP/release-inputs/trusted/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json\"",
-		"gh run download \"$GITHUB_RUN_ID\" --repo \"$GITHUB_REPOSITORY\" --name \"publication-release-$GITHUB_SHA\"",
+		"go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/release-inputs/generated/dist\" --expected-version \"${RELEASE_TAG#v}\" --expected-commit \"$RELEASE_COMMIT\" --trusted-binaries \"$RUNNER_TEMP/release-inputs/trusted/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json\"",
+		"gh run download \"$GITHUB_RUN_ID\" --repo \"$GITHUB_REPOSITORY\" --name \"publication-release-$RELEASE_COMMIT\"",
 		"bash \"$RUNNER_TEMP/source/scripts/publish-release.sh\"",
 		"env -u GH_TOKEN go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/publication/dist\"",
-		"go run ./cmd/release-smoke --binary \"$BINARY\" --expected-version \"$RELEASE_VERSION\" --expected-commit \"$GITHUB_SHA\"",
+		"go run ./cmd/release-smoke --binary $binary --expected-version $releaseVersion --expected-commit $env:RELEASE_COMMIT",
 		"ubuntu-24.04-arm",
 		"macos-15-intel",
 		"macos-15",
@@ -275,6 +275,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 
 	jobs := mapValue(t, workflow, "jobs")
+	preflightJob := mapValue(t, jobs, "preflight")
 	trustedJob := mapValue(t, jobs, "trusted_inputs")
 	generateJob := mapValue(t, jobs, "generate")
 	verifyJob := mapValue(t, jobs, "verify")
@@ -289,6 +290,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 			t.Errorf("%s permissions = %v, want %v", name, got, want)
 		}
 	}
+	assertPermissions("preflight", preflightJob, map[string]any{"contents": "read"})
 	assertPermissions("trusted", trustedJob, map[string]any{"contents": "read"})
 	assertPermissions("generate", generateJob, map[string]any{"contents": "read"})
 	assertPermissions("verify", verifyJob, map[string]any{"actions": "read", "contents": "read"})
@@ -296,6 +298,12 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	assertPermissions("attest", attestJob, map[string]any{"actions": "read", "attestations": "write", "contents": "read", "id-token": "write"})
 	assertPermissions("prepare", prepareJob, map[string]any{"actions": "read", "contents": "read"})
 	assertPermissions("publish", publishJob, map[string]any{"actions": "read", "contents": "write"})
+	if got := stringSliceValue(t, trustedJob, "needs"); !slices.Equal(got, []string{"preflight"}) {
+		t.Errorf("trusted needs = %v, want [preflight]", got)
+	}
+	if got := stringSliceValue(t, generateJob, "needs"); !slices.Equal(got, []string{"preflight"}) {
+		t.Errorf("generate needs = %v, want [preflight]", got)
+	}
 	if got := stringSliceValue(t, verifyJob, "needs"); !slices.Equal(got, []string{"trusted_inputs", "generate"}) {
 		t.Errorf("verify needs = %v, want [trusted_inputs generate]", got)
 	}
@@ -335,7 +343,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		t.Errorf("unsafe generator ordering: preflight=%d syft=%d build=%d seal=%d upload=%d", preflight, syft, build, generateSeal, generateUpload)
 	}
 	preflightStep := generateSteps[preflight].(map[string]any)
-	if fmt.Sprint(preflightStep["run"]) != "bash ./scripts/release-preflight.sh" {
+	if fmt.Sprint(preflightStep["run"]) != "GITHUB_REF_NAME=\"$RELEASE_TAG\" GITHUB_SHA=\"$RELEASE_COMMIT\" bash ./scripts/release-preflight.sh" {
 		t.Errorf("preflight command = %q", preflightStep["run"])
 	}
 	preflightEnv := mapValue(t, preflightStep, "env")
@@ -407,6 +415,39 @@ func TestRequiredCIIncludesLinuxRaceAndArtifactSmoke(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("CI workflow missing %q", want)
 		}
+	}
+}
+
+func TestReleaseWorkflowCanResumeAnImmutableTagAndUsesNativeWindowsExtraction(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"workflow_dispatch:",
+		"release_tag:",
+		"release_commit:",
+		"RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}",
+		"RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}",
+		"ref: ${{ env.RELEASE_COMMIT }}",
+		"GITHUB_REF_NAME=\"$RELEASE_TAG\" GITHUB_SHA=\"$RELEASE_COMMIT\"",
+		"if: runner.os == 'Windows'",
+		"shell: pwsh",
+		"Expand-Archive -LiteralPath $archive -DestinationPath $smokeDir",
+		"--expected-commit $env:RELEASE_COMMIT",
+		"predicate-type: https://slsa.dev/provenance/v1",
+		"predicate-path: ${{ runner.temp }}/resumed-provenance.json",
+		"uri: (\"git+\" + $repository + \"@refs/tags/\" + $release_tag)",
+		"digest: {gitCommit: $release_commit}",
+		"digest: {gitCommit: $workflow_commit}",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("resumable release workflow missing %q", want)
+		}
+	}
+	if strings.Contains(text, "if [ \"${{ matrix.goos }}\" = windows ]") {
+		t.Error("Windows archive execution still shares the Unix tar extraction step")
 	}
 }
 
