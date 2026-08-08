@@ -9,9 +9,10 @@ import (
 )
 
 type Meta struct {
-	Site   string `json:"site"`
-	Count  *int   `json:"count,omitempty"`
-	DryRun bool   `json:"dry_run"`
+	Site         string `json:"site"`
+	Count        *int   `json:"count,omitempty"`
+	DryRun       bool   `json:"dry_run"`
+	Experimental bool   `json:"experimental,omitempty"`
 }
 
 type Envelope struct {

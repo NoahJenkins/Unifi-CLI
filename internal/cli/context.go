@@ -19,9 +19,13 @@ type Runtime struct {
 	Force        bool
 	Quiet        bool
 	Experimental bool
-	Site         string
-	Out          io.Writer
-	Err          io.Writer
+	// CommandExperimental records the prepared mutation classification for
+	// schema-v1 output independently of whether the operator passed the apply
+	// opt-in flag.
+	CommandExperimental bool
+	Site                string
+	Out                 io.Writer
+	Err                 io.Writer
 }
 
 func (rt *Runtime) Applying() bool {
@@ -35,7 +39,9 @@ func (rt *Runtime) Emit(resource, action string, data any, p *plan.Plan, err err
 	}
 	if err != nil {
 		if rt.JSON {
-			_ = render.WriteJSON(rt.Out, render.Fail(resource, action, site, err))
+			env := render.Fail(resource, action, site, err)
+			env.Meta.Experimental = rt.CommandExperimental
+			_ = render.WriteJSON(rt.Out, env)
 		} else {
 			fmt.Fprintln(rt.Err, render.SafeText(err.Error()))
 		}
@@ -43,6 +49,7 @@ func (rt *Runtime) Emit(resource, action string, data any, p *plan.Plan, err err
 	}
 	dry := p != nil && !rt.Applying()
 	env := render.Success(resource, action, site, data, dry)
+	env.Meta.Experimental = rt.CommandExperimental
 	if p != nil && dry {
 		env.Plan = p
 		env.Data = nil

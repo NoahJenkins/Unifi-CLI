@@ -30,6 +30,7 @@ type Client struct {
 	apiKey     string
 	store      authstore.Store
 	authMethod string
+	authMu     sync.Mutex
 
 	integrationSiteMu sync.Mutex
 	integrationSiteID string
@@ -127,6 +128,8 @@ func newClient(cfg config.Config, apiKey, method string, store authstore.Store) 
 
 // AuthMethod describes the API-key source active for this client.
 func (c *Client) AuthMethod() string {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
 	return c.authMethod
 }
 
@@ -170,8 +173,8 @@ func isLegacyStaticRoute(part string) bool {
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
-	return c.doWithAuth(ctx, func() error {
-		return c.doJSON(ctx, method, path, in, out)
+	return c.doWithAuth(ctx, func(apiKey string) error {
+		return c.doJSON(ctx, apiKey, method, path, in, out)
 	})
 }
 
@@ -179,8 +182,8 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 // unwrapping behavior. Official Network API callers need the complete response
 // envelope so they can validate pagination metadata.
 func (c *Client) DoOfficial(ctx context.Context, method, path string, in, out any) error {
-	return c.doWithAuth(ctx, func() error {
-		return c.doOfficialJSON(ctx, method, path, in, out)
+	return c.doWithAuth(ctx, func(apiKey string) error {
+		return c.doOfficialJSON(ctx, apiKey, method, path, in, out)
 	})
 }
 
@@ -188,26 +191,33 @@ func (c *Client) DoOfficial(ctx context.Context, method, path string, in, out an
 // response bytes consumed after all transport and decoding checks succeed.
 func (c *Client) DoOfficialSized(ctx context.Context, method, path string, in, out any) (int, error) {
 	var responseBytes int
-	err := c.doWithAuth(ctx, func() error {
+	err := c.doWithAuth(ctx, func(apiKey string) error {
 		var err error
-		responseBytes, err = c.doJSONWithDecoder(ctx, method, path, in, out, json.Unmarshal, "official API ")
+		responseBytes, err = c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, json.Unmarshal, "official API ")
 		return err
 	})
 	return responseBytes, err
 }
 
-func (c *Client) doWithAuth(ctx context.Context, request func() error) error {
-	if err := c.ensureAuth(ctx); err != nil {
+func (c *Client) doWithAuth(ctx context.Context, request func(string) error) error {
+	apiKey, authMethod, err := c.authSnapshot(ctx)
+	if err != nil {
 		return err
 	}
-	err := request()
-	if !apperr.Is(err, apperr.AuthFailed) || c.authMethod != "saved_api_key" {
+	err = request(apiKey)
+	if !apperr.Is(err, apperr.AuthFailed) || authMethod != "saved_api_key" {
 		return err
 	}
 
-	c.apiKey = ""
 	var cleanupErr error
-	if c.store != nil {
+	c.authMu.Lock()
+	deleteSavedKey := c.authMethod == authMethod && c.apiKey == apiKey
+	if deleteSavedKey {
+		c.apiKey = ""
+		c.authMethod = ""
+	}
+	c.authMu.Unlock()
+	if deleteSavedKey && c.store != nil {
 		cleanupErr = c.store.Delete(c.baseURL)
 	}
 	message := "authentication failed"
@@ -224,18 +234,19 @@ func (c *Client) doWithAuth(ctx context.Context, request func() error) error {
 	return result
 }
 
-func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) error {
-	_, err := c.doJSONWithDecoder(ctx, method, path, in, out, DecodeData, "")
+func (c *Client) doJSON(ctx context.Context, apiKey, method, path string, in, out any) error {
+	_, err := c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, DecodeData, "")
 	return err
 }
 
-func (c *Client) doOfficialJSON(ctx context.Context, method, path string, in, out any) error {
-	_, err := c.doJSONWithDecoder(ctx, method, path, in, out, json.Unmarshal, "official API ")
+func (c *Client) doOfficialJSON(ctx context.Context, apiKey, method, path string, in, out any) error {
+	_, err := c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, json.Unmarshal, "official API ")
 	return err
 }
 
 func (c *Client) doJSONWithDecoder(
 	ctx context.Context,
+	apiKey string,
 	method, path string,
 	in, out any,
 	decode func([]byte, any) error,
@@ -258,7 +269,7 @@ func (c *Client) doJSONWithDecoder(
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-API-KEY", c.apiKey)
+	req.Header.Set("X-API-KEY", apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -38,7 +38,7 @@ func TestAcceptedDeviceActionsRenderExactSchemaV1JSON(t *testing.T) {
 			if err != nil {
 				t.Fatalf("action failed: %v; stdout=%q stderr=%q", err, stdout, stderr)
 			}
-			want := `{"schema_version":"1","ok":true,"resource":"device","action":"` + tt.action + `","data":{"accepted":true},"meta":{"site":"default","dry_run":false}}`
+			want := `{"schema_version":"1","ok":true,"resource":"device","action":"` + tt.action + `","data":{"accepted":true},"meta":{"site":"default","dry_run":false,"experimental":true}}`
 			assertDecodedJSONEqual(t, stdout, want)
 			if stderr != "audit: applied device "+tt.action+"\n" {
 				t.Fatalf("audit stderr = %q", stderr)

@@ -165,6 +165,9 @@ func TestRunPreparedMutationExperimentalGateOnlyBlocksApply(t *testing.T) {
 	if env.Error == nil || env.Error.Code != string(apperr.ValidationFailed) {
 		t.Fatalf("error = %+v", env.Error)
 	}
+	if !env.Meta.Experimental {
+		t.Fatal("experimental mutation error must set meta.experimental")
+	}
 
 	rt, _, _ = mutationRuntime()
 	rt.Yes = true
@@ -181,6 +184,25 @@ func TestRunPreparedMutationExperimentalGateOnlyBlocksApply(t *testing.T) {
 	)
 	if code != 0 || !applied {
 		t.Fatalf("experimental apply with opt-in: exit=%d applied=%v", code, applied)
+	}
+}
+
+func TestRunPreparedMutationExperimentalPlanSetsMetadataWithoutOptIn(t *testing.T) {
+	rt, out, _ := mutationRuntime()
+	code := cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, true), nil },
+		nil,
+		func(target plan.Target) (any, error) { return nil, nil },
+	)
+	if code != 0 {
+		t.Fatalf("exit=%d output=%s", code, out.String())
+	}
+	var env render.Envelope
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if !env.Meta.Experimental || !env.Meta.DryRun {
+		t.Fatalf("meta = %+v, want experimental dry-run", env.Meta)
 	}
 }
 

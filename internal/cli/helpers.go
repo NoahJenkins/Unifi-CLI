@@ -106,6 +106,7 @@ func RunPreparedMutation(
 	if err != nil {
 		return rt.Emit(resource, action, nil, nil, err)
 	}
+	rt.CommandExperimental = prepared.Experimental()
 	p := prepared.Plan()
 	if !rt.Applying() {
 		return rt.Emit(resource, action, nil, &p, nil)

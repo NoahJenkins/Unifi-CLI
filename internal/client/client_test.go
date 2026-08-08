@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 )
 
 type memoryAPIKeyStore struct {
+	mu                 sync.Mutex
 	keys               map[string]string
 	loadErr            error
 	deleteErr          error
@@ -34,6 +36,8 @@ type memoryAPIKeyStore struct {
 }
 
 func (s *memoryAPIKeyStore) Load(controller string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.loadCalls++
 	if s.loadErr != nil {
 		return "", false, s.loadErr
@@ -43,6 +47,8 @@ func (s *memoryAPIKeyStore) Load(controller string) (string, bool, error) {
 }
 
 func (s *memoryAPIKeyStore) Save(controller, apiKey string, _ bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.saveCalls++
 	if s.keys == nil {
 		s.keys = make(map[string]string)
@@ -52,6 +58,8 @@ func (s *memoryAPIKeyStore) Save(controller, apiKey string, _ bool) error {
 }
 
 func (s *memoryAPIKeyStore) Delete(controller string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.deleteCalls++
 	s.deletedControllers = append(s.deletedControllers, controller)
 	if s.deleteErr != nil {
@@ -59,6 +67,55 @@ func (s *memoryAPIKeyStore) Delete(controller string) error {
 	}
 	delete(s.keys, controller)
 	return nil
+}
+
+func TestConcurrentSavedAPIKey401InvalidationIsSingleFlight(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "")
+	const workers = 4
+	arrived := make(chan string, workers)
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- r.Header.Get("X-API-KEY")
+		<-release
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &memoryAPIKeyStore{keys: map[string]string{cfg.BaseURL(): "saved-key"}}
+	c, err := client.NewWithStore(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, workers)
+	for range workers {
+		go func() {
+			errs <- c.DoOfficial(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+		}()
+	}
+	for range workers {
+		select {
+		case key := <-arrived:
+			if key != "saved-key" {
+				t.Fatalf("concurrent request key = %q, want saved-key", key)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent authenticated requests did not reach the controller")
+		}
+	}
+	close(release)
+	for range workers {
+		if err := <-errs; !apperr.Is(err, apperr.AuthFailed) {
+			t.Fatalf("error = %v, want auth_failed", err)
+		}
+	}
+	store.mu.Lock()
+	deletes := store.deleteCalls
+	store.mu.Unlock()
+	if deletes != 1 {
+		t.Fatalf("saved key delete calls = %d, want 1", deletes)
+	}
 }
 
 var _ authstore.Store = (*memoryAPIKeyStore)(nil)
