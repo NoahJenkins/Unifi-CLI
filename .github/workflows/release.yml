@@ -562,17 +562,28 @@ jobs:
           EXPECTED_BUNDLE_DIGEST: ${{ needs.prepare_publication.outputs.bundle_digest }}
         run: |
           [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
-          mkdir -p "$RUNNER_TEMP/source" "$RUNNER_TEMP/publication-download"
+          mkdir -p "$RUNNER_TEMP/source"
           git -C "$RUNNER_TEMP/source" init
           git -C "$RUNNER_TEMP/source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
           git -C "$RUNNER_TEMP/source" fetch --depth=1 origin "$RELEASE_COMMIT"
           git -C "$RUNNER_TEMP/source" checkout --detach FETCH_HEAD
           test "$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)" = "$RELEASE_COMMIT"
           GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/source/scripts/release-preflight.sh"
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "publication-release-$RELEASE_COMMIT" --dir "$RUNNER_TEMP/publication-download"
-          test "$(shasum -a 256 "$RUNNER_TEMP/publication-download/publication-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
+          DOWNLOAD_OK=false
+          DOWNLOAD_DIR=""
+          for ATTEMPT in 1 2 3 4 5 6; do
+            DOWNLOAD_DIR="$RUNNER_TEMP/publication-download-$ATTEMPT"
+            mkdir -p "$DOWNLOAD_DIR"
+            if gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "publication-release-$RELEASE_COMMIT" --dir "$DOWNLOAD_DIR"; then
+              DOWNLOAD_OK=true
+              break
+            fi
+            sleep 5
+          done
+          test "$DOWNLOAD_OK" = true
+          test "$(shasum -a 256 "$DOWNLOAD_DIR/publication-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
           cd "$RUNNER_TEMP/source"
-          env -u GH_TOKEN go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/publication-download/publication-release.tar" --bundle-kind publication --destination "$RUNNER_TEMP/publication"
+          env -u GH_TOKEN go run ./cmd/release-smoke --extract-bundle "$DOWNLOAD_DIR/publication-release.tar" --bundle-kind publication --destination "$RUNNER_TEMP/publication"
           RELEASE_VERSION="${RELEASE_TAG#v}"
           RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$RELEASE_COMMIT")"
           RELEASE_COMMIT_DATE="$(date -u -d "@$RELEASE_COMMIT_TIMESTAMP" +%Y-%m-%dT%H:%M:%SZ)"
