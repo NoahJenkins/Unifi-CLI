@@ -21,7 +21,7 @@ func TestPublishReleaseRequiresRemoteByteEqualityBeforePublication(t *testing.T)
 		{name: "mismatched readback", mode: "corrupt", wantError: "downloaded asset bytes differ"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			output, err, calls := runReleasePublish(t, test.mode, true)
+			output, err, calls := runReleasePublish(t, test.mode, true, true)
 			if test.wantOK && err != nil {
 				t.Fatalf("publish failed: %v\n%s", err, output)
 			}
@@ -31,7 +31,7 @@ func TestPublishReleaseRequiresRemoteByteEqualityBeforePublication(t *testing.T)
 			if test.wantError != "" && !strings.Contains(output, test.wantError) {
 				t.Fatalf("output %q missing %q", output, test.wantError)
 			}
-			published := strings.Contains(calls, "release edit ")
+			published := strings.Contains(calls, "--method PATCH repos/owner/repo/releases/42")
 			if published != test.wantOK {
 				t.Fatalf("release edit observed=%t, want %t; calls:\n%s", published, test.wantOK, calls)
 			}
@@ -40,14 +40,14 @@ func TestPublishReleaseRequiresRemoteByteEqualityBeforePublication(t *testing.T)
 }
 
 func TestPublishReleaseProcessesFinalChecksumWithoutNewline(t *testing.T) {
-	output, err, calls := runReleasePublish(t, "match", false)
+	output, err, calls := runReleasePublish(t, "match", false, true)
 	if err != nil {
 		t.Fatalf("publish skipped the final unterminated checksum record: %v\n%s", err, output)
 	}
-	if !strings.Contains(calls, "release upload ") || !strings.Contains(calls, "asset.bin") {
+	if !strings.Contains(calls, "releases/42/assets?name=asset.bin") {
 		t.Fatalf("final checksum asset was not uploaded; calls:\n%s", calls)
 	}
-	if !strings.Contains(calls, "release edit ") {
+	if !strings.Contains(calls, "--method PATCH repos/owner/repo/releases/42") {
 		t.Fatalf("verified release was not published; calls:\n%s", calls)
 	}
 	if got := strings.Count(calls, "repos/owner/repo/commits/v1.0.0-rc.1"); got != 2 {
@@ -55,7 +55,42 @@ func TestPublishReleaseProcessesFinalChecksumWithoutNewline(t *testing.T) {
 	}
 }
 
-func runReleasePublish(t *testing.T, mode string, trailingNewline bool) (string, error, string) {
+func TestPublishReleaseUsesReleaseIDForDraftOperations(t *testing.T) {
+	output, err, calls := runReleasePublish(t, "match", true, true)
+	if err != nil {
+		t.Fatalf("publish failed: %v\n%s", err, output)
+	}
+	for _, want := range []string{
+		"repos/owner/repo/releases?per_page=100",
+		"repos/owner/repo/releases/42/assets?name=asset.bin",
+		"repos/owner/repo/releases/42/assets?name=checksums.txt",
+		"--method PATCH repos/owner/repo/releases/42",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("release publisher did not use the draft release ID for %q; calls:\n%s", want, calls)
+		}
+	}
+	for _, forbidden := range []string{"release upload ", "release edit "} {
+		if strings.Contains(calls, forbidden) {
+			t.Fatalf("draft operation used the tag lookup path %q; calls:\n%s", forbidden, calls)
+		}
+	}
+}
+
+func TestPublishReleaseCreatesDraftAndCapturesID(t *testing.T) {
+	output, err, calls := runReleasePublish(t, "match", true, false)
+	if err != nil {
+		t.Fatalf("publish failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(calls, "--method POST repos/owner/repo/releases ") {
+		t.Fatalf("publisher did not create the draft through the release API; calls:\n%s", calls)
+	}
+	if strings.Contains(calls, "release create ") {
+		t.Fatalf("publisher created a draft without capturing its numeric ID; calls:\n%s", calls)
+	}
+}
+
+func runReleasePublish(t *testing.T, mode string, trailingNewline, existingDraft bool) (string, error, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dist := filepath.Join(dir, "dist")
@@ -111,9 +146,21 @@ if [[ "$1" == api ]]; then
     echo 'gh: Not Found (HTTP 404)' >&2
     exit 1
   fi
+  if [[ "$*" == *"repos/owner/repo/releases?per_page=100"* ]]; then
+    if [[ "$GH_FAKE_EXISTING" == true ]]; then
+      printf '42\tv1.0.0-rc.1\ttrue\n'
+    fi
+    exit 0
+  fi
   if [[ "$*" == *"releases/42/assets?per_page=100"* ]]; then
-    printf '101\tasset.bin\t%s\n' "$(wc -c < "$GH_FAKE_REMOTE/asset.bin" | tr -d ' ')"
-    printf '102\tchecksums.txt\t%s\n' "$(wc -c < "$GH_FAKE_REMOTE/checksums.txt" | tr -d ' ')"
+    if [[ "$*" == *".size"* ]]; then
+      if [[ -f "$GH_FAKE_REMOTE/asset.bin" ]]; then
+        printf '101\tasset.bin\t%s\n' "$(wc -c < "$GH_FAKE_REMOTE/asset.bin" | tr -d ' ')"
+      fi
+      if [[ -f "$GH_FAKE_REMOTE/checksums.txt" ]]; then
+        printf '102\tchecksums.txt\t%s\n' "$(wc -c < "$GH_FAKE_REMOTE/checksums.txt" | tr -d ' ')"
+      fi
+    fi
     exit 0
   fi
   if [[ "$*" == *"releases/assets/101"* ]]; then
@@ -125,22 +172,31 @@ if [[ "$1" == api ]]; then
     cat "$GH_FAKE_REMOTE/checksums.txt"
     exit 0
   fi
-fi
-if [[ "$1" == release && "$2" == create ]]; then
-  touch "$GH_FAKE_CREATED"
-  exit 0
-fi
-if [[ "$1" == release && "$2" == upload ]]; then
-  shift 3
-  for item in "$@"; do
-    if [[ "$item" == --clobber ]]; then break; fi
-    cp "$item" "$GH_FAKE_REMOTE/$(basename "$item")"
-  done
-  exit 0
-fi
-if [[ "$1" == release && "$2" == edit ]]; then
-  touch "$GH_FAKE_PUBLISHED"
-  exit 0
+  if [[ "$*" == *"--method POST"* && "$*" == *"releases/42/assets?name="* ]]; then
+    input=""
+    destination=""
+    previous=""
+    for argument in "$@"; do
+      if [[ "$previous" == --input ]]; then input="$argument"; fi
+      if [[ "$argument" == *"releases/42/assets?name="* ]]; then destination="$argument"; fi
+      previous="$argument"
+    done
+    cp "$input" "$GH_FAKE_REMOTE/${destination##*name=}"
+    exit 0
+  fi
+  if [[ "$*" == *"--method POST repos/owner/repo/releases "* ]]; then
+    touch "$GH_FAKE_CREATED"
+    echo 42
+    exit 0
+  fi
+  if [[ "$*" == *"--method PATCH repos/owner/repo/releases/42"* ]]; then
+    touch "$GH_FAKE_PUBLISHED"
+    exit 0
+  fi
+  if [[ "$*" == *"--method GET repos/owner/repo/releases/42"* && "$*" == *".draft"* ]]; then
+    if [[ -f "$GH_FAKE_PUBLISHED" ]]; then echo false; else echo true; fi
+    exit 0
+  fi
 fi
 echo "unexpected fake gh call: $*" >&2
 exit 2
@@ -169,6 +225,7 @@ printf '%s  %s\n' "$GH_FAKE_DIGEST" "$1"
 		"GITHUB_REF_NAME=wrong-ref",
 		"GITHUB_SHA=0000000000000000000000000000000000000002",
 		"GH_FAKE_MODE=" + mode,
+		"GH_FAKE_EXISTING=" + map[bool]string{true: "true", false: "false"}[existingDraft],
 		"GH_FAKE_LOG=" + logPath,
 		"GH_FAKE_REMOTE=" + remote,
 		"GH_FAKE_CREATED=" + createdPath,

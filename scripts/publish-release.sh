@@ -81,26 +81,73 @@ fi
 
 bash "$(dirname "$0")/release-preflight.sh"
 
-release_endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}"
-error_file="$(mktemp)"
+releases_endpoint="repos/${GITHUB_REPOSITORY}/releases"
 asset_file="$(mktemp)"
+existing_asset_file="$(mktemp)"
+release_file="$(mktemp)"
 readback_dir="$(mktemp -d)"
-trap 'rm -f "$error_file" "$asset_file"; rm -rf "$readback_dir"' EXIT
+trap 'rm -f "$asset_file" "$existing_asset_file" "$release_file"; rm -rf "$readback_dir"' EXIT
 
-if ! release_id="$(gh api --method GET "$release_endpoint" --jq '.id' 2>"$error_file")"; then
-  if [[ "$(cat "$error_file")" != *"(HTTP 404)"* ]]; then
-    cat "$error_file" >&2
+# Draft releases are intentionally absent from the tag lookup endpoint. Resolve
+# an existing exact-tag draft from the authenticated release listing and keep
+# using its immutable numeric ID for every draft operation.
+gh api --paginate "$releases_endpoint?per_page=100" --jq '.[] | [.id, .tag_name, .draft] | @tsv' > "$release_file"
+release_match="$(awk -F $'\t' -v tag="$release_tag" '$2 == tag { print $1 "\t" $3 }' "$release_file")"
+if [[ "$release_match" == *$'\n'* ]]; then
+  echo "release publish: multiple releases use the exact tag" >&2
+  exit 1
+fi
+if [[ -n "$release_match" ]]; then
+  release_id="${release_match%%$'\t'*}"
+  release_draft="${release_match#*$'\t'}"
+  if [[ "$release_draft" != true ]]; then
+    echo "release publish: exact tag is already published; refusing replacement" >&2
     exit 1
   fi
-  gh release create "$release_tag" --draft --prerelease --verify-tag --title "$release_tag" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY"
-  release_id="$(gh api --method GET "$release_endpoint" --jq '.id')"
+else
+  release_id="$(gh api --method POST "$releases_endpoint" \
+    -f "tag_name=$release_tag" \
+    -f "target_commitish=${RELEASE_COMMIT:-${GITHUB_SHA:-}}" \
+    -f "name=$release_tag" \
+    -F draft=true \
+    -F prerelease=true \
+    -F "body=@$notes_file" \
+    --jq '.id')"
 fi
 if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
   echo "release publish: invalid release ID" >&2
   exit 1
 fi
 
-gh release upload "$release_tag" "${asset_paths[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+# A retry may resume a partially populated draft. Remove only assets whose
+# names are in the locally verified manifest, and reject every unknown asset.
+gh api --paginate "$releases_endpoint/${release_id}/assets?per_page=100" --jq '.[] | [.id, .name] | @tsv' > "$existing_asset_file"
+while IFS=$'\t' read -r existing_id existing_name; do
+  [[ -z "${existing_id:-}${existing_name:-}" ]] && continue
+  expected=false
+  for name in "${asset_names[@]}"; do
+    if [[ "$name" == "$existing_name" ]]; then
+      expected=true
+      break
+    fi
+  done
+  if [[ ! "$existing_id" =~ ^[0-9]+$ || "$expected" != true ]]; then
+    echo "release publish: draft contains an unexpected remote asset" >&2
+    exit 1
+  fi
+  gh api --method DELETE "$releases_endpoint/assets/$existing_id" --silent
+done < "$existing_asset_file"
+
+for index in "${!asset_names[@]}"; do
+  name="${asset_names[$index]}"
+  local_path="${asset_paths[$index]}"
+  gh api --hostname uploads.github.com \
+    --method POST \
+    -H "Content-Type: application/octet-stream" \
+    --input "$local_path" \
+    "$releases_endpoint/${release_id}/assets?name=$name" \
+    --silent
+done
 gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.id, .name, .size] | @tsv' > "$asset_file"
 
 remote_count="$(wc -l < "$asset_file" | tr -d ' ')"
@@ -135,8 +182,8 @@ done
 # Close the tag-move window after uploads and remote readback. A moved tag
 # leaves the release as a draft and cannot relabel artifacts from GITHUB_SHA.
 bash "$(dirname "$0")/release-preflight.sh"
-gh release edit "$release_tag" --draft=false --prerelease --repo "$GITHUB_REPOSITORY"
-if [[ "$(gh api --method GET "$release_endpoint" --jq '.draft')" != "false" ]]; then
+gh api --method PATCH "$releases_endpoint/$release_id" -F draft=false -F prerelease=true --silent
+if [[ "$(gh api --method GET "$releases_endpoint/$release_id" --jq '.draft')" != "false" ]]; then
   echo "release publish: release did not become public" >&2
   exit 1
 fi

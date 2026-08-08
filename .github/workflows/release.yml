@@ -560,10 +560,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_BUNDLE_DIGEST: ${{ needs.prepare_publication.outputs.bundle_digest }}
+          WORKFLOW_COMMIT: ${{ github.sha }}
         run: |
           [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORKFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           mkdir -p "$RUNNER_TEMP/source"
           git -C "$RUNNER_TEMP/source" init
           git -C "$RUNNER_TEMP/source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
@@ -572,6 +574,12 @@ jobs:
           git -C "$RUNNER_TEMP/source" checkout --detach "$RELEASE_COMMIT"
           test "$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)" = "$RELEASE_COMMIT"
           GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/source/scripts/release-preflight.sh"
+          mkdir -p "$RUNNER_TEMP/publisher-source"
+          git -C "$RUNNER_TEMP/publisher-source" init
+          git -C "$RUNNER_TEMP/publisher-source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git -C "$RUNNER_TEMP/publisher-source" fetch --depth=1 origin "$WORKFLOW_COMMIT"
+          git -C "$RUNNER_TEMP/publisher-source" checkout --detach "$WORKFLOW_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/publisher-source" rev-parse HEAD)" = "$WORKFLOW_COMMIT"
           DOWNLOAD_OK=false
           DOWNLOAD_DIR=""
           for ATTEMPT in 1 2 3 4 5 6; do
@@ -604,4 +612,4 @@ jobs:
           done
           env -u GH_TOKEN go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json" --expected-commit "$RELEASE_COMMIT"
           env -u GH_TOKEN go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/publication/dist" --expected-version "$RELEASE_VERSION" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/publisher-trusted" --trusted-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json"
-          GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/docs/releases/v1.0.0-rc.1.md"
+          GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/publisher-source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/docs/releases/v1.0.0-rc.1.md"
