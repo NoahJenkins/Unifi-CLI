@@ -28,7 +28,10 @@ fi
 
 declare -a asset_names=("checksums.txt")
 declare -a asset_paths=("$checksums_file")
-while read -r digest filename extra; do
+# Bash read returns a failure status when the final record is not newline
+# terminated even though it populated the fields. Process that record so this
+# publisher has the same complete-manifest semantics as the Go verifier.
+while read -r digest filename extra || [[ -n "${digest:-}${filename:-}${extra:-}" ]]; do
   if [[ -z "${digest:-}" || -z "${filename:-}" || -n "${extra:-}" || ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
     echo "release publish: malformed checksum manifest" >&2
     exit 1
@@ -115,6 +118,9 @@ for index in "${!asset_names[@]}"; do
   fi
 done
 
+# Close the tag-move window after uploads and remote readback. A moved tag
+# leaves the release as a draft and cannot relabel artifacts from GITHUB_SHA.
+bash "$(dirname "$0")/release-preflight.sh"
 gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --repo "$GITHUB_REPOSITORY"
 if [[ "$(gh api --method GET "$release_endpoint" --jq '.draft')" != "false" ]]; then
   echo "release publish: release did not become public" >&2

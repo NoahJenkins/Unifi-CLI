@@ -27,12 +27,14 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
 - [ ] Rebase and ensure hosted CI passes on the unchanged candidate commit.
 - [ ] Run GoReleaser 2.17.1 checks and smoke every generated platform artifact.
-- [ ] Before GoReleaser, cross-build all six trusted binaries from the exact
-      checkout with the release version, commit, and commit-date linker values;
-      generate an exact path, Git-mode, and SHA-256 source manifest from the
-      release commit; and keep all trusted inputs outside `dist`. In the tag
-      workflow, confirm
-      `go run ./cmd/release-smoke --artifacts dist --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/unifi-trusted" --trusted-source-manifest "$RUNNER_TEMP/unifi-source-manifest.json"`
+- [ ] In an isolated job that never runs Syft or GoReleaser, cross-build all six
+      trusted binaries from the exact checkout with the release version,
+      commit, and commit-date linker values; generate an exact path, Git-mode,
+      and SHA-256 source manifest; seal those inputs; and expose the seal digest
+      as a job output. Generate and seal GoReleaser output in a separate job.
+      A third read-only job must verify both seals before comparing generated
+      artifacts with the isolated trusted inputs. Confirm its
+      `go run ./cmd/release-smoke --artifacts ... --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries ... --trusted-source-manifest ...`
       verifies the source archive, all six exact archive names and layouts,
       their exhaustive SHA-256 entries, bound CycloneDX SBOMs, embedded build
       settings, byte-for-byte equality between every archived executable and
@@ -43,22 +45,27 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       equality is proven, the six native runner jobs extract their matching
       archive and run the same four-command executable contract before release.
 - [ ] Confirm GoReleaser runs with `--skip=publish`, so artifact generation has
-      no contents-write, attestation, or OIDC authority. The transferred bundle
-      must be reverified before the six native runner smokes, reverified again
-      before attestation and publication, and uploaded only by the final
-      contents-write job. That job must download every exact-tag draft asset by
-      asset ID and compare its bytes with the verified local file before making
-      the release public. Any mismatch must leave the release as a draft.
-- [ ] Confirm the exact-tag preflight runs before Syft and GoReleaser. A missing
+      no contents-write, attestation, or OIDC authority. Every transferred tar
+      must match the producing job's SHA-256 output before extraction. Reverify
+      the sealed bundle before the six native runner smokes, attestation, and
+      publication staging. The final contents-write job must contain no
+      third-party actions: it downloads the sealed minimal publication bundle
+      with `gh`, verifies its independent digest, uploads only the checksum
+      allowlist, downloads every draft asset by ID, and compares exact bytes
+      before making the release public. Any mismatch must leave a draft.
+- [ ] Confirm the exact-tag preflight binds the remote tag to `GITHUB_SHA` and
+      runs before Syft and GoReleaser and again immediately before publication.
+      A missing
       release or an existing draft may proceed; an existing published release,
       malformed response, repository-access failure, authentication failure,
       or unexpected API error must stop the workflow before release mutation.
       Concurrent runs for the same repository and exact ref are serialized and
       never cancel an in-progress release run.
 - [ ] Verify SHA-256 checksums, provenance, the source archive's exact full-commit
-      PAX binding, every SBOM's exact archived-executable path and digest, and
-      an exact library/version inventory derived from each independently built
-      trusted binary. Reject setuid, setgid, and sticky archive entries.
+      PAX binding, every SBOM's single exact archived-executable file component,
+      all reported SHA-1/SHA-256 values, and an exact library/version inventory
+      derived from each independently built trusted binary. Reject unrelated
+      file claims and setuid, setgid, and sticky archive entries.
 - [ ] Run the authenticated read-only live suite with verified TLS.
 - [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.

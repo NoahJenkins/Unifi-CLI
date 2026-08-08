@@ -170,6 +170,9 @@ func (s *FirewallService) GetZone(ctx context.Context, query string) (FirewallZo
 	if err := s.api.DoOfficial(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return FirewallZone{}, err
 	}
+	if strField(raw, "id") != zone.ID {
+		return FirewallZone{}, apperr.New(apperr.Conflict, "firewall zone detail ID does not match requested zone")
+	}
 	return NormalizeFirewallZone(raw), nil
 }
 

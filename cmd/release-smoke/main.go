@@ -935,6 +935,7 @@ func verifyChecksum(ctx context.Context, path, want string) error {
 type archiveExecutable struct {
 	extractedPath string
 	relativePath  string
+	sha1          string
 	sha256        string
 }
 
@@ -1030,9 +1031,15 @@ func inspectReleaseArchive(ctx context.Context, archivePath string, target targe
 		cleanup()
 		return archiveExecutable{}, func() {}, err
 	}
+	digestSHA1, err := sha1File(ctx, destination, maxReleaseEntryBytes)
+	if err != nil {
+		cleanup()
+		return archiveExecutable{}, func() {}, err
+	}
 	return archiveExecutable{
 		extractedPath: destination,
 		relativePath:  expectedRoot + "/" + target.executableName(),
+		sha1:          digestSHA1,
 		sha256:        digest,
 	}, cleanup, nil
 }
@@ -1580,7 +1587,7 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 	if len(bom.Components) == 0 {
 		return fmt.Errorf("SBOM components are empty")
 	}
-	executableComponents := 0
+	fileComponents := 0
 	observedInventory := make(map[sbomComponentIdentity]struct{}, len(expectedInventory))
 	for i, component := range bom.Components {
 		if component.Name == "" {
@@ -1597,9 +1604,14 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 			}
 			observedInventory[identity] = struct{}{}
 		case "file":
+			fileComponents++
+			if !matchesSyftExecutablePath(component.Name, executable.relativePath) {
+				return fmt.Errorf("SBOM contains unrelated file component %q", component.Name)
+			}
 			if len(component.Hashes) == 0 {
 				return fmt.Errorf("SBOM file component %d has no hashes", i)
 			}
+			sha1Hashes := 0
 			sha256Hashes := 0
 			for _, hash := range component.Hashes {
 				wantBytes := 0
@@ -1617,23 +1629,25 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 				}
 				if hash.Algorithm == "SHA-256" {
 					sha256Hashes++
-					if matchesSyftExecutablePath(component.Name, executable.relativePath) && !strings.EqualFold(hash.Content, executable.sha256) {
+					if !strings.EqualFold(hash.Content, executable.sha256) {
 						return fmt.Errorf("SBOM executable SHA-256 = %s, want %s", hash.Content, executable.sha256)
+					}
+				} else if hash.Algorithm == "SHA-1" {
+					sha1Hashes++
+					if executable.sha1 == "" || !strings.EqualFold(hash.Content, executable.sha1) {
+						return fmt.Errorf("SBOM executable SHA-1 does not match trusted bytes")
 					}
 				}
 			}
-			if matchesSyftExecutablePath(component.Name, executable.relativePath) {
-				executableComponents++
-				if sha256Hashes != 1 {
-					return fmt.Errorf("SBOM executable component has %d SHA-256 hashes, want 1", sha256Hashes)
-				}
+			if sha256Hashes != 1 || sha1Hashes > 1 {
+				return fmt.Errorf("SBOM executable component has %d SHA-256 and %d SHA-1 hashes, want exactly one SHA-256 and at most one SHA-1", sha256Hashes, sha1Hashes)
 			}
 		default:
 			return fmt.Errorf("SBOM component %d has unsupported type %q", i, component.Type)
 		}
 	}
-	if executableComponents != 1 {
-		return fmt.Errorf("SBOM matching executable component count = %d, want 1", executableComponents)
+	if fileComponents != 1 {
+		return fmt.Errorf("SBOM file component count = %d, want exactly 1", fileComponents)
 	}
 	if len(observedInventory) != len(expectedInventory) {
 		return fmt.Errorf("SBOM dependency component count = %d, want %d from trusted binary", len(observedInventory), len(expectedInventory))
@@ -1666,6 +1680,19 @@ func sha256File(ctx context.Context, path string, maxBytes int64) (string, error
 	}
 	defer file.Close()
 	hash := sha256.New()
+	if _, err := io.Copy(hash, contextReader{ctx: ctx, reader: file}); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func sha1File(ctx context.Context, path string, maxBytes int64) (string, error) {
+	file, _, err := openReleaseFile(path, maxBytes)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha1.New()
 	if _, err := io.Copy(hash, contextReader{ctx: ctx, reader: file}); err != nil {
 		return "", err
 	}

@@ -4,12 +4,32 @@ set -euo pipefail
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
+: "${GITHUB_SHA:?GITHUB_SHA is required}"
+
+if [[ ! "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "release preflight: invalid repository identity" >&2
+  exit 2
+fi
+if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "release preflight: invalid release tag" >&2
+  exit 2
+fi
+if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "release preflight: invalid workflow commit" >&2
+  exit 2
+fi
 
 repository_endpoint="repos/${GITHUB_REPOSITORY}"
 release_endpoint="${repository_endpoint}/releases/tags/${GITHUB_REF_NAME}"
 
 if ! gh api --method GET "$repository_endpoint" --silent; then
   echo "release preflight: cannot verify repository access" >&2
+  exit 1
+fi
+
+resolved_commit="$(gh api --method GET "${repository_endpoint}/commits/${GITHUB_REF_NAME}" --jq '.sha')"
+if [[ "$resolved_commit" != "$GITHUB_SHA" ]]; then
+  echo "release preflight: release tag does not resolve to workflow commit" >&2
   exit 1
 fi
 

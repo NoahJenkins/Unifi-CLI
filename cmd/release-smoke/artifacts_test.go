@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -665,6 +666,12 @@ func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
 				"type": "application", "name": "injected", "version": "UNKNOWN",
 			})
 		},
+		"extra file component": func(bom map[string]any) {
+			bom["components"] = append(bom["components"].([]any), map[string]any{
+				"type": "file", "name": "/private/tmp/unrelated",
+				"hashes": []any{map[string]any{"alg": "SHA-256", "content": strings.Repeat("a", 64)}},
+			})
+		},
 		"changed trusted version": func(bom map[string]any) {
 			components := bom["components"].([]any)
 			components[0].(map[string]any)["version"] = "v9.9.9"
@@ -708,7 +715,7 @@ func TestVerifyArtifactsRejectsSBOMExecutableMismatch(t *testing.T) {
 		},
 		"duplicate matching file component": func(bom map[string]any) {
 			components := bom["components"].([]any)
-			file := components[1].(map[string]any)
+			file := findFixtureFileComponent(t, bom)
 			duplicate := map[string]any{"type": file["type"], "name": file["name"], "hashes": file["hashes"]}
 			bom["components"] = append(components, duplicate)
 		},
@@ -718,6 +725,10 @@ func TestVerifyArtifactsRejectsSBOMExecutableMismatch(t *testing.T) {
 		"fabricated digest": func(file map[string]any) {
 			file["hashes"] = []any{map[string]any{"alg": "SHA-256", "content": strings.Repeat("f", 64)}}
 		},
+		"fabricated secondary digest": func(file map[string]any) {
+			file["hashes"] = append(file["hashes"].([]any),
+				map[string]any{"alg": "SHA-1", "content": strings.Repeat("f", 40)})
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -726,14 +737,25 @@ func TestVerifyArtifactsRejectsSBOMExecutableMismatch(t *testing.T) {
 			if strings.Contains(name, "file component") {
 				mutate(bom)
 			} else {
-				components := bom["components"].([]any)
-				mutate(components[1].(map[string]any))
+				mutate(findFixtureFileComponent(t, bom))
 			}
 			clone.writeSBOM(t, currentTarget, bom)
 			clone.writeMetadata(t)
 			verifyReleaseFixtureFails(t, clone)
 		})
 	}
+}
+
+func findFixtureFileComponent(t *testing.T, bom map[string]any) map[string]any {
+	t.Helper()
+	for _, raw := range bom["components"].([]any) {
+		component := raw.(map[string]any)
+		if component["type"] == "file" {
+			return component
+		}
+	}
+	t.Fatal("fixture SBOM has no file component")
+	return nil
 }
 
 func TestVerifyArtifactsRejectsInvalidMetadataRecord(t *testing.T) {
@@ -1253,11 +1275,13 @@ func (f *releaseFixture) sbomComponents(target target) []any {
 }
 
 func (f *releaseFixture) sbomFileComponent(target target) map[string]any {
+	digestSHA1 := sha1.Sum(f.binaries[target])
 	digest := sha256.Sum256(f.binaries[target])
 	return map[string]any{
 		"type": "file",
 		"name": f.syftExecutablePath(target),
 		"hashes": []any{
+			map[string]any{"alg": "SHA-1", "content": hex.EncodeToString(digestSHA1[:])},
 			map[string]any{"alg": "SHA-256", "content": hex.EncodeToString(digest[:])},
 		},
 	}

@@ -21,7 +21,7 @@ func TestPublishReleaseRequiresRemoteByteEqualityBeforePublication(t *testing.T)
 		{name: "mismatched readback", mode: "corrupt", wantError: "downloaded asset bytes differ"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			output, err, calls := runReleasePublish(t, test.mode)
+			output, err, calls := runReleasePublish(t, test.mode, true)
 			if test.wantOK && err != nil {
 				t.Fatalf("publish failed: %v\n%s", err, output)
 			}
@@ -39,7 +39,23 @@ func TestPublishReleaseRequiresRemoteByteEqualityBeforePublication(t *testing.T)
 	}
 }
 
-func runReleasePublish(t *testing.T, mode string) (string, error, string) {
+func TestPublishReleaseProcessesFinalChecksumWithoutNewline(t *testing.T) {
+	output, err, calls := runReleasePublish(t, "match", false)
+	if err != nil {
+		t.Fatalf("publish skipped the final unterminated checksum record: %v\n%s", err, output)
+	}
+	if !strings.Contains(calls, "release upload ") || !strings.Contains(calls, "asset.bin") {
+		t.Fatalf("final checksum asset was not uploaded; calls:\n%s", calls)
+	}
+	if !strings.Contains(calls, "release edit ") {
+		t.Fatalf("verified release was not published; calls:\n%s", calls)
+	}
+	if got := strings.Count(calls, "repos/owner/repo/commits/v1.0.0-rc.1"); got != 2 {
+		t.Fatalf("release tag was verified %d times, want before upload and before publication; calls:\n%s", got, calls)
+	}
+}
+
+func runReleasePublish(t *testing.T, mode string, trailingNewline bool) (string, error, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dist := filepath.Join(dir, "dist")
@@ -55,7 +71,10 @@ func runReleasePublish(t *testing.T, mode string) (string, error, string) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(asset)
-	manifest := hex.EncodeToString(digest[:]) + "  asset.bin\n"
+	manifest := hex.EncodeToString(digest[:]) + "  asset.bin"
+	if trailingNewline {
+		manifest += "\n"
+	}
 	if err := os.WriteFile(filepath.Join(dist, "checksums.txt"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +92,10 @@ printf '%s ' "$@" >> "$GH_FAKE_LOG"
 printf '\n' >> "$GH_FAKE_LOG"
 if [[ "$1" == api ]]; then
   if [[ "$*" == *"repos/owner/repo --silent"* ]]; then
+    exit 0
+  fi
+  if [[ "$*" == *"repos/owner/repo/commits/v1.0.0-rc.1"* ]]; then
+    echo 0000000000000000000000000000000000000001
     exit 0
   fi
   if [[ "$*" == *"releases/tags/v1.0.0-rc.1"* && "$*" == *".draft"* ]]; then
@@ -129,6 +152,7 @@ exit 2
 		"GH_TOKEN=test-token",
 		"GITHUB_REPOSITORY=owner/repo",
 		"GITHUB_REF_NAME=v1.0.0-rc.1",
+		"GITHUB_SHA=0000000000000000000000000000000000000001",
 		"GH_FAKE_MODE=" + mode,
 		"GH_FAKE_LOG=" + logPath,
 		"GH_FAKE_REMOTE=" + remote,

@@ -250,17 +250,17 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		"args: release --clean --skip=publish --release-notes docs/releases/v1.0.0-rc.1.md",
 		"fetch-depth: 0",
 		"persist-credentials: false",
-		"include-hidden-files: true",
 		"subject-path: |",
-		"dist/*.tar.gz",
-		"dist/*.zip",
-		"dist/checksums.txt",
+		"${{ runner.temp }}/attest/*.tar.gz",
+		"${{ runner.temp }}/attest/*.zip",
+		"${{ runner.temp }}/attest/checksums.txt",
 		"RELEASE_COMMIT_DATE=\"$(date -u -d \"@$RELEASE_COMMIT_TIMESTAMP\" +%Y-%m-%dT%H:%M:%SZ)\"",
 		"for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do",
 		"GOOS=\"$GOOS\" GOARCH=\"$GOARCH\" go build -trimpath -ldflags \"$RELEASE_LDFLAGS\" -o \"$OUTPUT\" ./cmd/unifi",
 		"go run ./cmd/release-smoke --write-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\" --expected-commit \"$GITHUB_SHA\"",
-		"go run ./cmd/release-smoke --artifacts dist --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-binaries \"$RUNNER_TEMP/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\"",
-		"bash ./scripts/publish-release.sh dist docs/releases/v1.0.0-rc.1.md",
+		"go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/release-inputs/dist\" --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-binaries \"$RUNNER_TEMP/release-inputs/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/release-inputs/unifi-source-manifest.json\"",
+		"gh run download \"$GITHUB_RUN_ID\" --repo \"$GITHUB_REPOSITORY\" --name \"publication-release-$GITHUB_SHA\"",
+		"bash \"$RUNNER_TEMP/publication/scripts/publish-release.sh\"",
 		"go run ./cmd/release-smoke --binary \"$BINARY\" --expected-version \"$RELEASE_VERSION\" --expected-commit \"$GITHUB_SHA\"",
 		"ubuntu-24.04-arm",
 		"macos-15-intel",
@@ -273,9 +273,12 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 
 	jobs := mapValue(t, workflow, "jobs")
-	buildJob := mapValue(t, jobs, "build_verify")
+	trustedJob := mapValue(t, jobs, "trusted_inputs")
+	generateJob := mapValue(t, jobs, "generate")
+	verifyJob := mapValue(t, jobs, "verify")
 	smokeJob := mapValue(t, jobs, "smoke_artifacts")
 	attestJob := mapValue(t, jobs, "attest")
+	prepareJob := mapValue(t, jobs, "prepare_publication")
 	publishJob := mapValue(t, jobs, "publish")
 	assertPermissions := func(name string, job map[string]any, want map[string]any) {
 		t.Helper()
@@ -284,28 +287,52 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 			t.Errorf("%s permissions = %v, want %v", name, got, want)
 		}
 	}
-	assertPermissions("build", buildJob, map[string]any{"contents": "read"})
+	assertPermissions("trusted", trustedJob, map[string]any{"contents": "read"})
+	assertPermissions("generate", generateJob, map[string]any{"contents": "read"})
+	assertPermissions("verify", verifyJob, map[string]any{"actions": "read", "contents": "read"})
 	assertPermissions("smoke", smokeJob, map[string]any{"actions": "read", "contents": "read"})
 	assertPermissions("attest", attestJob, map[string]any{"actions": "read", "attestations": "write", "contents": "read", "id-token": "write"})
+	assertPermissions("prepare", prepareJob, map[string]any{"actions": "read", "contents": "read"})
 	assertPermissions("publish", publishJob, map[string]any{"actions": "read", "contents": "write"})
-	if got := stringSliceValue(t, attestJob, "needs"); !slices.Equal(got, []string{"build_verify", "smoke_artifacts"}) {
-		t.Errorf("attest needs = %v, want [build_verify smoke_artifacts]", got)
+	if got := stringSliceValue(t, verifyJob, "needs"); !slices.Equal(got, []string{"trusted_inputs", "generate"}) {
+		t.Errorf("verify needs = %v, want [trusted_inputs generate]", got)
 	}
-	if got := stringSliceValue(t, publishJob, "needs"); !slices.Equal(got, []string{"build_verify", "attest"}) {
-		t.Errorf("publish needs = %v, want [build_verify attest]", got)
+	if got := stringSliceValue(t, smokeJob, "needs"); !slices.Equal(got, []string{"verify"}) {
+		t.Errorf("smoke needs = %v, want [verify]", got)
+	}
+	if got := stringSliceValue(t, attestJob, "needs"); !slices.Equal(got, []string{"verify", "smoke_artifacts"}) {
+		t.Errorf("attest needs = %v, want [verify smoke_artifacts]", got)
+	}
+	if got := stringSliceValue(t, prepareJob, "needs"); !slices.Equal(got, []string{"verify", "attest"}) {
+		t.Errorf("prepare needs = %v, want [verify attest]", got)
+	}
+	if got := stringSliceValue(t, publishJob, "needs"); !slices.Equal(got, []string{"prepare_publication"}) {
+		t.Errorf("publish needs = %v, want [prepare_publication]", got)
 	}
 
-	buildSteps := jobSteps(t, buildJob)
-	preflight := stepIndex(t, buildSteps, "Refuse published release replacement")
-	trusted := stepIndex(t, buildSteps, "Build trusted all-target binaries and source manifest")
-	syft := stepIndex(t, buildSteps, "Install pinned Syft for archive SBOMs")
-	build := stepIndex(t, buildSteps, "Build release artifacts without publishing")
-	verify := stepIndex(t, buildSteps, "Verify local artifact set")
-	upload := stepIndex(t, buildSteps, "Transfer verified release bundle")
-	if !(preflight < trusted && trusted < syft && syft < build && build < verify && verify < upload) {
-		t.Errorf("unsafe build ordering: preflight=%d trusted=%d syft=%d build=%d verify=%d upload=%d", preflight, trusted, syft, build, verify, upload)
+	trustedSteps := jobSteps(t, trustedJob)
+	trustedBuild := stepIndex(t, trustedSteps, "Build trusted all-target binaries and source manifest")
+	trustedSeal := stepIndex(t, trustedSteps, "Seal trusted input bundle")
+	trustedUpload := stepIndex(t, trustedSteps, "Transfer sealed trusted inputs")
+	if !(trustedBuild < trustedSeal && trustedSeal < trustedUpload) {
+		t.Errorf("unsafe trusted-input ordering: build=%d seal=%d upload=%d", trustedBuild, trustedSeal, trustedUpload)
 	}
-	preflightStep := buildSteps[preflight].(map[string]any)
+	for _, use := range allUses(trustedJob) {
+		if strings.Contains(use, "goreleaser") || strings.Contains(use, "anchore") {
+			t.Errorf("trusted-input job executes artifact generator %q", use)
+		}
+	}
+
+	generateSteps := jobSteps(t, generateJob)
+	preflight := stepIndex(t, generateSteps, "Refuse moved tags or published release replacement")
+	syft := stepIndex(t, generateSteps, "Install pinned Syft for archive SBOMs")
+	build := stepIndex(t, generateSteps, "Build release artifacts without publishing")
+	generateSeal := stepIndex(t, generateSteps, "Seal generated artifact bundle")
+	generateUpload := stepIndex(t, generateSteps, "Transfer generated artifact bundle")
+	if !(preflight < syft && syft < build && build < generateSeal && generateSeal < generateUpload) {
+		t.Errorf("unsafe generator ordering: preflight=%d syft=%d build=%d seal=%d upload=%d", preflight, syft, build, generateSeal, generateUpload)
+	}
+	preflightStep := generateSteps[preflight].(map[string]any)
 	if fmt.Sprint(preflightStep["run"]) != "bash ./scripts/release-preflight.sh" {
 		t.Errorf("preflight command = %q", preflightStep["run"])
 	}
@@ -313,15 +340,30 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	if fmt.Sprint(preflightEnv["GH_TOKEN"]) != "${{ secrets.GITHUB_TOKEN }}" {
 		t.Errorf("preflight GH_TOKEN = %q", preflightEnv["GH_TOKEN"])
 	}
-	publishSteps := jobSteps(t, publishJob)
-	reverify := stepIndex(t, publishSteps, "Reverify transferred release bundle")
-	publish := stepIndex(t, publishSteps, "Upload, read back, and publish exact assets")
-	if publish != len(publishSteps)-1 || reverify >= publish {
-		t.Errorf("publish job ordering is unsafe: reverify=%d publish=%d steps=%d", reverify, publish, len(publishSteps))
+	verifySteps := jobSteps(t, verifyJob)
+	downloadTrusted := stepIndex(t, verifySteps, "Download trusted input bundle")
+	downloadGenerated := stepIndex(t, verifySteps, "Download generated artifact bundle")
+	unseal := stepIndex(t, verifySteps, "Verify bundle seals and extract")
+	compare := stepIndex(t, verifySteps, "Verify generated artifacts against isolated trusted inputs")
+	verifiedSeal := stepIndex(t, verifySteps, "Seal verified release bundle")
+	verifiedUpload := stepIndex(t, verifySteps, "Transfer sealed verified release bundle")
+	if !(downloadTrusted < unseal && downloadGenerated < unseal && unseal < compare && compare < verifiedSeal && verifiedSeal < verifiedUpload) {
+		t.Errorf("unsafe verification ordering: trusted=%d generated=%d unseal=%d compare=%d seal=%d upload=%d", downloadTrusted, downloadGenerated, unseal, compare, verifiedSeal, verifiedUpload)
 	}
-	publishStep := publishSteps[publish].(map[string]any)
-	if run := fmt.Sprint(publishStep["run"]); run != "bash ./scripts/publish-release.sh dist docs/releases/v1.0.0-rc.1.md" {
-		t.Errorf("publish command = %q", run)
+
+	if uses := allUses(publishJob); len(uses) != 0 {
+		t.Errorf("write-capable publish job must not run third-party actions: %v", uses)
+	}
+	publishSteps := jobSteps(t, publishJob)
+	if len(publishSteps) != 1 {
+		t.Fatalf("publish job steps = %d, want one sealed-shell publication step", len(publishSteps))
+	}
+	publishStep := publishSteps[0].(map[string]any)
+	run := fmt.Sprint(publishStep["run"])
+	for _, want := range []string{"gh run download", "shasum -a 256", "publish-release.sh"} {
+		if !strings.Contains(run, want) {
+			t.Errorf("minimal publish step missing %q", want)
+		}
 	}
 	env := mapValue(t, publishStep, "env")
 	if fmt.Sprint(env["GH_TOKEN"]) != "${{ secrets.GITHUB_TOKEN }}" {

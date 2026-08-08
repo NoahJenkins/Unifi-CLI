@@ -423,6 +423,14 @@ func TestPortUpdateRejectsUnboundOrLossyOverrideDocuments(t *testing.T) {
 			rest: map[string]any{"_id": "other-switch", "port_overrides": []any{}},
 		},
 		{
+			name: "missing override document",
+			rest: map[string]any{"_id": "sw1"},
+		},
+		{
+			name: "null override document",
+			rest: map[string]any{"_id": "sw1", "port_overrides": nil},
+		},
+		{
 			name: "malformed override element",
 			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 12}, "discarded"}},
 		},

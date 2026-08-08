@@ -377,7 +377,11 @@ func (s *PortService) loadRestPortOverrides(ctx context.Context, devID string) (
 	if strField(raw[0], "_id", "id") != devID {
 		return nil, apperr.New(apperr.Conflict, "port override detail ID does not match requested device")
 	}
-	overrides, err := strictPortOverrides(raw[0]["port_overrides"])
+	rawOverrides, present := raw[0]["port_overrides"]
+	if !present || rawOverrides == nil {
+		return nil, apperr.New(apperr.Conflict, "port override detail is missing the complete override document")
+	}
+	overrides, err := strictPortOverrides(rawOverrides)
 	if err != nil {
 		return nil, err
 	}

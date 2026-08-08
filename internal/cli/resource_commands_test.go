@@ -220,7 +220,15 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 			}
 			encoded, _ := json.Marshal(devices)
 			responses["/proxy/network/api/s/default/stat/device"] = string(encoded)
-			responses[r.URL.Path] = string(encoded)
+			var restDevices []map[string]any
+			_ = json.Unmarshal([]byte(responses[r.URL.Path]), &restDevices)
+			for _, device := range restDevices {
+				for key, value := range body {
+					device[key] = value
+				}
+			}
+			restEncoded, _ := json.Marshal(restDevices)
+			responses[r.URL.Path] = string(restEncoded)
 			_, _ = io.WriteString(w, `{"data":[]}`)
 			return
 		}

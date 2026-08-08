@@ -21,6 +21,7 @@ func TestReleasePreflightAllowsOnlyAbsentOrDraftExactTag(t *testing.T) {
 		{name: "published", mode: "published", wantText: "already published"},
 		{name: "API error", mode: "error", wantText: "HTTP 401"},
 		{name: "repository auth error", mode: "repo-error", wantText: "HTTP 401"},
+		{name: "moved tag", mode: "tag-moved", wantText: "does not resolve to workflow commit"},
 		{name: "malformed response", mode: "malformed", wantText: "unexpected draft value"},
 	}
 	for _, test := range tests {
@@ -39,7 +40,7 @@ func TestReleasePreflightAllowsOnlyAbsentOrDraftExactTag(t *testing.T) {
 	}
 }
 
-func TestReleasePreflightQuotesExactRepositoryAndTag(t *testing.T) {
+func TestReleasePreflightUsesExactRepositoryAndTag(t *testing.T) {
 	_, err, args := runReleasePreflight(t, "draft", true)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +49,7 @@ func TestReleasePreflightQuotesExactRepositoryAndTag(t *testing.T) {
 		"api",
 		"--method",
 		"GET",
-		"repos/owner/repo/releases/tags/v1.0.0-rc.1;printf-pwned",
+		"repos/owner/repo/releases/tags/v1.0.0-rc.1",
 		"--jq",
 		".draft",
 	}
@@ -79,6 +80,14 @@ if [[ "$*" == *"repos/owner/repo --silent"* ]]; then
   fi
   exit 0
 fi
+if [[ "$*" == *"repos/owner/repo/commits/v1.0.0-rc.1"* ]]; then
+  if [[ "$GH_FAKE_MODE" == "tag-moved" ]]; then
+    printf '%040d\n' 2
+  else
+    printf '%040d\n' 1
+  fi
+  exit 0
+fi
 case "$GH_FAKE_MODE" in
   absent) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   draft) echo true ;;
@@ -95,7 +104,8 @@ esac
 	env := []string{
 		"PATH=" + dir + ":/usr/bin:/bin",
 		"GITHUB_REPOSITORY=owner/repo",
-		"GITHUB_REF_NAME=v1.0.0-rc.1;printf-pwned",
+		"GITHUB_REF_NAME=v1.0.0-rc.1",
+		"GITHUB_SHA=0000000000000000000000000000000000000001",
 		"GH_FAKE_ARGS=" + argsPath,
 		"GH_FAKE_MODE=" + mode,
 	}

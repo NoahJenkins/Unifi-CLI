@@ -174,6 +174,12 @@ func TestFirewallZoneListAndGetUseOfficialSchemaAndSelectors(t *testing.T) {
 	assertFirewallCall(t, api.calls, http.MethodGet, client.OfficialPath("sites", firewallSiteID, "firewall", "zones", internalZoneID), 1)
 
 	api = newModernFirewallAPI(t)
+	api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "zones", internalZoneID)]["id"] = externalZoneID
+	if _, err := domain.NewFirewallService(api).GetZone(ctx, "Internal"); !apperr.Is(err, apperr.Conflict) {
+		t.Fatalf("mismatched zone detail error = %v, want conflict", err)
+	}
+
+	api = newModernFirewallAPI(t)
 	api.zones = append(api.zones, map[string]any{
 		"id": "ffffffff-ffff-4fff-8fff-fffffffffff9", "name": "Internal", "networkIds": []any{},
 		"metadata": map[string]any{"origin": "USER_DEFINED"},
