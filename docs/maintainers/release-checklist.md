@@ -37,7 +37,7 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       into disjoint `trusted` and `generated` roots, and reject archive members
       outside each bundle's allowlisted namespace before comparing generated
       artifacts with the isolated trusted inputs. Confirm its
-      `go run ./cmd/release-smoke --artifacts ... --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries ... --trusted-source-manifest ...`
+      `go run ./cmd/release-smoke --artifacts ... --expected-version "${RELEASE_TAG#v}" --expected-commit "$RELEASE_COMMIT" --trusted-binaries ... --trusted-source-manifest ...`
       verifies the source archive, all six exact archive names and layouts,
       their exhaustive SHA-256 entries, bound CycloneDX SBOMs, embedded build
       settings, byte-for-byte equality between every archived executable and
@@ -55,13 +55,14 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       variables and validate them before comparison; never interpolate them
       into shell source. The final contents-write job must contain no
       third-party actions and must never execute code supplied by an artifact:
-      it fetches the exact `GITHUB_SHA`, safely extracts the data-only
+      it fetches the exact `RELEASE_COMMIT`, safely extracts the data-only
       publication bundle, independently rebuilds all six trusted binaries and
       the source manifest, reruns the complete artifact verifier, then executes
       only the publisher from that exact commit. It uploads only the checksum
       allowlist, downloads every draft asset by ID, and compares exact bytes
       before making the release public. Any mismatch must leave a draft.
-- [ ] Confirm the exact-tag preflight binds the remote tag to `GITHUB_SHA` and
+- [ ] Confirm the exact-tag preflight binds `RELEASE_TAG` to
+      `RELEASE_COMMIT` and
       runs before Syft and GoReleaser and again immediately before publication.
       A missing
       release or an existing draft may proceed; an existing published release,
@@ -69,6 +70,15 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       or unexpected API error must stop the workflow before release mutation.
       Concurrent runs for the same repository and exact ref are serialized and
       never cancel an in-progress release run.
+- [ ] If a release run fails before publication, fix and merge the workflow;
+      never move or replace the existing tag. Resume the complete workflow
+      manually with the existing tag and its exact 40-character commit. The
+      resume path must pass the same preflight, independent builds, bundle
+      comparisons, six native artifact smokes, provenance, and publisher gates
+      as a tag-triggered run. Its signed SLSA predicate must identify both the
+      immutable tag commit as the release source and the newer workflow commit
+      that defines the recovery build; default dispatch provenance alone names
+      only the workflow commit and is insufficient.
 - [ ] Verify SHA-256 checksums, provenance, the source archive's exact full-commit
       PAX binding, every SBOM's single exact archived-executable file component,
       all reported SHA-1/SHA-256 values, and an exact library/version inventory
