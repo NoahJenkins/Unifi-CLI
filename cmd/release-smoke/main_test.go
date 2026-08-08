@@ -113,6 +113,30 @@ func TestExtractBundleRejectsSymlinkedBundleFile(t *testing.T) {
 	}
 }
 
+func TestCreateBundleFileCannotEscapeThroughDestinationSymlink(t *testing.T) {
+	destination := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Mkdir(filepath.Join(destination, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(destination, "dist", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	file, err := createBundleFile(root, "dist/escape/hostile", 0o600)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("root-scoped extraction followed a symlink outside the destination")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "hostile")); !os.IsNotExist(err) {
+		t.Fatalf("outside file status = %v", err)
+	}
+}
+
 func writeTestBundle(t *testing.T, path string, headers []tar.Header, bodies [][]byte) {
 	t.Helper()
 	var buffer bytes.Buffer

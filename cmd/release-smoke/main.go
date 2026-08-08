@@ -224,6 +224,11 @@ func extractBundle(bundlePath, destination, kind string) (err error) {
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return fmt.Errorf("create bundle destination: %w", err)
 	}
+	destinationRoot, err := os.OpenRoot(destination)
+	if err != nil {
+		return fmt.Errorf("open bundle destination root: %w", err)
+	}
+	defer destinationRoot.Close()
 	complete := false
 	defer func() {
 		if !complete {
@@ -271,20 +276,16 @@ func extractBundle(bundlePath, destination, kind string) (err error) {
 		if header.Mode&0o7000 != 0 {
 			return fmt.Errorf("%s bundle entry %q has unsafe mode", kind, name)
 		}
-		target := filepath.Join(destination, filepath.FromSlash(name))
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if header.Size != 0 {
 				return fmt.Errorf("directory bundle entry %q has data", name)
 			}
-			if err := os.MkdirAll(target, fs.FileMode(header.Mode)&0o777); err != nil {
+			if err := destinationRoot.MkdirAll(name, fs.FileMode(header.Mode)&0o777); err != nil {
 				return fmt.Errorf("create bundle directory %q: %w", name, err)
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return fmt.Errorf("create bundle parent for %q: %w", name, err)
-			}
-			out, openErr := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode)&0o777)
+			out, openErr := createBundleFile(destinationRoot, name, fs.FileMode(header.Mode)&0o777)
 			if openErr != nil {
 				return fmt.Errorf("create bundle file %q: %w", name, openErr)
 			}
@@ -309,9 +310,19 @@ func extractBundle(bundlePath, destination, kind string) (err error) {
 	return nil
 }
 
+func createBundleFile(root *os.Root, name string, mode fs.FileMode) (*os.File, error) {
+	parent := archivepath.Dir(name)
+	if parent != "." {
+		if err := root.MkdirAll(parent, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	return root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+}
+
 func validateBundlePath(raw string) (string, error) {
 	name := strings.TrimSuffix(raw, "/")
-	if name == "" || name == "." || archivepath.IsAbs(name) || filepath.IsAbs(name) || strings.ContainsAny(name, "\\:") || archivepath.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
+	if name == "" || name == "." || archivepath.IsAbs(name) || filepath.IsAbs(name) || !filepath.IsLocal(filepath.FromSlash(name)) || strings.ContainsAny(name, "\\:") || archivepath.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
 		return "", fmt.Errorf("unsafe bundle path %q", raw)
 	}
 	return name, nil
