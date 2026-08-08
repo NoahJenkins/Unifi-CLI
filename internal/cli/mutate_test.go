@@ -13,216 +13,287 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/render"
 )
 
-func TestRunMutationRequiresYes(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	rt := &cli.Runtime{
+func preparedTarget(t *testing.T, risk plan.RiskClass, experimental bool) plan.PreparedMutation {
+	t.Helper()
+	snapshot := map[string]any{"id": "ap1", "name": "AP-Office"}
+	p := plan.Update("device", "ap1", "AP-Office", "restart device AP-Office",
+		snapshot, map[string]any{"action": "restart"})
+	prepared, err := plan.Targeted(p, "ap1", snapshot, risk, experimental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
+}
+
+func mutationRuntime() (*cli.Runtime, *bytes.Buffer, *bytes.Buffer) {
+	out, errBuf := new(bytes.Buffer), new(bytes.Buffer)
+	return &cli.Runtime{
 		JSON: true,
-		Yes:  false,
-		Out:  &out,
-		Err:  &errBuf,
+		Out:  out,
+		Err:  errBuf,
 		Site: "default",
 		Cfg:  config.Config{Site: "default", SafeMode: true},
-	}
-	applied := false
-	code := cli.RunMutation(rt, "device", "restart", false,
-		func() (plan.Plan, any, error) {
-			return plan.Update("device", "ap1", "AP-Office", "restart device AP-Office",
-				map[string]any{"action": "none"},
-				map[string]any{"action": "restart"},
-			), map[string]any{"id": "ap1"}, nil
+	}, out, errBuf
+}
+
+func TestRunPreparedMutationRequiresYes(t *testing.T) {
+	rt, out, errBuf := mutationRuntime()
+	observed, applied := false, false
+	code := cli.RunPreparedMutation(rt, "device", "restart",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, false), nil },
+		func(target plan.Target) (any, error) {
+			observed = true
+			return nil, nil
 		},
-		func() (any, error) {
+		func(target plan.Target) (any, error) {
 			applied = true
-			return map[string]any{"ok": true}, nil
+			return nil, nil
 		},
 	)
 	if code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
-	if applied {
-		t.Fatal("apply must not run without --yes")
+	if observed || applied {
+		t.Fatalf("plan inspection observed=%v applied=%v; neither may run without --yes", observed, applied)
 	}
 	var env render.Envelope
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if !env.OK || env.Plan == nil {
-		t.Fatalf("expected plan envelope: %+v", env)
-	}
-	if !env.Meta.DryRun {
-		t.Fatal("expected dry_run true")
-	}
-	if !strings.Contains(env.Plan.Summary, "restart") {
-		t.Fatalf("plan summary: %q", env.Plan.Summary)
+	if !env.OK || env.Plan == nil || !env.Meta.DryRun || env.Data != nil {
+		t.Fatalf("expected plan envelope with data present as null: %+v", env)
 	}
 	if errBuf.Len() != 0 {
 		t.Fatalf("no audit without apply: %q", errBuf.String())
 	}
 }
 
-func TestRunMutationDryRunWinsOverYes(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	rt := &cli.Runtime{
-		JSON:   true,
-		Yes:    true,
-		DryRun: true,
-		Out:    &out,
-		Err:    &errBuf,
-		Site:   "default",
-		Cfg:    config.Config{Site: "default"},
-	}
-	applied := false
-	code := cli.RunMutation(rt, "device", "restart", false,
-		func() (plan.Plan, any, error) {
-			return plan.Update("device", "ap1", "AP", "restart", nil, nil), nil, nil
+func TestRunPreparedMutationDryRunWinsOverAllApplyGates(t *testing.T) {
+	rt, out, _ := mutationRuntime()
+	rt.Yes = true
+	rt.DryRun = true
+	observed, applied := false, false
+	code := cli.RunPreparedMutation(rt, "device", "forget",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Destructive, true), nil },
+		func(target plan.Target) (any, error) {
+			observed = true
+			return nil, nil
 		},
-		func() (any, error) {
+		func(target plan.Target) (any, error) {
+			applied = true
+			return nil, nil
+		},
+	)
+	if code != 0 {
+		t.Fatalf("exit = %d output=%s", code, out.String())
+	}
+	if observed || applied {
+		t.Fatalf("--dry-run must win before experimental, force, observe, and apply; observed=%v applied=%v", observed, applied)
+	}
+}
+
+func TestRunPreparedMutationRiskGates(t *testing.T) {
+	tests := []struct {
+		name        string
+		risk        plan.RiskClass
+		force       bool
+		wantApplied bool
+		wantCode    apperr.Code
+	}{
+		{name: "routine", risk: plan.Routine, wantApplied: true},
+		{name: "high impact blocked", risk: plan.HighImpact, wantCode: apperr.SafeModeBlocked},
+		{name: "high impact forced", risk: plan.HighImpact, force: true, wantApplied: true},
+		{name: "destructive blocked", risk: plan.Destructive, wantCode: apperr.SafeModeBlocked},
+		{name: "destructive forced", risk: plan.Destructive, force: true, wantApplied: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt, out, _ := mutationRuntime()
+			rt.Yes = true
+			rt.Force = tt.force
+			applied := false
+			code := cli.RunPreparedMutation(rt, "device", "restart",
+				func() (plan.PreparedMutation, error) { return preparedTarget(t, tt.risk, false), nil },
+				func(target plan.Target) (any, error) {
+					return map[string]any{"id": "ap1", "name": "AP-Office"}, nil
+				},
+				func(target plan.Target) (any, error) {
+					applied = true
+					return map[string]any{"id": target.ID()}, nil
+				},
+			)
+			if applied != tt.wantApplied {
+				t.Fatalf("applied = %v, want %v", applied, tt.wantApplied)
+			}
+			var env render.Envelope
+			if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantCode == "" {
+				if code != 0 || !env.OK {
+					t.Fatalf("exit=%d envelope=%+v", code, env)
+				}
+			} else if code == 0 || env.Error == nil || env.Error.Code != string(tt.wantCode) {
+				t.Fatalf("exit=%d error=%+v, want %s", code, env.Error, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestRunPreparedMutationExperimentalGateOnlyBlocksApply(t *testing.T) {
+	rt, out, _ := mutationRuntime()
+	rt.Yes = true
+	applied := false
+	code := cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, true), nil },
+		func(target plan.Target) (any, error) {
+			t.Fatal("experimental gate must run before revalidation")
+			return nil, nil
+		},
+		func(target plan.Target) (any, error) {
+			applied = true
+			return nil, nil
+		},
+	)
+	if code == 0 || applied {
+		t.Fatalf("experimental apply without --experimental: exit=%d applied=%v", code, applied)
+	}
+	var env render.Envelope
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Error == nil || env.Error.Code != string(apperr.ValidationFailed) {
+		t.Fatalf("error = %+v", env.Error)
+	}
+	if !env.Meta.Experimental {
+		t.Fatal("experimental mutation error must set meta.experimental")
+	}
+
+	rt, _, _ = mutationRuntime()
+	rt.Yes = true
+	rt.Experimental = true
+	code = cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, true), nil },
+		func(target plan.Target) (any, error) {
+			return map[string]any{"id": "ap1", "name": "AP-Office"}, nil
+		},
+		func(target plan.Target) (any, error) {
 			applied = true
 			return "done", nil
 		},
 	)
-	if code != 0 {
-		t.Fatalf("exit = %d", code)
+	if code != 0 || !applied {
+		t.Fatalf("experimental apply with opt-in: exit=%d applied=%v", code, applied)
 	}
-	if applied {
-		t.Fatal("--dry-run must win over --yes")
+}
+
+func TestRunPreparedMutationExperimentalPlanSetsMetadataWithoutOptIn(t *testing.T) {
+	rt, out, _ := mutationRuntime()
+	code := cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, true), nil },
+		nil,
+		func(target plan.Target) (any, error) { return nil, nil },
+	)
+	if code != 0 {
+		t.Fatalf("exit=%d output=%s", code, out.String())
 	}
 	var env render.Envelope
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Plan == nil || !env.Meta.DryRun {
-		t.Fatalf("expected dry-run plan: %+v", env)
+	if !env.Meta.Experimental || !env.Meta.DryRun {
+		t.Fatalf("meta = %+v, want experimental dry-run", env.Meta)
 	}
 }
 
-func TestRunMutationAppliesWithYes(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	rt := &cli.Runtime{
-		JSON: true,
-		Yes:  true,
-		Out:  &out,
-		Err:  &errBuf,
-		Site: "default",
-		Cfg:  config.Config{Site: "default", SafeMode: true},
-	}
+func TestRunPreparedMutationRejectsChangedSnapshot(t *testing.T) {
+	rt, out, _ := mutationRuntime()
+	rt.Yes = true
 	applied := false
-	code := cli.RunMutation(rt, "device", "restart", false,
-		func() (plan.Plan, any, error) {
-			return plan.Update("device", "ap1", "AP", "restart", nil, nil), map[string]any{"id": "ap1"}, nil
+	code := cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, false), nil },
+		func(target plan.Target) (any, error) {
+			return map[string]any{"id": "ap1", "name": "Lobby AP"}, nil
 		},
-		func() (any, error) {
+		func(target plan.Target) (any, error) {
 			applied = true
-			return map[string]any{"id": "ap1", "status": "restarted"}, nil
+			return nil, nil
 		},
 	)
-	if code != 0 {
-		t.Fatalf("exit = %d out=%s", code, out.String())
-	}
-	if !applied {
-		t.Fatal("apply should run")
-	}
-	if !strings.Contains(errBuf.String(), "audit: applied device restart") {
-		t.Fatalf("expected audit on stderr: %q", errBuf.String())
+	if code == 0 || applied {
+		t.Fatalf("changed target snapshot: exit=%d applied=%v", code, applied)
 	}
 	var env render.Envelope
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Plan != nil {
-		t.Fatal("plan should be nil when applied")
-	}
-	if env.Meta.DryRun {
-		t.Fatal("dry_run should be false when applied")
+	if env.Error == nil || env.Error.Code != string(apperr.Conflict) {
+		t.Fatalf("error = %+v, want conflict", env.Error)
 	}
 }
 
-func TestRunMutationQuietSkipsAudit(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	rt := &cli.Runtime{
-		JSON:  true,
-		Yes:   true,
-		Quiet: true,
-		Out:   &out,
-		Err:   &errBuf,
-		Site:  "default",
-		Cfg:   config.Config{Site: "default"},
-	}
-	_ = cli.RunMutation(rt, "device", "restart", false,
-		func() (plan.Plan, any, error) {
-			return plan.Update("device", "ap1", "AP", "restart", nil, nil), nil, nil
+func TestRunPreparedMutationApplyConsumesPreparedTargetAfterNameRace(t *testing.T) {
+	rt, _, _ := mutationRuntime()
+	rt.Yes = true
+	resolvedID := "device-1"
+	var appliedID string
+	code := cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) {
+			snapshot := map[string]any{"id": resolvedID, "name": "Office AP"}
+			p := plan.Update("device", resolvedID, "Office AP", "rename", snapshot, map[string]any{"name": "Lobby AP"})
+			prepared, err := plan.Targeted(p, resolvedID, snapshot, plan.Routine, false)
+			resolvedID = "device-2" // the same name now resolves elsewhere before apply
+			return prepared, err
 		},
-		func() (any, error) { return "ok", nil },
+		func(target plan.Target) (any, error) {
+			if target.ID() != "device-1" {
+				t.Fatalf("revalidation target = %q, want prepared device-1", target.ID())
+			}
+			return map[string]any{"id": "device-1", "name": "Office AP"}, nil
+		},
+		func(target plan.Target) (any, error) {
+			appliedID = target.ID()
+			return map[string]any{"id": target.ID()}, nil
+		},
 	)
+	if code != 0 || appliedID != "device-1" {
+		t.Fatalf("exit=%d applied target=%q, want immutable device-1", code, appliedID)
+	}
+}
+
+func TestRunPreparedMutationQuietSkipsAudit(t *testing.T) {
+	rt, _, errBuf := mutationRuntime()
+	rt.Yes = true
+	rt.Quiet = true
+	code := cli.RunPreparedMutation(rt, "device", "restart",
+		func() (plan.PreparedMutation, error) { return preparedTarget(t, plan.Routine, false), nil },
+		func(target plan.Target) (any, error) {
+			return map[string]any{"id": "ap1", "name": "AP-Office"}, nil
+		},
+		func(target plan.Target) (any, error) { return "ok", nil },
+	)
+	if code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
 	if errBuf.Len() != 0 {
 		t.Fatalf("quiet must suppress audit: %q", errBuf.String())
 	}
 }
 
-func TestForgetSafeMode(t *testing.T) {
-	var out bytes.Buffer
-	rt := &cli.Runtime{
-		JSON:  true,
-		Yes:   true,
-		Force: false,
-		Out:   &out,
-		Err:   new(bytes.Buffer),
-		Site:  "default",
-		Cfg:   config.Config{Site: "default", SafeMode: true},
-	}
-	applied := false
-	code := cli.RunMutation(rt, "device", "forget", true,
-		func() (plan.Plan, any, error) {
-			return plan.Delete("device", "ap1", "AP", "forget device AP", map[string]any{"id": "ap1"}), nil, nil
+func TestRunPreparedMutationRejectsInvalidRisk(t *testing.T) {
+	rt, out, _ := mutationRuntime()
+	rt.Yes = true
+	code := cli.RunPreparedMutation(rt, "device", "rename",
+		func() (plan.PreparedMutation, error) {
+			return preparedTarget(t, plan.RiskClass("unknown"), false), nil
 		},
-		func() (any, error) {
-			applied = true
-			return nil, nil
-		},
+		nil,
+		func(target plan.Target) (any, error) { return nil, nil },
 	)
 	if code == 0 {
-		t.Fatal("expected non-zero exit for safe_mode_blocked")
+		t.Fatal("invalid risk class was allowed to apply")
 	}
-	if applied {
-		t.Fatal("apply must not run when safe_mode blocks")
-	}
-	var env render.Envelope
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.OK {
-		t.Fatal("expected failure envelope")
-	}
-	if env.Error == nil || env.Error.Code != string(apperr.SafeModeBlocked) {
-		t.Fatalf("error = %+v", env.Error)
-	}
-}
-
-func TestForgetSafeModeWithForce(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	rt := &cli.Runtime{
-		JSON:  true,
-		Yes:   true,
-		Force: true,
-		Out:   &out,
-		Err:   &errBuf,
-		Site:  "default",
-		Cfg:   config.Config{Site: "default", SafeMode: true},
-	}
-	applied := false
-	code := cli.RunMutation(rt, "device", "forget", true,
-		func() (plan.Plan, any, error) {
-			return plan.Delete("device", "ap1", "AP", "forget", nil), nil, nil
-		},
-		func() (any, error) {
-			applied = true
-			return map[string]any{"forgotten": true}, nil
-		},
-	)
-	if code != 0 {
-		t.Fatalf("exit = %d %s", code, out.String())
-	}
-	if !applied {
-		t.Fatal("force+yes should apply forget")
+	if !strings.Contains(out.String(), "validation_failed") {
+		t.Fatalf("output = %q", out.String())
 	}
 }

@@ -1,0 +1,20 @@
+{
+  "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+  "configurationId": "config-switch",
+  "macAddress": "aa:bb:cc:dd:ee:02",
+  "name": "Core Switch",
+  "model": "USW-Pro-24-PoE",
+  "state": "OFFLINE",
+  "ipAddress": "192.0.2.2",
+  "firmwareVersion": "7.1.26",
+  "features": {"switching": {"lags": []}},
+  "interfaces": {
+    "ports": [
+      {"idx": 1, "connector": "RJ45", "maxSpeedMbps": 1000, "state": "DOWN", "poe": {"enabled": false, "standard": "802.3at", "state": "DOWN", "type": 2}},
+      {"idx": 24, "connector": "SFPPLUS", "maxSpeedMbps": 10000, "speedMbps": 10000, "state": "UP"}
+    ]
+  },
+  "uplink": {"deviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"},
+  "firmwareUpdatable": true,
+  "supported": true
+}

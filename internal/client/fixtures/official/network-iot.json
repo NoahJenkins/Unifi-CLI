@@ -1,0 +1,18 @@
+{
+  "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+  "name": "IoT",
+  "enabled": true,
+  "default": false,
+  "management": "GATEWAY",
+  "vlanId": 20,
+  "metadata": {"origin": "USER"},
+  "cellularBackupEnabled": false,
+  "internetAccessEnabled": true,
+  "isolationEnabled": true,
+  "mdnsForwardingEnabled": false,
+  "ipv4Configuration": {
+    "hostIpAddress": "198.51.100.1",
+    "prefixLength": 24,
+    "autoScaleEnabled": false
+  }
+}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 )
 
 func sampleSwitchDevice() map[string]any {
@@ -161,6 +163,7 @@ type fakePortAPI struct {
 	restDevices map[string]map[string]any // keyed by device id for GET rest/device/{id}
 	calls       []portCall
 	err         error
+	ignorePuts  bool
 }
 
 type portCall struct {
@@ -205,6 +208,25 @@ func (f *fakePortAPI) Do(ctx context.Context, method, path string, in, out any) 
 		}
 		return json.Unmarshal(b, out)
 	}
+	if method == http.MethodPut && !f.ignorePuts {
+		body, _ := in.(map[string]any)
+		overrides := sliceTestMaps(body["port_overrides"])
+		id := path[strings.LastIndex(path, "/")+1:]
+		if f.restDevices == nil {
+			f.restDevices = map[string]map[string]any{}
+		}
+		if _, ok := f.restDevices[id]; !ok {
+			for _, device := range f.devices {
+				if strID(device) == id {
+					f.restDevices[id] = cloneTestMap(device)
+					break
+				}
+			}
+		}
+		if device := f.restDevices[id]; device != nil {
+			device["port_overrides"] = overrides
+		}
+	}
 	if out != nil {
 		_ = json.Unmarshal([]byte(`[]`), out)
 	}
@@ -219,6 +241,13 @@ func strID(m map[string]any) string {
 		return v
 	}
 	return ""
+}
+
+func sliceTestMaps(value any) []map[string]any {
+	b, _ := json.Marshal(value)
+	var out []map[string]any
+	_ = json.Unmarshal(b, &out)
+	return out
 }
 
 func (f *fakePortAPI) SitePath(parts ...string) string {
@@ -353,15 +382,17 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 		t.Fatalf("expected GET rest/device/sw1 before PUT; calls=%v", callSummary(api.calls))
 	}
 
-	// last call PUT rest/device/sw1 with merged port_overrides
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("method = %q", last.method)
+	// one PUT rest/device/sw1 with merged port_overrides
+	var mutation portCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			mutation = call
+		}
 	}
-	if last.path != "/proxy/network/api/s/default/rest/device/sw1" {
-		t.Fatalf("path = %q", last.path)
+	if mutation.path != "/proxy/network/api/s/default/rest/device/sw1" {
+		t.Fatalf("path = %q", mutation.path)
 	}
-	overrides := portOverridesFromBody(t, last.body)
+	overrides := portOverridesFromBody(t, mutation.body)
 	if len(overrides) != 1 {
 		t.Fatalf("override len = %d, want 1: %+v", len(overrides), overrides)
 	}
@@ -379,6 +410,100 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 	}
 	if o["portconf_id"] != "prof-ap" {
 		t.Fatalf("portconf_id = %v, want prof-ap", o["portconf_id"])
+	}
+}
+
+func TestPortUpdateRejectsUnboundOrLossyOverrideDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		rest map[string]any
+	}{
+		{
+			name: "wrong device identity",
+			rest: map[string]any{"_id": "other-switch", "port_overrides": []any{}},
+		},
+		{
+			name: "missing override document",
+			rest: map[string]any{"_id": "sw1"},
+		},
+		{
+			name: "null override document",
+			rest: map[string]any{"_id": "sw1", "port_overrides": nil},
+		},
+		{
+			name: "malformed override element",
+			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 12}, "discarded"}},
+		},
+		{
+			name: "duplicate override index",
+			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 12}, map[string]any{"port_idx": 12}}},
+		},
+		{
+			name: "invalid override index",
+			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 0}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := &fakePortAPI{
+				devices:     devicesWithPorts(),
+				restDevices: map[string]map[string]any{"sw1": tt.rest},
+			}
+			_, _, err := domain.NewPortService(api).Update(context.Background(), "Switch-Core", 12, domain.PortInput{POE: "off", SetPOE: true})
+			if !apperr.Is(err, apperr.Conflict) {
+				t.Fatalf("error = %v, want conflict", err)
+			}
+			for _, call := range api.calls {
+				if call.method == http.MethodPut {
+					t.Fatalf("invalid override document caused PUT: %+v", call)
+				}
+			}
+		})
+	}
+}
+
+func TestPortServiceUpdatePlansFromAuthoritativeRestOverrides(t *testing.T) {
+	statSW := sampleSwitchDevice()
+	statSW["port_overrides"] = []any{
+		map[string]any{
+			"port_idx":    float64(12),
+			"name":        "Stat Name",
+			"poe_mode":    "pasv24",
+			"portconf_id": "prof-stat",
+		},
+	}
+	restSW := sampleSwitchDevice()
+	restSW["port_overrides"] = []any{
+		map[string]any{
+			"port_idx":    float64(12),
+			"name":        "Authoritative Name",
+			"poe_mode":    "auto",
+			"portconf_id": "prof-rest",
+		},
+	}
+
+	api := &fakePortAPI{
+		devices:     []map[string]any{statSW},
+		restDevices: map[string]map[string]any{"sw1": restSW},
+	}
+	svc := domain.NewPortService(api)
+
+	pl, cur, err := svc.Update(context.Background(), "Switch-Core", 12, domain.PortInput{POE: "off", SetPOE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.DeviceID != "sw1" || cur.PortIdx != 12 {
+		t.Fatalf("current identity = %s/%d, want sw1/12", cur.DeviceID, cur.PortIdx)
+	}
+	if cur.Name != "Authoritative Name" || cur.POE != "auto" || cur.Profile != "prof-rest" {
+		t.Fatalf("current port did not use REST overrides: %+v", cur)
+	}
+	before, _ := pl.Changes[0].Before.(map[string]any)
+	if before["name"] != "Authoritative Name" || before["poe"] != "auto" || before["profile"] != "prof-rest" {
+		t.Fatalf("plan before snapshot did not use REST overrides: %+v", before)
+	}
+	if got := pl.Changes[0].ID; got != "sw1/12" {
+		t.Fatalf("plan target ID = %q, want complete device/port identity sw1/12", got)
 	}
 }
 
@@ -423,11 +548,13 @@ func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPut {
-		t.Fatalf("last method = %q", last.method)
+	var mutation portCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			mutation = call
+		}
 	}
-	overrides := portOverridesFromBody(t, last.body)
+	overrides := portOverridesFromBody(t, mutation.body)
 	if len(overrides) != 2 {
 		t.Fatalf("override len = %d, want 2 (must not wipe port 5): %+v", len(overrides), overrides)
 	}
@@ -458,6 +585,48 @@ func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
 	}
 	if p12["name"] != "AP-Uplink" || p12["portconf_id"] != "prof-ap" {
 		t.Fatalf("port 12 siblings lost: %+v", p12)
+	}
+}
+
+func TestPortPreparedUpdateRejectsUnrelatedOverrideChange(t *testing.T) {
+	restSW := sampleSwitchDevice()
+	restSW["port_overrides"] = []any{
+		map[string]any{"port_idx": float64(5), "name": "Camera", "poe_mode": "auto"},
+		map[string]any{"port_idx": float64(12), "name": "AP-Uplink", "poe_mode": "pasv24"},
+	}
+	api := &fakePortAPI{
+		devices:     devicesWithPorts(),
+		restDevices: map[string]map[string]any{"sw1": restSW},
+	}
+	svc := domain.NewPortService(api)
+	in := domain.PortInput{POE: "off", SetPOE: true}
+	p, _, snapshot, err := svc.PrepareUpdate(context.Background(), "Switch-Core", 12, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := plan.Targeted(p, "sw1/12", snapshot, plan.HighImpact, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := prepared.Target()
+	if !ok {
+		t.Fatal("prepared update has no target")
+	}
+
+	// Another operator changes an unrelated port after plan approval. A full
+	// port_overrides PUT must stop instead of replaying the stale document.
+	api.restDevices["sw1"]["port_overrides"] = []any{
+		map[string]any{"port_idx": float64(5), "name": "Door Camera", "poe_mode": "auto"},
+		map[string]any{"port_idx": float64(12), "name": "AP-Uplink", "poe_mode": "pasv24"},
+	}
+	_, err = svc.ApplyUpdatePrepared(context.Background(), target, "sw1", 12, in)
+	if !apperr.Is(err, apperr.Conflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			t.Fatalf("changed override document caused PUT: %+v", call)
+		}
 	}
 }
 

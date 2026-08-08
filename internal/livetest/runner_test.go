@@ -80,6 +80,18 @@ func TestReadOnlyCommandsRejectMutationTokens(t *testing.T) {
 	}
 }
 
+func TestReadOnlyCommandsContainOnlySupportedSystemReads(t *testing.T) {
+	var names []string
+	for _, command := range livetest.ReadOnlyCommands() {
+		if command.Resource == "system" {
+			names = append(names, command.Name)
+		}
+	}
+	if !reflect.DeepEqual(names, []string{"system health"}) {
+		t.Fatalf("system read commands = %v, want only system health", names)
+	}
+}
+
 func TestValidateAcceptsMatchingListEnvelope(t *testing.T) {
 	command := livetest.Command{Name: "device list", Resource: "device", Action: "list", Shape: livetest.ArrayData}
 	raw := []byte(`{"ok":true,"resource":"device","action":"list","data":[{"id":"dev-1"}],"meta":{"count":1}}`)
@@ -206,6 +218,22 @@ func TestRunnerDerivesPortGetArguments(t *testing.T) {
 	if !slices.Contains(fake.calls, "port get dev-1 1 --json") {
 		t.Fatalf("calls = %v", fake.calls)
 	}
+}
+
+func TestReadOnlyRunnerKeepsUnfilteredPortListRegistryContract(t *testing.T) {
+	for _, command := range livetest.ReadOnlyCommands() {
+		if command.Name != "port list" {
+			continue
+		}
+		if !reflect.DeepEqual(command.Args, []string{"port", "list"}) {
+			t.Fatalf("port list args = %v, want unfiltered registry command", command.Args)
+		}
+		if command.GetFrom == nil || command.GetFrom.PortDeviceField != "device_id" || command.GetFrom.PortIndexField != "port_idx" {
+			t.Fatalf("port list dependent get contract = %+v", command.GetFrom)
+		}
+		return
+	}
+	t.Fatal("read-only registry is missing port list")
 }
 
 func TestRunnerMarksEmptyOptionalListNotConfigured(t *testing.T) {

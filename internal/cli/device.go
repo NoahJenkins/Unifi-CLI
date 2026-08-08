@@ -50,17 +50,6 @@ func newDeviceGetCmd() *cobra.Command {
 	}
 }
 
-// deviceMutationDestructive is the single source of truth for which device
-// write actions require safe_mode + --force. CLI wiring must use this map.
-var deviceMutationDestructive = map[string]bool{
-	"rename":  false,
-	"restart": false,
-	"locate":  false,
-	"upgrade": false,
-	"adopt":   false,
-	"forget":  true,
-}
-
 func newDeviceRenameCmd() *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
@@ -68,7 +57,7 @@ func newDeviceRenameCmd() *cobra.Command {
 		Short: "Rename a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("rename", args[0], deviceMutationDestructive["rename"], name)
+			return runDeviceMutation("rename", args[0], name)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "new device name")
@@ -82,7 +71,7 @@ func newDeviceRestartCmd() *cobra.Command {
 		Short: "Restart a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("restart", args[0], deviceMutationDestructive["restart"], "")
+			return runDeviceMutation("restart", args[0], "")
 		},
 	}
 }
@@ -93,7 +82,7 @@ func newDeviceLocateCmd() *cobra.Command {
 		Short: "Blink locate LEDs on a device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("locate", args[0], deviceMutationDestructive["locate"], "")
+			return runDeviceMutation("locate", args[0], "")
 		},
 	}
 }
@@ -104,7 +93,7 @@ func newDeviceUpgradeCmd() *cobra.Command {
 		Short: "Upgrade device firmware",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("upgrade", args[0], deviceMutationDestructive["upgrade"], "")
+			return runDeviceMutation("upgrade", args[0], "")
 		},
 	}
 }
@@ -115,7 +104,7 @@ func newDeviceAdoptCmd() *cobra.Command {
 		Short: "Adopt a pending device",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("adopt", args[0], deviceMutationDestructive["adopt"], "")
+			return runDeviceMutation("adopt", args[0], "")
 		},
 	}
 }
@@ -126,7 +115,7 @@ func newDeviceForgetCmd() *cobra.Command {
 		Short: "Forget (delete) a device — destructive",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDeviceMutation("forget", args[0], deviceMutationDestructive["forget"], "")
+			return runDeviceMutation("forget", args[0], "")
 		},
 	}
 }
@@ -194,51 +183,59 @@ func runDeviceGet(id string) error {
 	return nil
 }
 
-func runDeviceMutation(action, id string, destructive bool, newName string) error {
+func runDeviceMutation(action, id, newName string) error {
 	rt, err := loadRuntime(true)
 	if err != nil {
 		return emitErr("device", action, err)
 	}
 	svc := domain.NewDeviceService(rt.Client)
 	ctx := context.Background()
+	build := func(query string) (plan.Plan, domain.Device, error) {
+		switch action {
+		case "rename":
+			return svc.Rename(ctx, query, newName)
+		case "restart":
+			return svc.Restart(ctx, query)
+		case "locate":
+			return svc.Locate(ctx, query)
+		case "upgrade":
+			return svc.Upgrade(ctx, query)
+		case "adopt":
+			return svc.Adopt(ctx, query)
+		case "forget":
+			return svc.Forget(ctx, query)
+		default:
+			return plan.Plan{}, domain.Device{}, fmt.Errorf("unknown action %s", action)
+		}
+	}
 
-	code := RunMutation(rt, "device", action, destructive,
-		func() (plan.Plan, any, error) {
-			var p plan.Plan
-			var d domain.Device
-			var err error
-			switch action {
-			case "rename":
-				p, d, err = svc.Rename(ctx, id, newName)
-			case "restart":
-				p, d, err = svc.Restart(ctx, id)
-			case "locate":
-				p, d, err = svc.Locate(ctx, id)
-			case "upgrade":
-				p, d, err = svc.Upgrade(ctx, id)
-			case "adopt":
-				p, d, err = svc.Adopt(ctx, id)
-			case "forget":
-				p, d, err = svc.Forget(ctx, id)
-			default:
-				return plan.Plan{}, nil, fmt.Errorf("unknown action %s", action)
+	code := RunPreparedMutation(rt, "device", action,
+		func() (plan.PreparedMutation, error) {
+			p, d, err := build(id)
+			if err != nil {
+				return plan.PreparedMutation{}, err
 			}
-			return p, d, err
+			risk, experimental := task7MutationPolicy("device", action)
+			return plan.Targeted(p, d.ID, p.Changes, risk, experimental)
 		},
-		func() (any, error) {
+		func(target plan.Target) (any, error) {
+			p, _, err := build(target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
 			switch action {
 			case "rename":
-				return svc.ApplyRename(ctx, id, newName)
+				return svc.ApplyRenamePrepared(ctx, target, target.ID(), newName)
 			case "restart":
-				return svc.ApplyRestart(ctx, id)
+				return svc.ApplyRestartPrepared(ctx, target, target.ID())
 			case "locate":
-				return svc.ApplyLocate(ctx, id)
+				return svc.ApplyLocatePrepared(ctx, target, target.ID())
 			case "upgrade":
-				return svc.ApplyUpgrade(ctx, id)
+				return svc.ApplyUpgradePrepared(ctx, target, target.ID())
 			case "adopt":
-				return svc.ApplyAdopt(ctx, id)
+				return svc.ApplyAdoptPrepared(ctx, target, target.ID())
 			case "forget":
-				return svc.ApplyForget(ctx, id)
+				return svc.ApplyForgetPrepared(ctx, target, target.ID())
 			default:
 				return nil, fmt.Errorf("unknown action %s", action)
 			}

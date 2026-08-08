@@ -42,7 +42,11 @@ if [[ -z "${UNIFI_API_KEY:-}" ]]; then
   exit 1
 fi
 
-export UNIFI_INSECURE="${UNIFI_INSECURE:-true}"
+case "${UNIFI_INSECURE:-}" in
+  1 | t | T | TRUE | true | True)
+    echo "WARNING: TLS certificate verification is disabled by UNIFI_INSECURE=${UNIFI_INSECURE}" >&2
+    ;;
+esac
 
 echo "==> live read-only suite"
 go run ./cmd/unifi-live-test --binary "$BIN" --report-dir "$ROOT/dist/test-reports"

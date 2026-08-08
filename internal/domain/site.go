@@ -33,9 +33,14 @@ func NewSiteService(api SiteAPI) *SiteService {
 }
 
 func (s *SiteService) List(ctx context.Context) ([]Site, error) {
-	var raw []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, client.PathSelfSites, nil, &raw); err != nil {
+	raw, official, err := fetchOfficialGlobal(s.api, ctx, "sites")
+	if err != nil {
 		return nil, err
+	}
+	if !official {
+		if err := s.api.Do(ctx, http.MethodGet, client.PathSelfSites, nil, &raw); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]Site, 0, len(raw))
 	for _, m := range raw {

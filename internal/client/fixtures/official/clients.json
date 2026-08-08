@@ -1,0 +1,28 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 2,
+  "totalCount": 2,
+  "data": [
+    {
+      "type": "WIRELESS",
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+      "name": "Laptop",
+      "macAddress": "11:22:33:44:55:01",
+      "ipAddress": "192.0.2.50",
+      "connectedAt": "2026-08-07T12:00:00Z",
+      "uplinkDeviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "access": {"type": "DEFAULT"}
+    },
+    {
+      "type": "WIRED",
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+      "name": "Printer",
+      "macAddress": "11:22:33:44:55:02",
+      "ipAddress": "192.0.2.51",
+      "connectedAt": "2026-08-07T12:01:00Z",
+      "uplinkDeviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+      "access": {"type": "DEFAULT"}
+    }
+  ]
+}

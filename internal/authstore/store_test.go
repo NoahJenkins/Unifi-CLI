@@ -138,6 +138,26 @@ func TestSaveUsesFallbackOnlyWhenExplicitlyAllowed(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOversizedFallbackRecord(t *testing.T) {
+	store := NewStore(Options{Keyring: &memoryKeyring{getErr: ErrKeyringUnavailable}, StateHome: t.TempDir(), GOOS: "linux"})
+	controller := "https://controller.example:443"
+	path := store.fallbackPath(controller)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record, err := json.Marshal(apiKeyRecord{Controller: controller, APIKey: strings.Repeat("x", (1<<20)+1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.Load(controller)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Load error = %v, want bounded-record failure", err)
+	}
+}
+
 func TestFallbackSaveRemovesLegacySessionFallback(t *testing.T) {
 	keyring := newMemoryKeyring()
 	keyring.setErr = ErrKeyringUnavailable

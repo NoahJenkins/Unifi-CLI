@@ -339,8 +339,8 @@ func TestNetworkDeleteWANIsDestructive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if domain.NetworkDeleteDestructive(lan) {
-		t.Fatal("LAN delete must not be destructive")
+	if !domain.NetworkDeleteDestructive(lan) {
+		t.Fatal("LAN delete must be destructive")
 	}
 }
 

@@ -2,14 +2,19 @@ package client_test
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +25,7 @@ import (
 )
 
 type memoryAPIKeyStore struct {
+	mu                 sync.Mutex
 	keys               map[string]string
 	loadErr            error
 	deleteErr          error
@@ -30,6 +36,8 @@ type memoryAPIKeyStore struct {
 }
 
 func (s *memoryAPIKeyStore) Load(controller string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.loadCalls++
 	if s.loadErr != nil {
 		return "", false, s.loadErr
@@ -39,6 +47,8 @@ func (s *memoryAPIKeyStore) Load(controller string) (string, bool, error) {
 }
 
 func (s *memoryAPIKeyStore) Save(controller, apiKey string, _ bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.saveCalls++
 	if s.keys == nil {
 		s.keys = make(map[string]string)
@@ -48,6 +58,8 @@ func (s *memoryAPIKeyStore) Save(controller, apiKey string, _ bool) error {
 }
 
 func (s *memoryAPIKeyStore) Delete(controller string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.deleteCalls++
 	s.deletedControllers = append(s.deletedControllers, controller)
 	if s.deleteErr != nil {
@@ -55,6 +67,55 @@ func (s *memoryAPIKeyStore) Delete(controller string) error {
 	}
 	delete(s.keys, controller)
 	return nil
+}
+
+func TestConcurrentSavedAPIKey401InvalidationIsSingleFlight(t *testing.T) {
+	t.Setenv("UNIFI_API_KEY", "")
+	const workers = 4
+	arrived := make(chan string, workers)
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- r.Header.Get("X-API-KEY")
+		<-release
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t, srv)
+	store := &memoryAPIKeyStore{keys: map[string]string{cfg.BaseURL(): "saved-key"}}
+	c, err := client.NewWithStore(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, workers)
+	for range workers {
+		go func() {
+			errs <- c.DoOfficial(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+		}()
+	}
+	for range workers {
+		select {
+		case key := <-arrived:
+			if key != "saved-key" {
+				t.Fatalf("concurrent request key = %q, want saved-key", key)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent authenticated requests did not reach the controller")
+		}
+	}
+	close(release)
+	for range workers {
+		if err := <-errs; !apperr.Is(err, apperr.AuthFailed) {
+			t.Fatalf("error = %v, want auth_failed", err)
+		}
+	}
+	store.mu.Lock()
+	deletes := store.deleteCalls
+	store.mu.Unlock()
+	if deletes != 1 {
+		t.Fatalf("saved key delete calls = %d, want 1", deletes)
+	}
 }
 
 var _ authstore.Store = (*memoryAPIKeyStore)(nil)
@@ -80,6 +141,28 @@ func testConfig(t *testing.T, srv *httptest.Server) config.Config {
 		Site:     "default",
 		Timeout:  5 * time.Second,
 	}
+}
+
+func loadTestConfig(t *testing.T, srv *httptest.Server, extra string) config.Config {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+	host, portStr, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := fmt.Sprintf("host: %q\nport: %s\ntimeout: 5s\n%s", host, portStr, extra)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
 }
 
 func TestEnvironmentAPIKeyWinsOverSavedKey(t *testing.T) {
@@ -283,6 +366,158 @@ func TestNewWithAPIKeyValidatesEnteredKeyWithoutResolvingEnvironment(t *testing.
 	}
 }
 
+func TestCustomCACertificateEstablishesVerifiedTLS(t *testing.T) {
+	tests := []struct {
+		name   string
+		useEnv bool
+	}{
+		{name: "config file"},
+		{name: "environment", useEnv: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, `{"data":[]}`)
+			}))
+			defer srv.Close()
+
+			caPath := filepath.Join(t.TempDir(), "controller-ca.pem")
+			caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+			if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			extra := fmt.Sprintf("ca_cert: %q\n", caPath)
+			if tt.useEnv {
+				t.Setenv("UNIFI_CA_CERT", caPath)
+				extra = ""
+			}
+			cfg := loadTestConfig(t, srv, extra)
+			c, err := client.NewWithAPIKey(cfg, "key", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			if err := c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil); err != nil {
+				t.Fatalf("Do with custom CA: %v", err)
+			}
+		})
+	}
+}
+
+func TestCustomCARejectsOversizedAndNonRegularFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(*testing.T) string
+		want string
+	}{
+		{
+			name: "oversized regular file",
+			path: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), "controller-ca.pem")
+				if err := os.WriteFile(path, []byte(strings.Repeat("x", (1<<20)+1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			want: "exceeds",
+		},
+		{name: "directory", path: func(t *testing.T) string { return t.TempDir() }, want: "regular file"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.NewWithAPIKey(config.Config{
+				Host: "controller.example", Port: 443, Timeout: time.Second, CACert: tt.path(t),
+			}, "key", "interactive_api_key")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewWithAPIKey error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestVerifiedTLSIsDefaultWithoutCustomCAOrInsecureMode(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := loadTestConfig(t, srv, "")
+	c, err := client.NewWithAPIKey(cfg, "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	if !apperr.Is(err, apperr.ControllerUnreachable) {
+		t.Fatalf("Do error = %v, want TLS verification failure", err)
+	}
+	if requests != 0 {
+		t.Fatalf("controller handler requests = %d, want 0 after TLS verification failure", requests)
+	}
+}
+
+func TestNewWithAPIKeyRejectsInvalidTransportConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{
+			name: "non-origin host",
+			cfg:  config.Config{Host: "https://controller.example/path", Port: 443, Timeout: time.Second},
+			want: "host",
+		},
+		{
+			name: "oversized port",
+			cfg:  config.Config{Host: "controller.example", Port: 65536, Timeout: time.Second},
+			want: "port",
+		},
+		{
+			name: "negative timeout",
+			cfg:  config.Config{Host: "controller.example", Port: 443, Timeout: -time.Second},
+			want: "timeout",
+		},
+		{
+			name: "conflicting TLS settings",
+			cfg: config.Config{
+				Host: "controller.example", Port: 443, Timeout: time.Second,
+				Insecure: true, CACert: "does-not-need-to-exist.pem",
+			},
+			want: "insecure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.NewWithAPIKey(tt.cfg, "key", "interactive_api_key")
+			if err == nil {
+				t.Fatal("NewWithAPIKey unexpectedly accepted invalid transport configuration")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewWithStoreRejectsInvalidDestinationBeforeCredentialLookup(t *testing.T) {
+	store := &memoryAPIKeyStore{keys: map[string]string{"https://controller.example:443": "saved-key"}}
+	_, err := client.NewWithStore(config.Config{
+		Host:    "https://controller.example/path",
+		Port:    443,
+		Timeout: time.Second,
+	}, store)
+	if err == nil {
+		t.Fatal("NewWithStore unexpectedly accepted an invalid destination")
+	}
+	if store.loadCalls != 0 {
+		t.Fatalf("credential store Load calls = %d, want 0 before destination validation", store.loadCalls)
+	}
+}
+
 func TestDoMapsConnectionError(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	cfg := testConfig(t, srv)
@@ -315,6 +550,62 @@ func TestDoRejectsOversizedControllerResponse(t *testing.T) {
 	}
 }
 
+func TestDoRejectsRedirectsBeforeCredentialsOrMutationBodiesAreForwarded(t *testing.T) {
+	statuses := []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	}
+
+	for _, status := range statuses {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			var destinationRequests int
+			var destinationAPIKey, destinationBody string
+			destination := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				destinationRequests++
+				destinationAPIKey = r.Header.Get("X-API-KEY")
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read redirected body: %v", err)
+				}
+				destinationBody = string(body)
+				_, _ = io.WriteString(w, `{"data":[]}`)
+			}))
+			defer destination.Close()
+
+			origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, destination.URL+"/redirected", status)
+			}))
+			defer origin.Close()
+
+			c, err := client.NewWithAPIKey(testConfig(t, origin), "redirect-secret", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			err = c.Do(
+				context.Background(),
+				http.MethodPost,
+				"/mutate",
+				map[string]string{"name": "redirect-body-sentinel"},
+				nil,
+			)
+
+			if destinationRequests != 0 || destinationAPIKey != "" || destinationBody != "" {
+				t.Fatalf(
+					"redirect destination received requests=%d API-key=%q body=%q",
+					destinationRequests,
+					destinationAPIKey,
+					destinationBody,
+				)
+			}
+			if err == nil {
+				t.Fatal("Do unexpectedly accepted a redirect response")
+			}
+		})
+	}
+}
+
 func TestSitePath(t *testing.T) {
 	c, err := client.NewWithAPIKey(config.Config{
 		Host: "127.0.0.1",
@@ -336,5 +627,61 @@ func TestSitePath(t *testing.T) {
 	want = "/proxy/network/api/s/default/rest/networkconf/abc"
 	if got != want {
 		t.Fatalf("SitePath multi = %q, want %q", got, want)
+	}
+}
+
+func TestSitePathEscapesEveryLegacyDynamicSegment(t *testing.T) {
+	c, err := client.NewWithAPIKey(config.Config{
+		Host: "127.0.0.1", Port: 443, Site: "site ?#/%2e%2e",
+	}, "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	got := c.SitePath("rest/networkconf", "record ?#/../value")
+	want := "/proxy/network/api/s/site%20%3F%23%2F%252e%252e/rest/networkconf/record%20%3F%23%2F..%2Fvalue"
+	if got != want {
+		t.Fatalf("SitePath = %q, want %q", got, want)
+	}
+}
+
+func TestSitePathEncodesLegacyDotSegments(t *testing.T) {
+	c, err := client.NewWithAPIKey(config.Config{
+		Host: "127.0.0.1", Port: 443, Site: "..",
+	}, "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+
+	got := c.SitePath(client.PathRestDevice, ".")
+	want := "/proxy/network/api/s/%2E%2E/rest/device/%2E"
+	if got != want {
+		t.Fatalf("SitePath = %q, want %q", got, want)
+	}
+}
+
+func TestIntegrationSitePathResolvesConfiguredInternalReference(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/proxy/network/integration/v1/sites" {
+			t.Fatalf("request path = %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("limit"); got != "100" {
+			t.Fatalf("limit = %q, want 100", got)
+		}
+		_, _ = io.WriteString(w, `{"offset":0,"limit":100,"count":1,"totalCount":1,"data":[{"id":"site-uuid","internalReference":"default","name":"Default"}]}`)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	got, err := c.IntegrationSitePath(context.Background(), "dns", "policies")
+	if err != nil {
+		t.Fatalf("IntegrationSitePath: %v", err)
+	}
+	want := "/proxy/network/integration/v1/sites/site-uuid/dns/policies"
+	if got != want {
+		t.Fatalf("IntegrationSitePath = %q, want %q", got, want)
 	}
 }

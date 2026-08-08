@@ -1,0 +1,21 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+      "name": "Allow DNS",
+      "description": "Permit DNS from internal clients",
+      "enabled": true,
+      "index": 100,
+      "action": {"type": "ALLOW", "allowReturnTraffic": false},
+      "source": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff1"},
+      "destination": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2"},
+      "ipProtocolScope": {"ipVersion": "IPV4", "protocolFilter": {"type": "NAMED_PROTOCOL", "protocol": {"name": "udp"}, "matchOpposite": false}},
+      "loggingEnabled": false,
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

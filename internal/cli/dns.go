@@ -55,6 +55,7 @@ func newDNSCreateCmd() *cobra.Command {
 		name    string
 		ip      string
 		enabled bool
+		ttl     int
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -65,6 +66,8 @@ func newDNSCreateCmd() *cobra.Command {
 				IP:         ip,
 				Enabled:    enabled,
 				SetEnabled: true,
+				TTLSeconds: ttl,
+				SetTTL:     cmd.Flags().Changed("ttl"),
 			}
 			if !cmd.Flags().Changed("enabled") {
 				in.Enabled = true
@@ -75,6 +78,7 @@ func newDNSCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "hostname (e.g. nas.lan)")
 	cmd.Flags().StringVar(&ip, "ip", "", "IPv4 address")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "record enabled")
+	cmd.Flags().IntVar(&ttl, "ttl", 0, "positive TTL in seconds (default 300)")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("ip")
 	return cmd
@@ -85,13 +89,21 @@ func newDNSUpdateCmd() *cobra.Command {
 		name    string
 		ip      string
 		enabled bool
+		ttl     int
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
 		Short: "Update a local DNS record",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			in := domain.DNSInput{Name: name, IP: ip}
+			in := domain.DNSInput{
+				Name:       name,
+				SetName:    cmd.Flags().Changed("name"),
+				IP:         ip,
+				SetIP:      cmd.Flags().Changed("ip"),
+				TTLSeconds: ttl,
+				SetTTL:     cmd.Flags().Changed("ttl"),
+			}
 			if cmd.Flags().Changed("enabled") {
 				in.Enabled = enabled
 				in.SetEnabled = true
@@ -102,6 +114,7 @@ func newDNSUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "hostname")
 	cmd.Flags().StringVar(&ip, "ip", "", "IPv4 address")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "record enabled")
+	cmd.Flags().IntVar(&ttl, "ttl", 0, "positive TTL in seconds")
 	return cmd
 }
 
@@ -194,10 +207,10 @@ func runDNSList() error {
 		}
 		return nil
 	}
-	headers := []string{"NAME", "IP", "ENABLED", "ID"}
+	headers := []string{"TYPE", "DOMAIN", "VALUE", "ENABLED", "ID"}
 	rows := make([][]string, 0, len(items))
 	for _, r := range items {
-		rows = append(rows, []string{r.Name, r.IP, strconv.FormatBool(r.Enabled), r.ID})
+		rows = append(rows, []string{r.Type, r.Domain, dnsDisplayValue(r), strconv.FormatBool(r.Enabled), r.ID})
 	}
 	return render.WriteTable(rt.Out, headers, rows)
 }
@@ -224,8 +237,9 @@ func runDNSGet(id string) error {
 		return nil
 	}
 	fmt.Fprintf(rt.Out, "id: %s\n", render.SafeText(r.ID))
-	fmt.Fprintf(rt.Out, "name: %s\n", render.SafeText(r.Name))
-	fmt.Fprintf(rt.Out, "ip: %s\n", render.SafeText(r.IP))
+	fmt.Fprintf(rt.Out, "type: %s\n", render.SafeText(r.Type))
+	fmt.Fprintf(rt.Out, "domain: %s\n", render.SafeText(r.Domain))
+	fmt.Fprintf(rt.Out, "value: %s\n", render.SafeText(dnsDisplayValue(r)))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(r.Enabled))
 	return nil
 }
@@ -237,12 +251,16 @@ func runDNSCreate(in domain.DNSInput) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "create", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "create",
+		func() (plan.PreparedMutation, error) {
 			p, err := svc.Create(ctx, in)
-			return p, nil, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Untargeted(p, plan.Routine, false), nil
 		},
-		func() (any, error) {
+		nil,
+		func(target plan.Target) (any, error) {
 			return svc.ApplyCreate(ctx, in)
 		},
 	)
@@ -256,16 +274,40 @@ func runDNSUpdate(id string, in domain.DNSInput) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "update", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "update",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Update(ctx, id, in)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.ID, p.Changes, plan.Routine, false)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, id, in)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Update(ctx, target.ID(), in)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyUpdatePrepared(ctx, target, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
+}
+
+func dnsDisplayValue(record domain.DNSRecord) string {
+	for _, value := range []string{
+		record.IPv4Address,
+		record.IPv6Address,
+		record.TargetDomain,
+		record.MailServerDomain,
+		record.Text,
+		record.ServerDomain,
+		record.IPAddress,
+	} {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func runDNSDelete(id string) error {
@@ -275,13 +317,20 @@ func runDNSDelete(id string) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "delete", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "delete",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Delete(ctx, id)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, n.ID, p.Changes, plan.Destructive, false)
 		},
-		func() (any, error) {
-			return svc.ApplyDelete(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Delete(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyDeletePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -328,13 +377,21 @@ func runDNSResolversSet(network string, servers []string) error {
 	}
 	svc := domain.NewDNSService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "dns", "resolvers set", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "dns", "resolvers set",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.SetResolvers(ctx, network, servers)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			risk, experimental := task7MutationPolicy("dns", "resolvers set")
+			return plan.Targeted(p, n.NetworkID, p.Changes, risk, experimental)
 		},
-		func() (any, error) {
-			return svc.ApplySetResolvers(ctx, network, servers)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.SetResolvers(ctx, target.ID(), servers)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplySetResolversPrepared(ctx, target, target.ID(), servers)
 		},
 	)
 	return emittedExit(code)

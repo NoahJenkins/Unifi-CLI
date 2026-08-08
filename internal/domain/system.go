@@ -3,6 +3,8 @@ package domain
 import (
 	"context"
 	"net/http"
+	"strings"
+	"unicode"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -19,18 +21,12 @@ type HealthSubsystem struct {
 }
 
 type Health struct {
-	Status          string            `json:"status"` // ok|degraded|error
-	DeviceTotal     int               `json:"device_total"`
-	DeviceConnected int               `json:"device_connected"`
-	ClientTotal     int               `json:"client_total"`
-	Subsystems      []HealthSubsystem `json:"subsystems,omitempty"`
-}
-
-type Event struct {
-	ID       string `json:"id"`
-	Time     string `json:"time"`
-	Message  string `json:"message"`
-	Severity string `json:"severity"`
+	ApplicationVersion string            `json:"application_version"`
+	Status             string            `json:"status"` // ok|degraded|error
+	DeviceTotal        int               `json:"device_total"`
+	DeviceConnected    int               `json:"device_connected"`
+	ClientTotal        int               `json:"client_total"`
+	Subsystems         []HealthSubsystem `json:"subsystems,omitempty"`
 }
 
 type SystemService struct {
@@ -42,23 +38,35 @@ func NewSystemService(api SystemAPI) *SystemService {
 }
 
 func (s *SystemService) Health(ctx context.Context) (Health, error) {
-	var devices []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatDevice), nil, &devices); err != nil {
+	var info struct {
+		ApplicationVersion any `json:"applicationVersion"`
+	}
+	if err := s.api.Do(ctx, http.MethodGet, client.OfficialPath("info"), nil, &info); err != nil {
 		return Health{}, err
 	}
-	var clients []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatSta), nil, &clients); err != nil {
+	applicationVersion, ok := info.ApplicationVersion.(string)
+	applicationVersion = strings.TrimSpace(applicationVersion)
+	if !ok || applicationVersion == "" || len(applicationVersion) > 128 || strings.IndexFunc(applicationVersion, unicode.IsControl) >= 0 {
+		return Health{}, apperr.New(apperr.Internal, "official application info contains an invalid application version")
+	}
+
+	devices, err := NewDeviceService(s.api).List(ctx)
+	if err != nil {
+		return Health{}, err
+	}
+	clients, err := NewClientService(s.api).List(ctx)
+	if err != nil {
 		return Health{}, err
 	}
 
 	h := Health{
-		DeviceTotal: len(devices),
-		ClientTotal: len(clients),
+		ApplicationVersion: applicationVersion,
+		DeviceTotal:        len(devices),
+		ClientTotal:        len(clients),
 	}
 	adoptedTotal := 0
 	adoptedConnected := 0
-	for _, m := range devices {
-		d := NormalizeDevice(m)
+	for _, d := range devices {
 		if d.State == "connected" {
 			h.DeviceConnected++
 		}
@@ -70,17 +78,6 @@ func (s *SystemService) Health(ctx context.Context) (Health, error) {
 		}
 	}
 	h.Status = healthStatus(adoptedTotal, adoptedConnected, h.DeviceTotal, h.DeviceConnected)
-
-	// Optional subsystems from stat/health when present.
-	var rawHealth []map[string]any
-	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathStatHealth), nil, &rawHealth); err == nil {
-		for _, m := range rawHealth {
-			h.Subsystems = append(h.Subsystems, HealthSubsystem{
-				Name:   strField(m, "subsystem", "name"),
-				Status: strField(m, "status", "state"),
-			})
-		}
-	}
 
 	return h, nil
 }
@@ -101,44 +98,4 @@ func healthStatus(adoptedTotal, adoptedConnected, deviceTotal, deviceConnected i
 		return "error"
 	}
 	return "degraded"
-}
-
-func (s *SystemService) Events(ctx context.Context) ([]Event, error) {
-	return s.listEvents(ctx, client.PathStatEvent, "events")
-}
-
-func (s *SystemService) Alerts(ctx context.Context) ([]Event, error) {
-	return s.listEvents(ctx, client.PathStatAlarm, "alerts")
-}
-
-func (s *SystemService) listEvents(ctx context.Context, pathPart, label string) ([]Event, error) {
-	var raw []map[string]any
-	path := s.api.SitePath(pathPart)
-	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-		if apperr.Is(err, apperr.NotFound) {
-			return nil, apperr.WithHint(
-				apperr.Newf(apperr.NotImplemented, "%s endpoint unavailable on this controller", label),
-				"controller returned 404 for "+pathPart+"; firmware may not expose this path",
-			)
-		}
-		return nil, err
-	}
-	out := make([]Event, 0, len(raw))
-	for _, m := range raw {
-		out = append(out, NormalizeEvent(m))
-	}
-	return out, nil
-}
-
-func NormalizeEvent(m map[string]any) Event {
-	sev := strField(m, "severity")
-	if sev == "" {
-		sev = strField(m, "subsystem", "key")
-	}
-	return Event{
-		ID:       strField(m, "_id", "id"),
-		Time:     strField(m, "time", "datetime", "timestamp"),
-		Message:  strField(m, "msg", "message"),
-		Severity: sev,
-	}
 }

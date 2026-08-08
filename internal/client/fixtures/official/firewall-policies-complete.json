@@ -1,0 +1,87 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 3,
+  "totalCount": 3,
+  "data": [
+    {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+      "name": "Allow DNS",
+      "description": "Permit DNS from internal clients",
+      "enabled": true,
+      "index": 100,
+      "action": {"type": "ALLOW", "allowReturnTraffic": false},
+      "source": {
+        "zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "trafficFilter": {
+          "type": "IP_ADDRESS",
+          "ipAddressFilter": {
+            "type": "IP_ADDRESSES",
+            "matchOpposite": false,
+            "items": [{"type": "SUBNET", "value": "192.0.2.0/24"}]
+          },
+          "portFilter": {
+            "type": "PORTS",
+            "matchOpposite": false,
+            "items": [
+              {"type": "PORT_NUMBER_RANGE", "start": 1024, "stop": 65535}
+            ]
+          }
+        }
+      },
+      "destination": {
+        "zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2",
+        "trafficFilter": {
+          "type": "DOMAIN",
+          "domainFilter": {
+            "type": "DOMAINS",
+            "domains": ["resolver.example.test"]
+          }
+        }
+      },
+      "ipProtocolScope": {
+        "ipVersion": "IPV4",
+        "protocolFilter": {
+          "type": "NAMED_PROTOCOL",
+          "protocol": {"name": "udp"},
+          "matchOpposite": false
+        }
+      },
+      "connectionStateFilter": ["NEW", "ESTABLISHED"],
+      "ipsecFilter": "MATCH_NOT_ENCRYPTED",
+      "loggingEnabled": true,
+      "schedule": {
+        "mode": "EVERY_DAY",
+        "timeFilter": {"startTime": "08:00", "stopTime": "18:00"}
+      },
+      "metadata": {"origin": "USER_DEFINED"}
+    },
+    {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
+      "name": "Block Web",
+      "enabled": true,
+      "index": 110,
+      "action": {"type": "BLOCK"},
+      "source": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff1"},
+      "destination": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2"},
+      "ipProtocolScope": {
+        "ipVersion": "IPV4_AND_IPV6",
+        "protocolFilter": {"type": "PRESET", "preset": {"name": "TCP_UDP"}}
+      },
+      "loggingEnabled": false,
+      "metadata": {"origin": "USER_DEFINED"}
+    },
+    {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3",
+      "name": "System Guard",
+      "enabled": true,
+      "index": 105,
+      "action": {"type": "REJECT"},
+      "source": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff1"},
+      "destination": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2"},
+      "ipProtocolScope": {"ipVersion": "IPV4_AND_IPV6"},
+      "loggingEnabled": false,
+      "metadata": {"origin": "SYSTEM_DEFINED"}
+    }
+  ]
+}

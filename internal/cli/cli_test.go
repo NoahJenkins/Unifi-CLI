@@ -2,11 +2,13 @@ package cli_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/noahjenkins/unifi-cli/internal/buildinfo"
 	"github.com/noahjenkins/unifi-cli/internal/cli"
 )
 
@@ -46,6 +48,92 @@ func TestRootHelpShowsPublicCommandsOnly(t *testing.T) {
 	}
 }
 
+func TestRootHelpShowsExactUnofficialProjectDisclaimer(t *testing.T) {
+	const disclaimer = "**Unofficial project.** unifi-cli is an independent community tool and is not affiliated with, endorsed by, or sponsored by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc."
+
+	root := cli.NewRoot()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	out := buf.String()
+	if strings.Count(out, disclaimer) != 1 {
+		t.Fatalf("root help must contain the exact disclaimer once:\n%s", out)
+	}
+}
+
+func TestRootFlagsRemoveRawAndExposeExperimental(t *testing.T) {
+	root := cli.NewRoot()
+	if root.PersistentFlags().Lookup("raw") != nil {
+		t.Fatal("root must not expose the removed --raw flag")
+	}
+	if root.PersistentFlags().Lookup("experimental") == nil {
+		t.Fatal("root must expose --experimental")
+	}
+}
+
+func TestRootVersionFlag(t *testing.T) {
+	originalVersion := buildinfo.Version
+	buildinfo.Version = "v1.2.3-test"
+	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	root := cli.NewRoot()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"--version"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--version: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "unifi version v1.2.3-test" {
+		t.Fatalf("--version output = %q, want %q", got, "unifi version v1.2.3-test")
+	}
+}
+
+func TestVersionCommandJSON(t *testing.T) {
+	originalVersion, originalCommit, originalBuildDate := buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate
+	buildinfo.Version = "v1.2.3-test"
+	buildinfo.Commit = "abc123"
+	buildinfo.BuildDate = "2026-08-07T12:00:00Z"
+	t.Cleanup(func() {
+		buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate = originalVersion, originalCommit, originalBuildDate
+	})
+	root := cli.NewRoot()
+	t.Cleanup(func() { _ = root.PersistentFlags().Set("json", "false") })
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"version", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("version --json: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("version JSON: %v; output=%q", err, buf.String())
+	}
+	if got["schema_version"] != "1" || got["ok"] != true || got["resource"] != "version" || got["action"] != "show" {
+		t.Fatalf("version envelope = %#v", got)
+	}
+	data, ok := got["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("version data = %#v", got["data"])
+	}
+	wantFields := []string{"version", "commit", "build_date", "go_version"}
+	if len(data) != len(wantFields) {
+		t.Fatalf("version data fields = %#v, want exactly %v", data, wantFields)
+	}
+	for _, field := range wantFields {
+		if value, exists := data[field]; !exists || value == "" {
+			t.Fatalf("version data missing non-empty %q: %#v", field, data)
+		}
+	}
+	if data["version"] != "v1.2.3-test" || data["commit"] != "abc123" || data["build_date"] != "2026-08-07T12:00:00Z" {
+		t.Fatalf("version linker fields = %#v", data)
+	}
+}
+
 func TestDeviceHelp(t *testing.T) {
 	root := cli.NewRoot()
 	buf := new(bytes.Buffer)
@@ -65,6 +153,22 @@ func TestDeviceHelp(t *testing.T) {
 	}
 	if cmd.Name() != "get" {
 		t.Fatalf("got %q", cmd.Name())
+	}
+}
+
+func TestSystemExposesOnlySupportedHealthCommand(t *testing.T) {
+	root := cli.NewRoot()
+	system, _, err := root.Find([]string{"system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subcommands := system.Commands()
+	if len(subcommands) != 1 || subcommands[0].Name() != "health" {
+		names := make([]string, 0, len(subcommands))
+		for _, command := range subcommands {
+			names = append(names, command.Name())
+		}
+		t.Fatalf("system subcommands = %v, want only health", names)
 	}
 }
 

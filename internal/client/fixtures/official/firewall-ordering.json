@@ -1,0 +1,6 @@
+{
+  "orderedFirewallPolicyIds": {
+    "beforeSystemDefined": ["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1"],
+    "afterSystemDefined": ["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2"]
+  }
+}

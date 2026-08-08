@@ -7,11 +7,13 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 )
 
-func (c *Client) ensureAuth(context.Context) error {
+func (c *Client) authSnapshot(context.Context) (string, string, error) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
 	if c.apiKey != "" {
-		return nil
+		return c.apiKey, c.authMethod, nil
 	}
-	return apperr.WithHint(
+	return "", "", apperr.WithHint(
 		apperr.New(apperr.NotAuthenticated, "not authenticated"),
 		"run 'unifi login' to save an API key",
 	)

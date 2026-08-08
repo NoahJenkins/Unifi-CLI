@@ -1,0 +1,77 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 7,
+  "totalCount": 7,
+  "data": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "type": "A_RECORD",
+      "domain": "a.example.test",
+      "enabled": true,
+      "ipv4Address": "192.0.2.10",
+      "ttlSeconds": 300,
+      "metadata": {"origin": "USER"}
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000002",
+      "type": "AAAA_RECORD",
+      "domain": "aaaa.example.test",
+      "enabled": true,
+      "ipv6Address": "2001:db8::10",
+      "ttlSeconds": 600,
+      "metadata": {"origin": "USER"}
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000003",
+      "type": "CNAME_RECORD",
+      "domain": "alias.example.test",
+      "enabled": true,
+      "targetDomain": "target.example.test",
+      "ttlSeconds": 900,
+      "metadata": {"origin": "USER"}
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000004",
+      "type": "MX_RECORD",
+      "domain": "example.test",
+      "enabled": true,
+      "mailServerDomain": "mail.example.test",
+      "ttlSeconds": 1200,
+      "priority": 10,
+      "metadata": {"origin": "USER"}
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000005",
+      "type": "TXT_RECORD",
+      "domain": "txt.example.test",
+      "enabled": false,
+      "text": "verification=value",
+      "ttlSeconds": 1800,
+      "metadata": {"origin": "USER"}
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000006",
+      "type": "SRV_RECORD",
+      "domain": "_sip._tcp.example.test",
+      "enabled": true,
+      "serverDomain": "sip.example.test",
+      "ttlSeconds": 2400,
+      "priority": 20,
+      "service": "_sip",
+      "protocol": "_tcp",
+      "port": 5060,
+      "weight": 5,
+      "metadata": {"origin": "USER"}
+    },
+    {
+      "id": "10000000-0000-4000-8000-000000000007",
+      "type": "FORWARD_DOMAIN",
+      "domain": "forward.example.test",
+      "enabled": true,
+      "serverDomain": "resolver.example.test",
+      "ipAddress": "198.51.100.53",
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

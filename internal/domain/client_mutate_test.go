@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
 )
 
 type mutateClientAPI struct {
-	sta   []map[string]any
-	calls []mutateCall
-	err   error
+	sta              []map[string]any
+	calls            []mutateCall
+	err              error
+	afterMutationMAC string
 }
 
 func (f *mutateClientAPI) Do(ctx context.Context, method, path string, in, out any) error {
@@ -26,6 +29,21 @@ func (f *mutateClientAPI) Do(ctx context.Context, method, path string, in, out a
 			return err
 		}
 		return json.Unmarshal(b, out)
+	}
+	if method == http.MethodPost {
+		body, _ := in.(map[string]any)
+		cmd, _ := body["cmd"].(string)
+		blocked, observable := map[string]bool{"block-sta": true, "unblock-sta": false}[cmd]
+		if observable {
+			for _, client := range f.sta {
+				if strFieldTest(client, "mac") == body["mac"] {
+					client["blocked"] = blocked
+					if f.afterMutationMAC != "" {
+						client["mac"] = f.afterMutationMAC
+					}
+				}
+			}
+		}
 	}
 	if out != nil {
 		_ = json.Unmarshal([]byte(`[]`), out)
@@ -64,7 +82,7 @@ func TestClientReconnectPlanAndApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "sta1" {
+	if !got.Accepted {
 		t.Fatalf("apply result: %+v", got)
 	}
 	last := api.calls[len(api.calls)-1]
@@ -94,7 +112,7 @@ func TestClientBlockPlanAndApply(t *testing.T) {
 	}
 	before, _ := p.Changes[0].Before.(map[string]any)
 	after, _ := p.Changes[0].After.(map[string]any)
-	if before["blocked"] != false || after["blocked"] != true {
+	if before["blocked"] != false || after["blocked"] != true || before["mac"] != "112233445501" || after["mac"] != "112233445501" {
 		t.Fatalf("before/after: %+v %+v", before, after)
 	}
 
@@ -105,13 +123,26 @@ func TestClientBlockPlanAndApply(t *testing.T) {
 	if !got.Blocked {
 		t.Fatalf("apply should return blocked client: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPost || last.path != "/proxy/network/api/s/default/cmd/stamgr" {
-		t.Fatalf("call = %+v", last)
+	var mutation mutateCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPost {
+			mutation = call
+		}
 	}
-	body, _ := last.body.(map[string]any)
+	if mutation.path != "/proxy/network/api/s/default/cmd/stamgr" {
+		t.Fatalf("call = %+v", mutation)
+	}
+	body, _ := mutation.body.(map[string]any)
 	if body["cmd"] != "block-sta" || body["mac"] != "11:22:33:44:55:01" {
 		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestClientBlockRejectsPostWriteMACSubstitution(t *testing.T) {
+	api := &mutateClientAPI{sta: fixtureSta(t), afterMutationMAC: "11:22:33:44:55:99"}
+	_, err := domain.NewClientService(api).ApplyBlock(context.Background(), "sta1")
+	if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "mac") {
+		t.Fatalf("error = %v, want MAC verification conflict", err)
 	}
 }
 
@@ -129,7 +160,7 @@ func TestClientUnblockPlanAndApply(t *testing.T) {
 	}
 	before, _ := p.Changes[0].Before.(map[string]any)
 	after, _ := p.Changes[0].After.(map[string]any)
-	if before["blocked"] != true || after["blocked"] != false {
+	if before["blocked"] != true || after["blocked"] != false || before["mac"] != "112233445503" || after["mac"] != "112233445503" {
 		t.Fatalf("before/after: %+v %+v", before, after)
 	}
 
@@ -140,11 +171,16 @@ func TestClientUnblockPlanAndApply(t *testing.T) {
 	if got.Blocked {
 		t.Fatalf("apply should return unblocked client: %+v", got)
 	}
-	last := api.calls[len(api.calls)-1]
-	if last.method != http.MethodPost || last.path != "/proxy/network/api/s/default/cmd/stamgr" {
-		t.Fatalf("call = %+v", last)
+	var mutation mutateCall
+	for _, call := range api.calls {
+		if call.method == http.MethodPost {
+			mutation = call
+		}
 	}
-	body, _ := last.body.(map[string]any)
+	if mutation.path != "/proxy/network/api/s/default/cmd/stamgr" {
+		t.Fatalf("call = %+v", mutation)
+	}
+	body, _ := mutation.body.(map[string]any)
 	if body["cmd"] != "unblock-sta" || body["mac"] != "11:22:33:44:55:03" {
 		t.Fatalf("body = %+v", body)
 	}

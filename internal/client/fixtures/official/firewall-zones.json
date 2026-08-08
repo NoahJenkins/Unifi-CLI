@@ -1,0 +1,26 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 3,
+  "totalCount": 3,
+  "data": [
+    {
+      "id": "ffffffff-ffff-4fff-8fff-fffffffffff2",
+      "name": "External",
+      "networkIds": [],
+      "metadata": {"origin": "SYSTEM_DEFINED", "configurable": false}
+    },
+    {
+      "id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+      "name": "Internal",
+      "networkIds": ["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],
+      "metadata": {"origin": "SYSTEM_DEFINED", "configurable": true}
+    },
+    {
+      "id": "ffffffff-ffff-4fff-8fff-fffffffffff3",
+      "name": "Lab",
+      "networkIds": ["cccccccc-cccc-4ccc-8ccc-ccccccccccc2"],
+      "metadata": {"origin": "USER_DEFINED"}
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
@@ -55,10 +56,12 @@ func newPortGetCmd() *cobra.Command {
 
 func newPortUpdateCmd() *cobra.Command {
 	var (
-		poe     string
-		name    string
-		profile string
-		enabled bool
+		poe          string
+		name         string
+		profile      string
+		enabled      bool
+		clearName    bool
+		clearProfile bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update <device> <port>",
@@ -70,8 +73,12 @@ func newPortUpdateCmd() *cobra.Command {
 				return emitErr("port", "update", apperr.Newf(apperr.ValidationFailed, "invalid port index %q", args[1]))
 			}
 			in := domain.PortInput{
-				Name:    name,
-				Profile: profile,
+				Name:         name,
+				SetName:      cmd.Flags().Changed("name"),
+				ClearName:    clearName,
+				Profile:      profile,
+				SetProfile:   cmd.Flags().Changed("profile"),
+				ClearProfile: clearProfile,
 			}
 			if cmd.Flags().Changed("poe") {
 				in.POE = poe
@@ -87,6 +94,8 @@ func newPortUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&poe, "poe", "", "PoE mode (auto|off|pasv24|passthrough|…)")
 	cmd.Flags().StringVar(&name, "name", "", "port name")
 	cmd.Flags().StringVar(&profile, "profile", "", "port profile id")
+	cmd.Flags().BoolVar(&clearName, "clear-name", false, "clear the port name")
+	cmd.Flags().BoolVar(&clearProfile, "clear-profile", false, "clear the port profile")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "enable or disable the port")
 	return cmd
 }
@@ -122,7 +131,7 @@ func runPortList(device string) error {
 			p.Media,
 			p.Speed,
 			p.POE,
-			strconv.FormatBool(p.Enabled),
+			portEnabledText(p),
 			p.Profile,
 		})
 	}
@@ -157,10 +166,17 @@ func runPortGet(device string, portIdx int) error {
 	fmt.Fprintf(rt.Out, "media: %s\n", render.SafeText(p.Media))
 	fmt.Fprintf(rt.Out, "speed: %s\n", render.SafeText(p.Speed))
 	fmt.Fprintf(rt.Out, "poe: %s\n", render.SafeText(p.POE))
-	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(p.Enabled))
+	fmt.Fprintf(rt.Out, "enabled: %s\n", portEnabledText(p))
 	fmt.Fprintf(rt.Out, "profile: %s\n", render.SafeText(p.Profile))
 	fmt.Fprintf(rt.Out, "networks: %s\n", render.SafeText(p.Networks))
 	return nil
+}
+
+func portEnabledText(p domain.Port) string {
+	if !p.EnabledKnown {
+		return ""
+	}
+	return strconv.FormatBool(p.Enabled)
 }
 
 func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
@@ -171,14 +187,45 @@ func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
 	svc := domain.NewPortService(rt.Client)
 	ctx := context.Background()
 
-	code := RunMutation(rt, "port", "update", false,
-		func() (plan.Plan, any, error) {
-			p, cur, err := svc.Update(ctx, device, portIdx, in)
-			return p, cur, err
+	code := RunPreparedMutation(rt, "port", "update",
+		func() (plan.PreparedMutation, error) {
+			p, _, snapshot, err := svc.PrepareUpdate(ctx, device, portIdx, in)
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			if len(p.Changes) != 1 || p.Changes[0].ID == "" {
+				return plan.PreparedMutation{}, fmt.Errorf("port update produced invalid target plan")
+			}
+			risk, experimental := task7MutationPolicy("port", "update")
+			return plan.Targeted(p, p.Changes[0].ID, snapshot, risk, experimental)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, device, portIdx, in)
+		func(target plan.Target) (any, error) {
+			deviceID, targetPortIdx, err := parsePortTarget(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			_, _, snapshot, err := svc.PrepareUpdate(ctx, deviceID, targetPortIdx, in)
+			return snapshot, err
+		},
+		func(target plan.Target) (any, error) {
+			deviceID, targetPortIdx, err := parsePortTarget(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			return svc.ApplyUpdatePrepared(ctx, target, deviceID, targetPortIdx, in)
 		},
 	)
 	return emittedExit(code)
+}
+
+func parsePortTarget(targetID string) (string, int, error) {
+	separator := strings.LastIndexByte(targetID, '/')
+	if separator <= 0 || separator == len(targetID)-1 {
+		return "", 0, fmt.Errorf("invalid prepared port target %q", targetID)
+	}
+	portIdx, err := strconv.Atoi(targetID[separator+1:])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid prepared port target %q: %w", targetID, err)
+	}
+	return targetID[:separator], portIdx, nil
 }

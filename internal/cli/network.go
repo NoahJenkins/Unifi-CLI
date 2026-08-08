@@ -49,19 +49,25 @@ func newNetworkGetCmd() *cobra.Command {
 
 func newNetworkCreateCmd() *cobra.Command {
 	var (
-		name    string
-		vlan    int
-		subnet  string
-		purpose string
+		name       string
+		vlan       int
+		subnet     string
+		management string
+		domainName string
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a network",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.NetworkInput{
-				Name:    name,
-				Purpose: purpose,
-				Subnet:  subnet,
+				Name:          name,
+				SetName:       true,
+				Purpose:       management,
+				SetPurpose:    true,
+				Subnet:        subnet,
+				SetSubnet:     cmd.Flags().Changed("subnet"),
+				DomainName:    domainName,
+				SetDomainName: cmd.Flags().Changed("domain-name"),
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -73,17 +79,21 @@ func newNetworkCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "network name")
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
-	cmd.Flags().StringVar(&purpose, "purpose", "corporate", "purpose (corporate|guest|wan|…)")
+	cmd.Flags().StringVar(&management, "management", "", "management mode (gateway|switch|unmanaged)")
+	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("management")
 	return cmd
 }
 
 func newNetworkUpdateCmd() *cobra.Command {
 	var (
-		name    string
-		vlan    int
-		subnet  string
-		purpose string
+		name            string
+		vlan            int
+		subnet          string
+		management      string
+		domainName      string
+		clearDomainName bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -91,9 +101,15 @@ func newNetworkUpdateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.NetworkInput{
-				Name:    name,
-				Purpose: purpose,
-				Subnet:  subnet,
+				Name:            name,
+				SetName:         cmd.Flags().Changed("name"),
+				Purpose:         management,
+				SetPurpose:      cmd.Flags().Changed("management"),
+				Subnet:          subnet,
+				SetSubnet:       cmd.Flags().Changed("subnet"),
+				DomainName:      domainName,
+				SetDomainName:   cmd.Flags().Changed("domain-name"),
+				ClearDomainName: clearDomainName,
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -105,14 +121,16 @@ func newNetworkUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "network name")
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
-	cmd.Flags().StringVar(&purpose, "purpose", "", "purpose (corporate|guest|wan|…)")
+	cmd.Flags().StringVar(&management, "management", "", "management mode (gateway|switch|unmanaged)")
+	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
+	cmd.Flags().BoolVar(&clearDomainName, "clear-domain-name", false, "clear the DHCP domain name")
 	return cmd
 }
 
 func newNetworkDeleteCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete <id>",
-		Short: "Delete a network (WAN delete is destructive under safe_mode)",
+		Short: "Delete a network (destructive under safe_mode)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runNetworkDelete(args[0])
@@ -203,12 +221,17 @@ func runNetworkCreate(in domain.NetworkInput) error {
 	}
 	svc := domain.NewNetworkService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "network", "create", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "network", "create",
+		func() (plan.PreparedMutation, error) {
 			p, err := svc.Create(ctx, in)
-			return p, nil, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			risk, experimental := task7MutationPolicy("network", "create")
+			return plan.Untargeted(p, risk, experimental), nil
 		},
-		func() (any, error) {
+		nil,
+		func(target plan.Target) (any, error) {
 			return svc.ApplyCreate(ctx, in)
 		},
 	)
@@ -222,13 +245,21 @@ func runNetworkUpdate(id string, in domain.NetworkInput) error {
 	}
 	svc := domain.NewNetworkService(rt.Client)
 	ctx := context.Background()
-	code := RunMutation(rt, "network", "update", false,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "network", "update",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Update(ctx, id, in)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			risk, experimental := task7MutationPolicy("network", "update")
+			return plan.Targeted(p, n.ID, p.Changes, risk, experimental)
 		},
-		func() (any, error) {
-			return svc.ApplyUpdate(ctx, id, in)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Update(ctx, target.ID(), in)
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyUpdatePrepared(ctx, target, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -242,21 +273,21 @@ func runNetworkDelete(id string) error {
 	svc := domain.NewNetworkService(rt.Client)
 	ctx := context.Background()
 
-	// Resolve once for destructive flag; plan/apply resolve again inside.
-	existing, err := svc.Get(ctx, id)
-	if err != nil {
-		code := rt.Emit("network", "delete", nil, nil, err)
-		return emittedExit(code)
-	}
-	destructive := domain.NetworkDeleteDestructive(existing)
-
-	code := RunMutation(rt, "network", "delete", destructive,
-		func() (plan.Plan, any, error) {
+	code := RunPreparedMutation(rt, "network", "delete",
+		func() (plan.PreparedMutation, error) {
 			p, n, err := svc.Delete(ctx, id)
-			return p, n, err
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			risk, experimental := task7MutationPolicy("network", "delete")
+			return plan.Targeted(p, n.ID, p.Changes, risk, experimental)
 		},
-		func() (any, error) {
-			return svc.ApplyDelete(ctx, id)
+		func(target plan.Target) (any, error) {
+			p, _, err := svc.Delete(ctx, target.ID())
+			return p.Changes, err
+		},
+		func(target plan.Target) (any, error) {
+			return svc.ApplyDeletePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)

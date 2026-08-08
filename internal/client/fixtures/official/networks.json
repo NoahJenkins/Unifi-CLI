@@ -1,0 +1,26 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 2,
+  "totalCount": 2,
+  "data": [
+    {
+      "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "name": "LAN",
+      "enabled": true,
+      "default": true,
+      "management": "GATEWAY",
+      "vlanId": 1,
+      "metadata": {"origin": "SYSTEM"}
+    },
+    {
+      "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+      "name": "IoT",
+      "enabled": true,
+      "default": false,
+      "management": "GATEWAY",
+      "vlanId": 20,
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}
