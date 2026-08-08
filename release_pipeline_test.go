@@ -438,9 +438,12 @@ func TestReleaseWorkflowCanResumeAnImmutableTagAndUsesNativeWindowsExtraction(t 
 		"--expected-commit $env:RELEASE_COMMIT",
 		"predicate-type: https://slsa.dev/provenance/v1",
 		"predicate-path: ${{ runner.temp }}/resumed-provenance.json",
+		"uri: (\"git+\" + $repository + \"@\" + $workflow_ref)",
 		"uri: (\"git+\" + $repository + \"@refs/tags/\" + $release_tag)",
 		"digest: {gitCommit: $release_commit}",
 		"digest: {gitCommit: $workflow_commit}",
+		"jq -e --arg commit \"$WORKFLOW_COMMIT\" '.buildDefinition.resolvedDependencies[0].digest.gitCommit == $commit'",
+		"jq -e --arg commit \"$RELEASE_COMMIT\" '.buildDefinition.resolvedDependencies[1].digest.gitCommit == $commit'",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("resumable release workflow missing %q", want)
@@ -448,6 +451,11 @@ func TestReleaseWorkflowCanResumeAnImmutableTagAndUsesNativeWindowsExtraction(t 
 	}
 	if strings.Contains(text, "if [ \"${{ matrix.goos }}\" = windows ]") {
 		t.Error("Windows archive execution still shares the Unix tar extraction step")
+	}
+	workflowDependency := "uri: (\"git+\" + $repository + \"@\" + $workflow_ref)"
+	releaseDependency := "uri: (\"git+\" + $repository + \"@refs/tags/\" + $release_tag)"
+	if strings.Index(text, workflowDependency) >= strings.Index(text, releaseDependency) {
+		t.Error("workflow configuration must be the first resolved dependency required by GitHub attestation validation")
 	}
 }
 
