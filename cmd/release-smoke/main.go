@@ -41,6 +41,9 @@ const (
 	maxReleaseExpandedBytes  = 512 << 20
 	maxReleaseArchiveEntries = 64
 	maxReleaseSourceEntries  = 10000
+	maxBundleBytes           = 1 << 30
+	maxBundleEntryBytes      = 256 << 20
+	maxBundleEntries         = 2048
 )
 
 type sourceManifest struct {
@@ -91,6 +94,9 @@ func main() {
 	var trustedBinaries string
 	var trustedSourceManifest string
 	var writeSourceManifest string
+	var extractBundlePath string
+	var bundleKind string
+	var destination string
 	flag.BoolVar(&describe, "describe", false, "print the target and smoke-command contract")
 	flag.BoolVar(&all, "all", false, "cross-build and structurally verify all release targets")
 	flag.BoolVar(&native, "native", false, "build and execute the current native release target")
@@ -101,16 +107,19 @@ func main() {
 	flag.StringVar(&trustedBinaries, "trusted-binaries", "", "directory of trusted binaries cross-built from the exact checkout before artifact generation")
 	flag.StringVar(&trustedSourceManifest, "trusted-source-manifest", "", "trusted source manifest generated from the exact release commit")
 	flag.StringVar(&writeSourceManifest, "write-source-manifest", "", "write a trusted source manifest for --expected-commit")
+	flag.StringVar(&extractBundlePath, "extract-bundle", "", "safely extract a transferred release bundle")
+	flag.StringVar(&bundleKind, "bundle-kind", "", "bundle namespace policy: trusted, generated, verified, or publication")
+	flag.StringVar(&destination, "destination", "", "new destination directory for --extract-bundle")
 	flag.Parse()
 
 	selected := 0
-	for _, enabled := range []bool{describe, all, native, artifacts != "", binary != "", writeSourceManifest != ""} {
+	for _, enabled := range []bool{describe, all, native, artifacts != "", binary != "", writeSourceManifest != "", extractBundlePath != ""} {
 		if enabled {
 			selected++
 		}
 	}
 	if selected != 1 || flag.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, --binary FILE, --artifacts DIR, or --write-source-manifest FILE")
+		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, --binary FILE, --artifacts DIR, --write-source-manifest FILE, or --extract-bundle FILE")
 		os.Exit(2)
 	}
 	if artifacts != "" && (expectedVersion == "" || expectedCommit == "" || trustedBinaries == "" || trustedSourceManifest == "") {
@@ -125,6 +134,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--binary requires --expected-version and --expected-commit")
 		os.Exit(2)
 	}
+	if extractBundlePath != "" && (bundleKind == "" || destination == "") {
+		fmt.Fprintln(os.Stderr, "--extract-bundle requires --bundle-kind and --destination")
+		os.Exit(2)
+	}
+	if extractBundlePath == "" && (bundleKind != "" || destination != "") {
+		fmt.Fprintln(os.Stderr, "--bundle-kind and --destination require --extract-bundle")
+		os.Exit(2)
+	}
 
 	if describe {
 		describeContract(os.Stdout)
@@ -134,7 +151,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	var err error
-	if writeSourceManifest != "" {
+	if extractBundlePath != "" {
+		err = extractBundle(extractBundlePath, destination, bundleKind)
+	} else if writeSourceManifest != "" {
 		root, rootErr := repositoryRoot()
 		if rootErr != nil {
 			err = rootErr
@@ -160,6 +179,142 @@ func main() {
 		fmt.Fprintln(os.Stderr, "release smoke:", err)
 		os.Exit(1)
 	}
+}
+
+type bundlePolicy struct {
+	allowed  map[string]struct{}
+	required []string
+}
+
+func extractBundle(bundlePath, destination, kind string) (err error) {
+	policies := map[string]bundlePolicy{
+		"trusted": {
+			allowed:  map[string]struct{}{"unifi-trusted": {}, "unifi-source-manifest.json": {}},
+			required: []string{"unifi-trusted", "unifi-source-manifest.json"},
+		},
+		"generated": {
+			allowed:  map[string]struct{}{"dist": {}},
+			required: []string{"dist"},
+		},
+		"verified": {
+			allowed:  map[string]struct{}{"dist": {}, ".release-verification": {}},
+			required: []string{"dist", ".release-verification"},
+		},
+		"publication": {
+			allowed:  map[string]struct{}{"dist": {}},
+			required: []string{"dist"},
+		},
+	}
+	policy, ok := policies[kind]
+	if !ok {
+		return fmt.Errorf("unknown bundle kind %q", kind)
+	}
+	info, err := os.Lstat(bundlePath)
+	if err != nil {
+		return fmt.Errorf("stat %s bundle: %w", kind, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxBundleBytes {
+		return fmt.Errorf("%s bundle is not a bounded regular file", kind)
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("bundle destination already exists")
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect bundle destination: %w", err)
+	}
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		return fmt.Errorf("create bundle destination: %w", err)
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(destination)
+		}
+	}()
+
+	f, err := os.Open(bundlePath)
+	if err != nil {
+		return fmt.Errorf("open %s bundle: %w", kind, err)
+	}
+	defer f.Close()
+	reader := tar.NewReader(io.LimitReader(f, maxBundleBytes+1))
+	seen := make(map[string]struct{})
+	seenRoots := make(map[string]struct{})
+	var total int64
+	for entries := 0; ; entries++ {
+		if entries >= maxBundleEntries {
+			return fmt.Errorf("%s bundle exceeds %d entries", kind, maxBundleEntries)
+		}
+		header, nextErr := reader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return fmt.Errorf("read %s bundle: %w", kind, nextErr)
+		}
+		name, pathErr := validateBundlePath(header.Name)
+		if pathErr != nil {
+			return pathErr
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("duplicate bundle entry %q", name)
+		}
+		seen[name] = struct{}{}
+		root, _, _ := strings.Cut(name, "/")
+		if _, allowed := policy.allowed[root]; !allowed {
+			return fmt.Errorf("entry %q is outside the %s bundle namespace", name, kind)
+		}
+		seenRoots[root] = struct{}{}
+		if header.Size < 0 || header.Size > maxBundleEntryBytes || total > maxBundleBytes-header.Size {
+			return fmt.Errorf("%s bundle entry %q exceeds size limits", kind, name)
+		}
+		total += header.Size
+		if header.Mode&0o7000 != 0 {
+			return fmt.Errorf("%s bundle entry %q has unsafe mode", kind, name)
+		}
+		target := filepath.Join(destination, filepath.FromSlash(name))
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if header.Size != 0 {
+				return fmt.Errorf("directory bundle entry %q has data", name)
+			}
+			if err := os.MkdirAll(target, fs.FileMode(header.Mode)&0o777); err != nil {
+				return fmt.Errorf("create bundle directory %q: %w", name, err)
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return fmt.Errorf("create bundle parent for %q: %w", name, err)
+			}
+			out, openErr := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode)&0o777)
+			if openErr != nil {
+				return fmt.Errorf("create bundle file %q: %w", name, openErr)
+			}
+			_, copyErr := io.CopyN(out, reader, header.Size)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return fmt.Errorf("extract bundle file %q: %w", name, copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close bundle file %q: %w", name, closeErr)
+			}
+		default:
+			return fmt.Errorf("unsupported bundle entry type %d for %q", header.Typeflag, name)
+		}
+	}
+	for _, required := range policy.required {
+		if _, ok := seenRoots[required]; !ok {
+			return fmt.Errorf("%s bundle is missing required namespace %q", kind, required)
+		}
+	}
+	complete = true
+	return nil
+}
+
+func validateBundlePath(raw string) (string, error) {
+	name := strings.TrimSuffix(raw, "/")
+	if name == "" || name == "." || archivepath.IsAbs(name) || filepath.IsAbs(name) || strings.ContainsAny(name, "\\:") || archivepath.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
+		return "", fmt.Errorf("unsafe bundle path %q", raw)
+	}
+	return name, nil
 }
 
 func describeContract(w io.Writer) {

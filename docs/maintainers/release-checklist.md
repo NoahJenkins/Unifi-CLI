@@ -32,7 +32,10 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       commit, and commit-date linker values; generate an exact path, Git-mode,
       and SHA-256 source manifest; seal those inputs; and expose the seal digest
       as a job output. Generate and seal GoReleaser output in a separate job.
-      A third read-only job must verify both seals before comparing generated
+      A third read-only job must validate both digests as exactly 64 lowercase
+      hexadecimal characters, verify both seals, safely extract the bundles
+      into disjoint `trusted` and `generated` roots, and reject archive members
+      outside each bundle's allowlisted namespace before comparing generated
       artifacts with the isolated trusted inputs. Confirm its
       `go run ./cmd/release-smoke --artifacts ... --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries ... --trusted-source-manifest ...`
       verifies the source archive, all six exact archive names and layouts,
@@ -48,9 +51,14 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       no contents-write, attestation, or OIDC authority. Every transferred tar
       must match the producing job's SHA-256 output before extraction. Reverify
       the sealed bundle before the six native runner smokes, attestation, and
-      publication staging. The final contents-write job must contain no
-      third-party actions: it downloads the sealed minimal publication bundle
-      with `gh`, verifies its independent digest, uploads only the checksum
+      publication staging. Pass all cross-job digests through environment
+      variables and validate them before comparison; never interpolate them
+      into shell source. The final contents-write job must contain no
+      third-party actions and must never execute code supplied by an artifact:
+      it fetches the exact `GITHUB_SHA`, safely extracts the data-only
+      publication bundle, independently rebuilds all six trusted binaries and
+      the source manifest, reruns the complete artifact verifier, then executes
+      only the publisher from that exact commit. It uploads only the checksum
       allowlist, downloads every draft asset by ID, and compares exact bytes
       before making the release public. Any mismatch must leave a draft.
 - [ ] Confirm the exact-tag preflight binds the remote tag to `GITHUB_SHA` and

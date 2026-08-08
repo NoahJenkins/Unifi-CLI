@@ -258,9 +258,11 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 		"for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do",
 		"GOOS=\"$GOOS\" GOARCH=\"$GOARCH\" go build -trimpath -ldflags \"$RELEASE_LDFLAGS\" -o \"$OUTPUT\" ./cmd/unifi",
 		"go run ./cmd/release-smoke --write-source-manifest \"$RUNNER_TEMP/unifi-source-manifest.json\" --expected-commit \"$GITHUB_SHA\"",
-		"go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/release-inputs/dist\" --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-binaries \"$RUNNER_TEMP/release-inputs/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/release-inputs/unifi-source-manifest.json\"",
+		"go run ./cmd/release-smoke --extract-bundle \"$RUNNER_TEMP/release-downloads/generated/generated-release.tar\" --bundle-kind generated --destination \"$RUNNER_TEMP/release-inputs/generated\"",
+		"go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/release-inputs/generated/dist\" --expected-version \"${GITHUB_REF_NAME#v}\" --expected-commit \"$GITHUB_SHA\" --trusted-binaries \"$RUNNER_TEMP/release-inputs/trusted/unifi-trusted\" --trusted-source-manifest \"$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json\"",
 		"gh run download \"$GITHUB_RUN_ID\" --repo \"$GITHUB_REPOSITORY\" --name \"publication-release-$GITHUB_SHA\"",
-		"bash \"$RUNNER_TEMP/publication/scripts/publish-release.sh\"",
+		"bash \"$RUNNER_TEMP/source/scripts/publish-release.sh\"",
+		"env -u GH_TOKEN go run ./cmd/release-smoke --artifacts \"$RUNNER_TEMP/publication/dist\"",
 		"go run ./cmd/release-smoke --binary \"$BINARY\" --expected-version \"$RELEASE_VERSION\" --expected-commit \"$GITHUB_SHA\"",
 		"ubuntu-24.04-arm",
 		"macos-15-intel",
@@ -350,6 +352,12 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	if !(downloadTrusted < unseal && downloadGenerated < unseal && unseal < compare && compare < verifiedSeal && verifiedSeal < verifiedUpload) {
 		t.Errorf("unsafe verification ordering: trusted=%d generated=%d unseal=%d compare=%d seal=%d upload=%d", downloadTrusted, downloadGenerated, unseal, compare, verifiedSeal, verifiedUpload)
 	}
+	for _, step := range verifySteps {
+		run := fmt.Sprint(step.(map[string]any)["run"])
+		if strings.Contains(run, "needs.trusted_inputs.outputs.bundle_digest") || strings.Contains(run, "needs.generate.outputs.bundle_digest") {
+			t.Errorf("job output interpolated directly into verifier shell: %q", run)
+		}
+	}
 
 	if uses := allUses(publishJob); len(uses) != 0 {
 		t.Errorf("write-capable publish job must not run third-party actions: %v", uses)
@@ -360,7 +368,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 	publishStep := publishSteps[0].(map[string]any)
 	run := fmt.Sprint(publishStep["run"])
-	for _, want := range []string{"gh run download", "shasum -a 256", "publish-release.sh"} {
+	for _, want := range []string{"gh run download", "shasum -a 256", "publish-release.sh", "git -C \"$RUNNER_TEMP/source\" fetch", "--extract-bundle", "--artifacts"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("minimal publish step missing %q", want)
 		}
@@ -368,6 +376,19 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	env := mapValue(t, publishStep, "env")
 	if fmt.Sprint(env["GH_TOKEN"]) != "${{ secrets.GITHUB_TOKEN }}" {
 		t.Errorf("publish GH_TOKEN = %q", env["GH_TOKEN"])
+	}
+	if fmt.Sprint(env["EXPECTED_BUNDLE_DIGEST"]) != "${{ needs.prepare_publication.outputs.bundle_digest }}" {
+		t.Errorf("publish expected digest = %q", env["EXPECTED_BUNDLE_DIGEST"])
+	}
+	if strings.Contains(run, "needs.prepare_publication.outputs.bundle_digest") {
+		t.Error("publisher interpolates a preceding-job digest directly into shell source")
+	}
+	if strings.Contains(run, "$RUNNER_TEMP/publication/scripts/") {
+		t.Error("publisher executes code supplied by the lower-privilege publication artifact")
+	}
+	prepareSeal := fmt.Sprint(jobSteps(t, prepareJob)[stepIndex(t, jobSteps(t, prepareJob), "Seal publication bundle")].(map[string]any)["run"])
+	if strings.Contains(prepareSeal, "scripts") || strings.Contains(prepareSeal, "docs") {
+		t.Errorf("publication artifact must be data-only: %q", prepareSeal)
 	}
 }
 

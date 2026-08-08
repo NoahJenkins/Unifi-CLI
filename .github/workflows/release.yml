@@ -62,6 +62,7 @@ jobs:
         run: |
           tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/trusted-release.tar" unifi-trusted unifi-source-manifest.json
           DIGEST="$(shasum -a 256 "$RUNNER_TEMP/trusted-release.tar" | awk '{print $1}')"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Transfer sealed trusted inputs
@@ -116,6 +117,7 @@ jobs:
         run: |
           tar -cf "$RUNNER_TEMP/generated-release.tar" dist
           DIGEST="$(shasum -a 256 "$RUNNER_TEMP/generated-release.tar" | awk '{print $1}')"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Transfer generated artifact bundle
@@ -165,27 +167,33 @@ jobs:
 
       - name: Verify bundle seals and extract
         shell: bash
+        env:
+          TRUSTED_BUNDLE_DIGEST: ${{ needs.trusted_inputs.outputs.bundle_digest }}
+          GENERATED_BUNDLE_DIGEST: ${{ needs.generate.outputs.bundle_digest }}
         run: |
-          test "$(shasum -a 256 "$RUNNER_TEMP/release-downloads/trusted/trusted-release.tar" | awk '{print $1}')" = "${{ needs.trusted_inputs.outputs.bundle_digest }}"
-          test "$(shasum -a 256 "$RUNNER_TEMP/release-downloads/generated/generated-release.tar" | awk '{print $1}')" = "${{ needs.generate.outputs.bundle_digest }}"
+          [[ "$TRUSTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GENERATED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$RUNNER_TEMP/release-downloads/trusted/trusted-release.tar" | awk '{print $1}')" = "$TRUSTED_BUNDLE_DIGEST"
+          test "$(shasum -a 256 "$RUNNER_TEMP/release-downloads/generated/generated-release.tar" | awk '{print $1}')" = "$GENERATED_BUNDLE_DIGEST"
           mkdir -p "$RUNNER_TEMP/release-inputs"
-          tar -xf "$RUNNER_TEMP/release-downloads/trusted/trusted-release.tar" -C "$RUNNER_TEMP/release-inputs"
-          tar -xf "$RUNNER_TEMP/release-downloads/generated/generated-release.tar" -C "$RUNNER_TEMP/release-inputs"
+          go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/release-downloads/trusted/trusted-release.tar" --bundle-kind trusted --destination "$RUNNER_TEMP/release-inputs/trusted"
+          go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/release-downloads/generated/generated-release.tar" --bundle-kind generated --destination "$RUNNER_TEMP/release-inputs/generated"
 
       - name: Verify generated artifacts against isolated trusted inputs
         shell: bash
-        run: go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/release-inputs/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/release-inputs/unifi-trusted" --trusted-source-manifest "$RUNNER_TEMP/release-inputs/unifi-source-manifest.json"
+        run: go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/release-inputs/generated/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/release-inputs/trusted/unifi-trusted" --trusted-source-manifest "$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json"
 
       - name: Seal verified release bundle
         id: seal
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/verified-bundle/.release-verification"
-          cp -R "$RUNNER_TEMP/release-inputs/dist" "$RUNNER_TEMP/verified-bundle/dist"
-          cp -R "$RUNNER_TEMP/release-inputs/unifi-trusted" "$RUNNER_TEMP/verified-bundle/.release-verification/trusted"
-          cp "$RUNNER_TEMP/release-inputs/unifi-source-manifest.json" "$RUNNER_TEMP/verified-bundle/.release-verification/source-manifest.json"
+          cp -R "$RUNNER_TEMP/release-inputs/generated/dist" "$RUNNER_TEMP/verified-bundle/dist"
+          cp -R "$RUNNER_TEMP/release-inputs/trusted/unifi-trusted" "$RUNNER_TEMP/verified-bundle/.release-verification/trusted"
+          cp "$RUNNER_TEMP/release-inputs/trusted/unifi-source-manifest.json" "$RUNNER_TEMP/verified-bundle/.release-verification/source-manifest.json"
           tar -C "$RUNNER_TEMP/verified-bundle" -cf "$RUNNER_TEMP/verified-release.tar" dist .release-verification
           DIGEST="$(shasum -a 256 "$RUNNER_TEMP/verified-release.tar" | awk '{print $1}')"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Transfer sealed verified release bundle
@@ -249,30 +257,37 @@ jobs:
       - name: Verify bundle seal on Unix
         if: runner.os != 'Windows'
         shell: bash
-        run: test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "${{ needs.verify.outputs.bundle_digest }}"
+        env:
+          EXPECTED_BUNDLE_DIGEST: ${{ needs.verify.outputs.bundle_digest }}
+        run: |
+          [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
 
       - name: Verify bundle seal on Windows
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          EXPECTED_BUNDLE_DIGEST: ${{ needs.verify.outputs.bundle_digest }}
         run: |
+          if ($env:EXPECTED_BUNDLE_DIGEST -notmatch '^[0-9a-f]{64}$') { throw "invalid verified release bundle digest" }
           $actual = (Get-FileHash "$env:RUNNER_TEMP/verified-download/verified-release.tar" -Algorithm SHA256).Hash.ToLower()
-          if ($actual -ne "${{ needs.verify.outputs.bundle_digest }}") { throw "verified release bundle digest mismatch" }
+          if ($actual -ne $env:EXPECTED_BUNDLE_DIGEST) { throw "verified release bundle digest mismatch" }
 
       - name: Extract and reverify transferred release bundle
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/verified"
-          tar -xf "$RUNNER_TEMP/verified-download/verified-release.tar" -C "$RUNNER_TEMP/verified"
-          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
+          go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/verified-download/verified-release.tar" --bundle-kind verified --destination "$RUNNER_TEMP/verified/release"
+          go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/release/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/release/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/release/.release-verification/source-manifest.json"
 
       - name: Execute archived binary smoke contract
         shell: bash
         run: |
           RELEASE_VERSION="${GITHUB_REF_NAME#v}"
-          ARCHIVE="$RUNNER_TEMP/verified/dist/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          ARCHIVE="$RUNNER_TEMP/verified/release/dist/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
           EXECUTABLE="unifi"
           if [ "${{ matrix.goos }}" = windows ]; then
-            ARCHIVE="$RUNNER_TEMP/verified/dist/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+            ARCHIVE="$RUNNER_TEMP/verified/release/dist/unifi-cli_${RELEASE_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
             EXECUTABLE="unifi.exe"
           fi
           SMOKE_DIR="$(mktemp -d)"
@@ -313,10 +328,12 @@ jobs:
 
       - name: Verify bundle seal, extract, and reverify
         shell: bash
+        env:
+          EXPECTED_BUNDLE_DIGEST: ${{ needs.verify.outputs.bundle_digest }}
         run: |
-          test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "${{ needs.verify.outputs.bundle_digest }}"
-          mkdir -p "$RUNNER_TEMP/verified"
-          tar -xf "$RUNNER_TEMP/verified-download/verified-release.tar" -C "$RUNNER_TEMP/verified"
+          [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
+          go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/verified-download/verified-release.tar" --bundle-kind verified --destination "$RUNNER_TEMP/verified"
           go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
           mkdir -p "$RUNNER_TEMP/attest"
           cp "$RUNNER_TEMP/verified/dist/checksums.txt" "$RUNNER_TEMP/attest/checksums.txt"
@@ -367,25 +384,23 @@ jobs:
 
       - name: Reverify and stage exact publication files
         shell: bash
+        env:
+          EXPECTED_BUNDLE_DIGEST: ${{ needs.verify.outputs.bundle_digest }}
         run: |
-          test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "${{ needs.verify.outputs.bundle_digest }}"
-          mkdir -p "$RUNNER_TEMP/verified" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/publication/scripts" "$RUNNER_TEMP/publication/docs/releases"
-          tar -xf "$RUNNER_TEMP/verified-download/verified-release.tar" -C "$RUNNER_TEMP/verified"
+          [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$RUNNER_TEMP/verified-download/verified-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
+          go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/verified-download/verified-release.tar" --bundle-kind verified --destination "$RUNNER_TEMP/verified"
           go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/verified/dist" --expected-version "${GITHUB_REF_NAME#v}" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/verified/.release-verification/trusted" --trusted-source-manifest "$RUNNER_TEMP/verified/.release-verification/source-manifest.json"
-          cp "$RUNNER_TEMP/verified/dist/checksums.txt" "$RUNNER_TEMP/publication/dist/checksums.txt"
-          while read -r digest filename extra || [[ -n "${digest:-}${filename:-}${extra:-}" ]]; do
-            test -z "${extra:-}"
-            cp "$RUNNER_TEMP/verified/dist/$filename" "$RUNNER_TEMP/publication/dist/$filename"
-          done < "$RUNNER_TEMP/verified/dist/checksums.txt"
-          cp scripts/publish-release.sh scripts/release-preflight.sh "$RUNNER_TEMP/publication/scripts/"
-          cp docs/releases/v1.0.0-rc.1.md "$RUNNER_TEMP/publication/docs/releases/"
+          mkdir -p "$RUNNER_TEMP/publication"
+          cp -R "$RUNNER_TEMP/verified/dist" "$RUNNER_TEMP/publication/dist"
 
       - name: Seal publication bundle
         id: seal
         shell: bash
         run: |
-          tar -C "$RUNNER_TEMP/publication" -cf "$RUNNER_TEMP/publication-release.tar" dist scripts docs
+          tar -C "$RUNNER_TEMP/publication" -cf "$RUNNER_TEMP/publication-release.tar" dist
           DIGEST="$(shasum -a 256 "$RUNNER_TEMP/publication-release.tar" | awk '{print $1}')"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Transfer sealed publication bundle
@@ -410,9 +425,35 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_BUNDLE_DIGEST: ${{ needs.prepare_publication.outputs.bundle_digest }}
         run: |
-          mkdir -p "$RUNNER_TEMP/publication-download" "$RUNNER_TEMP/publication"
+          [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/source" "$RUNNER_TEMP/publication-download"
+          git -C "$RUNNER_TEMP/source" init
+          git -C "$RUNNER_TEMP/source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git -C "$RUNNER_TEMP/source" fetch --depth=1 origin "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/source" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/source" rev-parse HEAD)" = "$GITHUB_SHA"
+          bash "$RUNNER_TEMP/source/scripts/release-preflight.sh"
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "publication-release-$GITHUB_SHA" --dir "$RUNNER_TEMP/publication-download"
-          test "$(shasum -a 256 "$RUNNER_TEMP/publication-download/publication-release.tar" | awk '{print $1}')" = "${{ needs.prepare_publication.outputs.bundle_digest }}"
-          tar -xf "$RUNNER_TEMP/publication-download/publication-release.tar" -C "$RUNNER_TEMP/publication"
-          bash "$RUNNER_TEMP/publication/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/publication/docs/releases/v1.0.0-rc.1.md"
+          test "$(shasum -a 256 "$RUNNER_TEMP/publication-download/publication-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
+          cd "$RUNNER_TEMP/source"
+          env -u GH_TOKEN go run ./cmd/release-smoke --extract-bundle "$RUNNER_TEMP/publication-download/publication-release.tar" --bundle-kind publication --destination "$RUNNER_TEMP/publication"
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$GITHUB_SHA")"
+          RELEASE_COMMIT_DATE="$(date -u -d "@$RELEASE_COMMIT_TIMESTAMP" +%Y-%m-%dT%H:%M:%SZ)"
+          RELEASE_LDFLAGS="-s -w -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Version=$RELEASE_VERSION -X github.com/noahjenkins/unifi-cli/internal/buildinfo.Commit=$GITHUB_SHA -X github.com/noahjenkins/unifi-cli/internal/buildinfo.BuildDate=$RELEASE_COMMIT_DATE"
+          mkdir -p "$RUNNER_TEMP/publisher-trusted"
+          for TARGET in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS="${TARGET%/*}"
+            GOARCH="${TARGET#*/}"
+            OUTPUT="$RUNNER_TEMP/publisher-trusted/${GOOS}_${GOARCH}/unifi"
+            if [ "$GOOS" = windows ]; then
+              OUTPUT="${OUTPUT}.exe"
+            fi
+            mkdir -p "$(dirname "$OUTPUT")"
+            env -u GH_TOKEN CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "$RELEASE_LDFLAGS" -o "$OUTPUT" ./cmd/unifi
+          done
+          env -u GH_TOKEN go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json" --expected-commit "$GITHUB_SHA"
+          env -u GH_TOKEN go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/publication/dist" --expected-version "$RELEASE_VERSION" --expected-commit "$GITHUB_SHA" --trusted-binaries "$RUNNER_TEMP/publisher-trusted" --trusted-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json"
+          bash "$RUNNER_TEMP/source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/docs/releases/v1.0.0-rc.1.md"

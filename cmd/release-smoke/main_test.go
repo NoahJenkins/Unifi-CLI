@@ -1,17 +1,140 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestExtractBundleUsesAnIsolatedValidatedNamespace(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "generated.tar")
+	writeTestBundle(t, bundle, []tar.Header{
+		{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "dist/artifacts.json", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+	}, [][]byte{nil, []byte("{}")})
+	destination := filepath.Join(t.TempDir(), "generated")
+	if err := extractBundle(bundle, destination, "generated"); err != nil {
+		t.Fatalf("extract valid generated bundle: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(destination, "dist", "artifacts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "{}" {
+		t.Fatalf("extracted data = %q", data)
+	}
+}
+
+func TestExtractBundleRejectsGeneratedTrustAnchorOverwrite(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "generated.tar")
+	writeTestBundle(t, bundle, []tar.Header{
+		{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "dist/artifacts.json", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+		{Name: "unifi-trusted/linux_amd64/unifi", Typeflag: tar.TypeReg, Mode: 0o755, Size: 7},
+	}, [][]byte{nil, []byte("{}"), []byte("hostile")})
+	err := extractBundle(bundle, filepath.Join(t.TempDir(), "generated"), "generated")
+	if err == nil || !strings.Contains(err.Error(), "outside the generated bundle namespace") {
+		t.Fatalf("trust-anchor overwrite error = %v", err)
+	}
+}
+
+func TestExtractBundleRejectsLinksTraversalAndDuplicateEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers []tar.Header
+		bodies  [][]byte
+		want    string
+	}{
+		{
+			name: "traversal",
+			headers: []tar.Header{
+				{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+				{Name: "dist/../unifi-trusted", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+			},
+			bodies: [][]byte{nil, []byte("x")},
+			want:   "unsafe bundle path",
+		},
+		{
+			name: "symlink",
+			headers: []tar.Header{
+				{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+				{Name: "dist/link", Typeflag: tar.TypeSymlink, Mode: 0o777, Linkname: "../../trusted"},
+			},
+			bodies: [][]byte{nil, nil},
+			want:   "unsupported bundle entry type",
+		},
+		{
+			name: "duplicate",
+			headers: []tar.Header{
+				{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+				{Name: "dist/value", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+				{Name: "dist/value", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+			},
+			bodies: [][]byte{nil, []byte("a"), []byte("b")},
+			want:   "duplicate bundle entry",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bundle := filepath.Join(t.TempDir(), "bundle.tar")
+			writeTestBundle(t, bundle, tt.headers, tt.bodies)
+			err := extractBundle(bundle, filepath.Join(t.TempDir(), "generated"), "generated")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("extract error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractBundleRejectsSymlinkedBundleFile(t *testing.T) {
+	dir := t.TempDir()
+	realBundle := filepath.Join(dir, "real.tar")
+	writeTestBundle(t, realBundle, []tar.Header{
+		{Name: "dist", Typeflag: tar.TypeDir, Mode: 0o755},
+	}, [][]byte{nil})
+	linkedBundle := filepath.Join(dir, "linked.tar")
+	if err := os.Symlink(realBundle, linkedBundle); err != nil {
+		t.Fatal(err)
+	}
+	err := extractBundle(linkedBundle, filepath.Join(t.TempDir(), "generated"), "generated")
+	if err == nil || !strings.Contains(err.Error(), "not a bounded regular file") {
+		t.Fatalf("symlinked bundle error = %v", err)
+	}
+}
+
+func writeTestBundle(t *testing.T, path string, headers []tar.Header, bodies [][]byte) {
+	t.Helper()
+	var buffer bytes.Buffer
+	w := tar.NewWriter(&buffer)
+	for i := range headers {
+		header := headers[i]
+		if err := w.WriteHeader(&header); err != nil {
+			t.Fatal(err)
+		}
+		if len(bodies[i]) > 0 {
+			if _, err := w.Write(bodies[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buffer.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestNativeCommandVerificationAcceptsPopulatedReleaseMetadata(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
