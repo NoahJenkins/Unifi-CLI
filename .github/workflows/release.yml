@@ -445,12 +445,12 @@ jobs:
                 },
                 resolvedDependencies: [
                   {
-                    uri: ("git+" + $repository + "@refs/tags/" + $release_tag),
-                    digest: {gitCommit: $release_commit}
-                  },
-                  {
                     uri: ("git+" + $repository + "@" + $workflow_ref),
                     digest: {gitCommit: $workflow_commit}
+                  },
+                  {
+                    uri: ("git+" + $repository + "@refs/tags/" + $release_tag),
+                    digest: {gitCommit: $release_commit}
                   }
                 ]
               },
@@ -459,7 +459,8 @@ jobs:
                 metadata: {invocationId: $invocation_id}
               }
             }' > "$RUNNER_TEMP/resumed-provenance.json"
-          jq -e --arg commit "$RELEASE_COMMIT" '.buildDefinition.resolvedDependencies[0].digest.gitCommit == $commit' "$RUNNER_TEMP/resumed-provenance.json" >/dev/null
+          jq -e --arg commit "$WORKFLOW_COMMIT" '.buildDefinition.resolvedDependencies[0].digest.gitCommit == $commit' "$RUNNER_TEMP/resumed-provenance.json" >/dev/null
+          jq -e --arg commit "$RELEASE_COMMIT" '.buildDefinition.resolvedDependencies[1].digest.gitCommit == $commit' "$RUNNER_TEMP/resumed-provenance.json" >/dev/null
 
       - name: Attest exact release assets from tag push
         if: github.event_name != 'workflow_dispatch'
