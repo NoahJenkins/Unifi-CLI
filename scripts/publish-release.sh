@@ -26,6 +26,19 @@ if [[ ! -f "$checksums_file" || -L "$checksums_file" || ! -f "$notes_file" || -L
   exit 1
 fi
 
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_file() {
+    sha256sum "$1" | awk '{print $1}'
+  }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_file() {
+    shasum -a 256 "$1" | awk '{print $1}'
+  }
+else
+  echo "release publish: no SHA-256 tool is available" >&2
+  exit 1
+fi
+
 declare -a asset_names=("checksums.txt")
 declare -a asset_paths=("$checksums_file")
 # Bash read returns a failure status when the final record is not newline
@@ -52,7 +65,7 @@ while read -r digest filename extra || [[ -n "${digest:-}${filename:-}${extra:-}
     echo "release publish: checksum asset is missing or not a regular file: $filename" >&2
     exit 1
   fi
-  observed_digest="$(shasum -a 256 "$asset_path" | awk '{print $1}')"
+  observed_digest="$(sha256_file "$asset_path")"
   if [[ "$observed_digest" != "$digest" ]]; then
     echo "release publish: checksum mismatch for $filename" >&2
     exit 1

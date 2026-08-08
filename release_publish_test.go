@@ -86,6 +86,8 @@ func runReleasePublish(t *testing.T, mode string, trailingNewline bool) (string,
 	createdPath := filepath.Join(dir, "created")
 	publishedPath := filepath.Join(dir, "published")
 	ghPath := filepath.Join(dir, "gh")
+	sha256sumPath := filepath.Join(dir, "sha256sum")
+	shasumPath := filepath.Join(dir, "shasum")
 	fake := `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s ' "$@" >> "$GH_FAKE_LOG"
@@ -146,6 +148,17 @@ exit 2
 	if err := os.WriteFile(ghPath, []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	portableHash := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s  %s\n' "$GH_FAKE_DIGEST" "$1"
+`
+	if err := os.WriteFile(sha256sumPath, []byte(portableHash), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrongHashTool := "#!/usr/bin/env bash\necho 'shasum must not be used when sha256sum is available' >&2\nexit 99\n"
+	if err := os.WriteFile(shasumPath, []byte(wrongHashTool), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("bash", "./scripts/publish-release.sh", dist, notes)
 	cmd.Env = []string{
 		"PATH=" + dir + ":/usr/bin:/bin",
@@ -158,6 +171,7 @@ exit 2
 		"GH_FAKE_REMOTE=" + remote,
 		"GH_FAKE_CREATED=" + createdPath,
 		"GH_FAKE_PUBLISHED=" + publishedPath,
+		"GH_FAKE_DIGEST=" + hex.EncodeToString(digest[:]),
 	}
 	output, err := cmd.CombinedOutput()
 	calls, readErr := os.ReadFile(logPath)
