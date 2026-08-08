@@ -208,11 +208,19 @@ func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan
 }
 
 func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) (Wlan, error) {
+	return s.applyUpdate(ctx, id, in, nil)
+}
+
+func (s *WlanService) ApplyUpdatePrepared(ctx context.Context, target plan.Target, id string, in WlanInput) (Wlan, error) {
+	return s.applyUpdate(ctx, id, in, &target)
+}
+
+func (s *WlanService) applyUpdate(ctx context.Context, id string, in WlanInput, target *plan.Target) (Wlan, error) {
 	if err := validateWlanUpdate(in); err != nil {
 		return Wlan{}, err
 	}
 	if supportsOfficialDetails(s.api) {
-		return s.applyOfficialUpdate(ctx, id, in)
+		return s.applyOfficialUpdate(ctx, id, in, target)
 	}
 	w, err := s.getLegacy(ctx, id)
 	if err != nil {
@@ -220,6 +228,12 @@ func (s *WlanService) ApplyUpdate(ctx context.Context, id string, in WlanInput) 
 	}
 	if err := validateWlanSecurityTransition(w, in); err != nil {
 		return Wlan{}, err
+	}
+	if target != nil {
+		p := plan.Update("wlan", w.ID, w.Name, fmt.Sprintf("update wlan %s", w.Name), wlanSnapshot(w), mergeWlanAfter(w, in))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Wlan{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathRestWlan, w.ID)
 	body := wlanInputBody(in)
@@ -274,12 +288,26 @@ func (s *WlanService) Delete(ctx context.Context, id string) (plan.Plan, Wlan, e
 }
 
 func (s *WlanService) ApplyDelete(ctx context.Context, id string) (Wlan, error) {
+	return s.applyDelete(ctx, id, nil)
+}
+
+func (s *WlanService) ApplyDeletePrepared(ctx context.Context, target plan.Target, id string) (Wlan, error) {
+	return s.applyDelete(ctx, id, &target)
+}
+
+func (s *WlanService) applyDelete(ctx context.Context, id string, target *plan.Target) (Wlan, error) {
 	if supportsOfficialDetails(s.api) {
-		return s.applyOfficialDelete(ctx, id)
+		return s.applyOfficialDelete(ctx, id, target)
 	}
 	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Wlan{}, err
+	}
+	if target != nil {
+		p := plan.Delete("wlan", w.ID, w.Name, fmt.Sprintf("delete wlan %s", w.Name), wlanSnapshot(w))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Wlan{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathRestWlan, w.ID)
 	if err := s.api.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
@@ -293,7 +321,11 @@ func (s *WlanService) Enable(ctx context.Context, id string) (plan.Plan, Wlan, e
 }
 
 func (s *WlanService) ApplyEnable(ctx context.Context, id string) (Wlan, error) {
-	return s.applySetEnabled(ctx, id, true)
+	return s.applySetEnabled(ctx, id, true, nil)
+}
+
+func (s *WlanService) ApplyEnablePrepared(ctx context.Context, target plan.Target, id string) (Wlan, error) {
+	return s.applySetEnabled(ctx, id, true, &target)
 }
 
 func (s *WlanService) Disable(ctx context.Context, id string) (plan.Plan, Wlan, error) {
@@ -301,7 +333,11 @@ func (s *WlanService) Disable(ctx context.Context, id string) (plan.Plan, Wlan, 
 }
 
 func (s *WlanService) ApplyDisable(ctx context.Context, id string) (Wlan, error) {
-	return s.applySetEnabled(ctx, id, false)
+	return s.applySetEnabled(ctx, id, false, nil)
+}
+
+func (s *WlanService) ApplyDisablePrepared(ctx context.Context, target plan.Target, id string) (Wlan, error) {
+	return s.applySetEnabled(ctx, id, false, &target)
 }
 
 func (s *WlanService) setEnabledPlan(ctx context.Context, id string, enabled bool) (plan.Plan, Wlan, error) {
@@ -335,13 +371,24 @@ func (s *WlanService) setEnabledPlan(ctx context.Context, id string, enabled boo
 	return p, w, nil
 }
 
-func (s *WlanService) applySetEnabled(ctx context.Context, id string, enabled bool) (Wlan, error) {
+func (s *WlanService) applySetEnabled(ctx context.Context, id string, enabled bool, target *plan.Target) (Wlan, error) {
 	if supportsOfficialDetails(s.api) {
-		return s.ApplyUpdate(ctx, id, WlanInput{Enabled: enabled, SetEnabled: true})
+		return s.applyUpdate(ctx, id, WlanInput{Enabled: enabled, SetEnabled: true}, target)
 	}
 	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Wlan{}, err
+	}
+	if target != nil {
+		action := "enable"
+		if !enabled {
+			action = "disable"
+		}
+		p := plan.Update("wlan", w.ID, w.Name, fmt.Sprintf("%s wlan %s", action, w.Name),
+			map[string]any{"enabled": w.Enabled}, map[string]any{"enabled": enabled})
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Wlan{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathRestWlan, w.ID)
 	body := map[string]any{"enabled": enabled}
@@ -534,10 +581,18 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 	return doc, body, nil
 }
 
-func (s *WlanService) applyOfficialUpdate(ctx context.Context, query string, in WlanInput) (Wlan, error) {
+func (s *WlanService) applyOfficialUpdate(ctx context.Context, query string, in WlanInput, target *plan.Target) (Wlan, error) {
 	doc, body, err := s.prepareOfficialUpdate(ctx, query, in)
 	if err != nil {
 		return Wlan{}, err
+	}
+	if target != nil {
+		after := NormalizeWlan(wlanResponseView(body, doc.wire))
+		p := plan.Update("wlan", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("update wlan %s", doc.normalized.Name), wlanSnapshot(doc.normalized), wlanSnapshot(after))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Wlan{}, err
+		}
 	}
 	transport, _ := requireOfficialMutationAPI(s.api)
 	path, err := transport.IntegrationSitePath(ctx, "wifi", "broadcasts", doc.normalized.ID)
@@ -561,10 +616,17 @@ func (s *WlanService) applyOfficialUpdate(ctx context.Context, query string, in 
 	return NormalizeWlan(observed), nil
 }
 
-func (s *WlanService) applyOfficialDelete(ctx context.Context, query string) (Wlan, error) {
+func (s *WlanService) applyOfficialDelete(ctx context.Context, query string, target *plan.Target) (Wlan, error) {
 	doc, err := s.resolveOfficialDocument(ctx, query)
 	if err != nil {
 		return Wlan{}, err
+	}
+	if target != nil {
+		p := plan.Delete("wlan", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("delete wlan %s", doc.normalized.Name), wlanSnapshot(doc.normalized))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Wlan{}, err
+		}
 	}
 	transport, _ := requireOfficialMutationAPI(s.api)
 	path, err := transport.IntegrationSitePath(ctx, "wifi", "broadcasts", doc.normalized.ID)

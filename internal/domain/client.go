@@ -114,9 +114,24 @@ func (s *ClientService) Reconnect(ctx context.Context, id string) (plan.Plan, Cl
 }
 
 func (s *ClientService) ApplyReconnect(ctx context.Context, id string) (ActionAcceptance, error) {
+	return s.applyReconnect(ctx, id, nil)
+}
+
+func (s *ClientService) ApplyReconnectPrepared(ctx context.Context, target plan.Target, id string) (ActionAcceptance, error) {
+	return s.applyReconnect(ctx, id, &target)
+}
+
+func (s *ClientService) applyReconnect(ctx context.Context, id string, target *plan.Target) (ActionAcceptance, error) {
 	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return ActionAcceptance{}, err
+	}
+	if target != nil {
+		p := plan.Update("client", c.ID, c.GetName(), fmt.Sprintf("reconnect client %s", c.GetName()),
+			map[string]any{"action": "none"}, map[string]any{"action": "kick-sta", "mac": c.MAC})
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return ActionAcceptance{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathCmdStaMgr)
 	if err := s.api.Do(ctx, http.MethodPost, path, map[string]any{"cmd": "kick-sta", "mac": c.MAC}, nil); err != nil {
@@ -142,7 +157,11 @@ func (s *ClientService) Block(ctx context.Context, id string) (plan.Plan, Client
 }
 
 func (s *ClientService) ApplyBlock(ctx context.Context, id string) (Client, error) {
-	return s.applyObservedState(ctx, id, "block-sta", true)
+	return s.applyObservedState(ctx, id, "block-sta", true, nil)
+}
+
+func (s *ClientService) ApplyBlockPrepared(ctx context.Context, target plan.Target, id string) (Client, error) {
+	return s.applyObservedState(ctx, id, "block-sta", true, &target)
 }
 
 func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Client, error) {
@@ -162,7 +181,11 @@ func (s *ClientService) Unblock(ctx context.Context, id string) (plan.Plan, Clie
 }
 
 func (s *ClientService) ApplyUnblock(ctx context.Context, id string) (Client, error) {
-	return s.applyObservedState(ctx, id, "unblock-sta", false)
+	return s.applyObservedState(ctx, id, "unblock-sta", false, nil)
+}
+
+func (s *ClientService) ApplyUnblockPrepared(ctx context.Context, target plan.Target, id string) (Client, error) {
+	return s.applyObservedState(ctx, id, "unblock-sta", false, &target)
 }
 
 func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (plan.Plan, Client, error) {
@@ -178,7 +201,7 @@ func (s *ClientService) cmdPlan(ctx context.Context, id, cmd, action string) (pl
 	return p, c, nil
 }
 
-func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, blocked bool) (Client, error) {
+func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, blocked bool, target *plan.Target) (Client, error) {
 	c, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Client{}, err
@@ -189,6 +212,18 @@ func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, 
 	actionMAC := resolve.NormalizeMAC(c.MAC)
 	if actionMAC == "" {
 		return Client{}, apperr.New(apperr.Conflict, "client action target has no valid MAC address")
+	}
+	if target != nil {
+		action := "block"
+		if !blocked {
+			action = "unblock"
+		}
+		p := plan.Update("client", c.ID, c.GetName(), fmt.Sprintf("%s client %s", action, c.GetName()),
+			map[string]any{"blocked": c.Blocked, "mac": actionMAC},
+			map[string]any{"blocked": blocked, "mac": actionMAC})
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Client{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathCmdStaMgr)
 	body := map[string]any{"cmd": cmd, "mac": c.MAC}

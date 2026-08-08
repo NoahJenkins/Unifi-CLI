@@ -225,17 +225,17 @@ func runDeviceMutation(action, id, newName string) error {
 		func(target plan.Target) (any, error) {
 			switch action {
 			case "rename":
-				return svc.ApplyRename(ctx, target.ID(), newName)
+				return svc.ApplyRenamePrepared(ctx, target, target.ID(), newName)
 			case "restart":
-				return svc.ApplyRestart(ctx, target.ID())
+				return svc.ApplyRestartPrepared(ctx, target, target.ID())
 			case "locate":
-				return svc.ApplyLocate(ctx, target.ID())
+				return svc.ApplyLocatePrepared(ctx, target, target.ID())
 			case "upgrade":
-				return svc.ApplyUpgrade(ctx, target.ID())
+				return svc.ApplyUpgradePrepared(ctx, target, target.ID())
 			case "adopt":
-				return svc.ApplyAdopt(ctx, target.ID())
+				return svc.ApplyAdoptPrepared(ctx, target, target.ID())
 			case "forget":
-				return svc.ApplyForget(ctx, target.ID())
+				return svc.ApplyForgetPrepared(ctx, target, target.ID())
 			default:
 				return nil, fmt.Errorf("unknown action %s", action)
 			}

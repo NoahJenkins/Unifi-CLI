@@ -287,7 +287,7 @@ func runDNSUpdate(id string, in domain.DNSInput) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyUpdate(ctx, target.ID(), in)
+			return svc.ApplyUpdatePrepared(ctx, target, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -330,7 +330,7 @@ func runDNSDelete(id string) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyDelete(ctx, target.ID())
+			return svc.ApplyDeletePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -391,7 +391,7 @@ func runDNSResolversSet(network string, servers []string) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplySetResolvers(ctx, target.ID(), servers)
+			return svc.ApplySetResolversPrepared(ctx, target, target.ID(), servers)
 		},
 	)
 	return emittedExit(code)

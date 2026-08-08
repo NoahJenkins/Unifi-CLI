@@ -305,7 +305,7 @@ func runWlanUpdate(id string, in domain.WlanInput) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyUpdate(ctx, target.ID(), in)
+			return svc.ApplyUpdatePrepared(ctx, target, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -332,7 +332,7 @@ func runWlanDelete(id string) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyDelete(ctx, target.ID())
+			return svc.ApplyDeletePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -359,7 +359,7 @@ func runWlanEnable(id string) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyEnable(ctx, target.ID())
+			return svc.ApplyEnablePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)
@@ -386,7 +386,7 @@ func runWlanDisable(id string) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyDisable(ctx, target.ID())
+			return svc.ApplyDisablePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)

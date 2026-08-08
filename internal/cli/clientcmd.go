@@ -187,11 +187,11 @@ func runClientMutation(action, id string) error {
 		func(target plan.Target) (any, error) {
 			switch action {
 			case "reconnect":
-				return svc.ApplyReconnect(ctx, target.ID())
+				return svc.ApplyReconnectPrepared(ctx, target, target.ID())
 			case "block":
-				return svc.ApplyBlock(ctx, target.ID())
+				return svc.ApplyBlockPrepared(ctx, target, target.ID())
 			case "unblock":
-				return svc.ApplyUnblock(ctx, target.ID())
+				return svc.ApplyUnblockPrepared(ctx, target, target.ID())
 			default:
 				return nil, fmt.Errorf("unknown action %s", action)
 			}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 )
 
 func sampleSwitchDevice() map[string]any {
@@ -412,6 +413,47 @@ func TestPortServiceUpdatePlanAndApply(t *testing.T) {
 	}
 }
 
+func TestPortUpdateRejectsUnboundOrLossyOverrideDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		rest map[string]any
+	}{
+		{
+			name: "wrong device identity",
+			rest: map[string]any{"_id": "other-switch", "port_overrides": []any{}},
+		},
+		{
+			name: "malformed override element",
+			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 12}, "discarded"}},
+		},
+		{
+			name: "duplicate override index",
+			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 12}, map[string]any{"port_idx": 12}}},
+		},
+		{
+			name: "invalid override index",
+			rest: map[string]any{"_id": "sw1", "port_overrides": []any{map[string]any{"port_idx": 0}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := &fakePortAPI{
+				devices:     devicesWithPorts(),
+				restDevices: map[string]map[string]any{"sw1": tt.rest},
+			}
+			_, _, err := domain.NewPortService(api).Update(context.Background(), "Switch-Core", 12, domain.PortInput{POE: "off", SetPOE: true})
+			if !apperr.Is(err, apperr.Conflict) {
+				t.Fatalf("error = %v, want conflict", err)
+			}
+			for _, call := range api.calls {
+				if call.method == http.MethodPut {
+					t.Fatalf("invalid override document caused PUT: %+v", call)
+				}
+			}
+		})
+	}
+}
+
 func TestPortServiceUpdatePlansFromAuthoritativeRestOverrides(t *testing.T) {
 	statSW := sampleSwitchDevice()
 	statSW["port_overrides"] = []any{
@@ -535,6 +577,48 @@ func TestPortServiceApplyUsesRestDeviceOverrides(t *testing.T) {
 	}
 	if p12["name"] != "AP-Uplink" || p12["portconf_id"] != "prof-ap" {
 		t.Fatalf("port 12 siblings lost: %+v", p12)
+	}
+}
+
+func TestPortPreparedUpdateRejectsUnrelatedOverrideChange(t *testing.T) {
+	restSW := sampleSwitchDevice()
+	restSW["port_overrides"] = []any{
+		map[string]any{"port_idx": float64(5), "name": "Camera", "poe_mode": "auto"},
+		map[string]any{"port_idx": float64(12), "name": "AP-Uplink", "poe_mode": "pasv24"},
+	}
+	api := &fakePortAPI{
+		devices:     devicesWithPorts(),
+		restDevices: map[string]map[string]any{"sw1": restSW},
+	}
+	svc := domain.NewPortService(api)
+	in := domain.PortInput{POE: "off", SetPOE: true}
+	p, _, snapshot, err := svc.PrepareUpdate(context.Background(), "Switch-Core", 12, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := plan.Targeted(p, "sw1/12", snapshot, plan.HighImpact, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := prepared.Target()
+	if !ok {
+		t.Fatal("prepared update has no target")
+	}
+
+	// Another operator changes an unrelated port after plan approval. A full
+	// port_overrides PUT must stop instead of replaying the stale document.
+	api.restDevices["sw1"]["port_overrides"] = []any{
+		map[string]any{"port_idx": float64(5), "name": "Door Camera", "poe_mode": "auto"},
+		map[string]any{"port_idx": float64(12), "name": "AP-Uplink", "poe_mode": "pasv24"},
+	}
+	_, err = svc.ApplyUpdatePrepared(context.Background(), target, "sw1", 12, in)
+	if !apperr.Is(err, apperr.Conflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	for _, call := range api.calls {
+		if call.method == http.MethodPut {
+			t.Fatalf("changed override document caused PUT: %+v", call)
+		}
 	}
 }
 

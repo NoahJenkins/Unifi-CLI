@@ -38,17 +38,18 @@ func (z FirewallZone) GetName() string { return z.Name }
 // FirewallRule preserves the stable policy identifiers while exposing the
 // zone-aware fields from the official firewall policy schema.
 type FirewallRule struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	Enabled           bool   `json:"enabled"`
-	Action            string `json:"action"`
-	SourceZoneID      string `json:"source_zone_id"`
-	DestinationZoneID string `json:"destination_zone_id"`
-	Protocol          string `json:"protocol"`
-	LoggingEnabled    bool   `json:"logging_enabled"`
-	Index             int    `json:"index"`
-	Origin            string `json:"origin"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Description        string `json:"description"`
+	Enabled            bool   `json:"enabled"`
+	Action             string `json:"action"`
+	AllowReturnTraffic bool   `json:"allow_return_traffic"`
+	SourceZoneID       string `json:"source_zone_id"`
+	DestinationZoneID  string `json:"destination_zone_id"`
+	Protocol           string `json:"protocol"`
+	LoggingEnabled     bool   `json:"logging_enabled"`
+	Index              int    `json:"index"`
+	Origin             string `json:"origin"`
 }
 
 func (r FirewallRule) GetID() string   { return r.ID }
@@ -93,6 +94,14 @@ type FirewallReorder struct {
 type FirewallOrdering struct {
 	BeforeSystemDefined []string `json:"before_system_defined"`
 	AfterSystemDefined  []string `json:"after_system_defined"`
+}
+
+// FirewallCreateBinding captures the immutable zone identities approved by a
+// create plan. Apply uses these IDs directly instead of resolving mutable zone
+// names a second time.
+type FirewallCreateBinding struct {
+	SourceZoneID      string `json:"source_zone_id"`
+	DestinationZoneID string `json:"destination_zone_id"`
 }
 
 type firewallOrderingWire struct {
@@ -196,12 +205,17 @@ func (s *FirewallService) Get(ctx context.Context, query string) (FirewallRule, 
 }
 
 func (s *FirewallService) Create(ctx context.Context, in FirewallInput) (plan.Plan, error) {
+	p, _, err := s.PrepareCreate(ctx, in)
+	return p, err
+}
+
+func (s *FirewallService) PrepareCreate(ctx context.Context, in FirewallInput) (plan.Plan, FirewallCreateBinding, error) {
 	if err := validateFirewallCreate(in); err != nil {
-		return plan.Plan{}, err
+		return plan.Plan{}, FirewallCreateBinding{}, err
 	}
 	source, destination, err := s.resolveZonePair(ctx, in.SourceZone, in.DestinationZone)
 	if err != nil {
-		return plan.Plan{}, err
+		return plan.Plan{}, FirewallCreateBinding{}, err
 	}
 	body := firewallCreateBody(in, source.ID, destination.ID)
 	item := NormalizeFirewallRule(body)
@@ -209,18 +223,43 @@ func (s *FirewallService) Create(ctx context.Context, in FirewallInput) (plan.Pl
 		fmt.Sprintf("create firewall policy %s", in.Name),
 		firewallSnapshot(item),
 	)
-	return p, nil
+	return p, FirewallCreateBinding{SourceZoneID: source.ID, DestinationZoneID: destination.ID}, nil
 }
 
 func (s *FirewallService) ApplyCreate(ctx context.Context, in FirewallInput) (FirewallRule, error) {
-	if err := validateFirewallCreate(in); err != nil {
-		return FirewallRule{}, err
-	}
-	source, destination, err := s.resolveZonePair(ctx, in.SourceZone, in.DestinationZone)
+	_, binding, err := s.PrepareCreate(ctx, in)
 	if err != nil {
 		return FirewallRule{}, err
 	}
-	body := firewallCreateBody(in, source.ID, destination.ID)
+	return s.ApplyCreateBound(ctx, in, binding)
+}
+
+func (s *FirewallService) ObserveCreateBinding(ctx context.Context, binding FirewallCreateBinding) (map[string]any, error) {
+	if binding.SourceZoneID == "" || binding.DestinationZoneID == "" {
+		return nil, apperr.New(apperr.Conflict, "firewall create zone binding is incomplete")
+	}
+	source, err := s.GetZone(ctx, binding.SourceZoneID)
+	if err != nil {
+		return nil, err
+	}
+	destination, err := s.GetZone(ctx, binding.DestinationZoneID)
+	if err != nil {
+		return nil, err
+	}
+	if source.ID != binding.SourceZoneID || destination.ID != binding.DestinationZoneID {
+		return nil, apperr.New(apperr.Conflict, "firewall create zone binding changed")
+	}
+	return firewallCreateBindingSnapshot(binding), nil
+}
+
+func (s *FirewallService) ApplyCreateBound(ctx context.Context, in FirewallInput, binding FirewallCreateBinding) (FirewallRule, error) {
+	if err := validateFirewallCreate(in); err != nil {
+		return FirewallRule{}, err
+	}
+	if binding.SourceZoneID == "" || binding.DestinationZoneID == "" {
+		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall create zone binding is incomplete")
+	}
+	body := firewallCreateBody(in, binding.SourceZoneID, binding.DestinationZoneID)
 	path, err := s.api.IntegrationSitePath(ctx, "firewall", "policies")
 	if err != nil {
 		return FirewallRule{}, err
@@ -246,6 +285,12 @@ func (s *FirewallService) ApplyCreate(ctx context.Context, in FirewallInput) (Fi
 	return observed, nil
 }
 
+func firewallCreateBindingSnapshot(binding FirewallCreateBinding) map[string]any {
+	return map[string]any{
+		"source_zone_id": binding.SourceZoneID, "destination_zone_id": binding.DestinationZoneID,
+	}
+}
+
 func (s *FirewallService) Update(ctx context.Context, query string, in FirewallInput) (plan.Plan, FirewallRule, error) {
 	doc, body, err := s.prepareUpdate(ctx, query, in)
 	if err != nil {
@@ -260,9 +305,26 @@ func (s *FirewallService) Update(ctx context.Context, query string, in FirewallI
 }
 
 func (s *FirewallService) ApplyUpdate(ctx context.Context, query string, in FirewallInput) (FirewallRule, error) {
+	return s.applyUpdate(ctx, query, in, nil)
+}
+
+func (s *FirewallService) ApplyUpdatePrepared(ctx context.Context, target plan.Target, query string, in FirewallInput) (FirewallRule, error) {
+	return s.applyUpdate(ctx, query, in, &target)
+}
+
+func (s *FirewallService) applyUpdate(ctx context.Context, query string, in FirewallInput, target *plan.Target) (FirewallRule, error) {
 	doc, body, err := s.prepareUpdate(ctx, query, in)
 	if err != nil {
 		return FirewallRule{}, err
+	}
+	if target != nil {
+		after := NormalizeFirewallRule(firewallPolicyResponseView(body, doc.normalized))
+		p := plan.Update("firewall", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("update firewall policy %s", doc.normalized.Name),
+			firewallSnapshot(doc.normalized), firewallSnapshot(after))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return FirewallRule{}, err
+		}
 	}
 	path, err := s.api.IntegrationSitePath(ctx, "firewall", "policies", doc.normalized.ID)
 	if err != nil {
@@ -298,9 +360,24 @@ func (s *FirewallService) Delete(ctx context.Context, query string) (plan.Plan, 
 }
 
 func (s *FirewallService) ApplyDelete(ctx context.Context, query string) (FirewallRule, error) {
+	return s.applyDelete(ctx, query, nil)
+}
+
+func (s *FirewallService) ApplyDeletePrepared(ctx context.Context, target plan.Target, query string) (FirewallRule, error) {
+	return s.applyDelete(ctx, query, &target)
+}
+
+func (s *FirewallService) applyDelete(ctx context.Context, query string, target *plan.Target) (FirewallRule, error) {
 	doc, err := s.resolvePolicyDocument(ctx, query)
 	if err != nil {
 		return FirewallRule{}, err
+	}
+	if target != nil {
+		p := plan.Delete("firewall", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("delete firewall policy %s", doc.normalized.Name), firewallSnapshot(doc.normalized))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return FirewallRule{}, err
+		}
 	}
 	path, err := s.api.IntegrationSitePath(ctx, "firewall", "policies", doc.normalized.ID)
 	if err != nil {
@@ -331,9 +408,26 @@ func (s *FirewallService) Reorder(ctx context.Context, in FirewallReorder) (plan
 }
 
 func (s *FirewallService) ApplyReorder(ctx context.Context, in FirewallReorder) (FirewallOrdering, error) {
+	return s.applyReorder(ctx, in, nil)
+}
+
+func (s *FirewallService) ApplyReorderPrepared(ctx context.Context, target plan.Target, in FirewallReorder) (FirewallOrdering, error) {
+	return s.applyReorder(ctx, in, &target)
+}
+
+func (s *FirewallService) applyReorder(ctx context.Context, in FirewallReorder, target *plan.Target) (FirewallOrdering, error) {
 	resolved, err := s.resolveReorder(ctx, in)
 	if err != nil {
 		return FirewallOrdering{}, err
+	}
+	if target != nil {
+		p := plan.Update("firewall", resolved.sourceZoneID+":"+resolved.destinationZoneID, "policy ordering",
+			"reorder firewall policies",
+			firewallOrderingSnapshot(resolved.sourceZoneID, resolved.destinationZoneID, resolved.before),
+			firewallOrderingSnapshot(resolved.sourceZoneID, resolved.destinationZoneID, resolved.after))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return FirewallOrdering{}, err
+		}
 	}
 	path, err := s.orderingPath(ctx, resolved.sourceZoneID, resolved.destinationZoneID)
 	if err != nil {
@@ -658,17 +752,18 @@ func NormalizeFirewallRule(m map[string]any) FirewallRule {
 	destination, _ := m["destination"].(map[string]any)
 	metadata, _ := m["metadata"].(map[string]any)
 	return FirewallRule{
-		ID:                strField(m, "id"),
-		Name:              strField(m, "name"),
-		Description:       strField(m, "description"),
-		Enabled:           boolField(m, "enabled"),
-		Action:            strings.ToLower(strField(action, "type")),
-		SourceZoneID:      strField(source, "zoneId"),
-		DestinationZoneID: strField(destination, "zoneId"),
-		Protocol:          normalizeOfficialFirewallProtocol(mapField(m, "ipProtocolScope")),
-		LoggingEnabled:    boolField(m, "loggingEnabled"),
-		Index:             intField(m, "index"),
-		Origin:            strField(metadata, "origin"),
+		ID:                 strField(m, "id"),
+		Name:               strField(m, "name"),
+		Description:        strField(m, "description"),
+		Enabled:            boolField(m, "enabled"),
+		Action:             strings.ToLower(strField(action, "type")),
+		AllowReturnTraffic: boolField(action, "allowReturnTraffic"),
+		SourceZoneID:       strField(source, "zoneId"),
+		DestinationZoneID:  strField(destination, "zoneId"),
+		Protocol:           normalizeOfficialFirewallProtocol(mapField(m, "ipProtocolScope")),
+		LoggingEnabled:     boolField(m, "loggingEnabled"),
+		Index:              intField(m, "index"),
+		Origin:             strField(metadata, "origin"),
 	}
 }
 
@@ -791,7 +886,8 @@ func firewallOrderingBody(ordering FirewallOrdering) map[string]any {
 func firewallSnapshot(r FirewallRule) map[string]any {
 	return map[string]any{
 		"id": r.ID, "name": r.Name, "description": r.Description, "enabled": r.Enabled, "action": r.Action,
-		"source_zone_id": r.SourceZoneID, "destination_zone_id": r.DestinationZoneID,
+		"allow_return_traffic": r.AllowReturnTraffic,
+		"source_zone_id":       r.SourceZoneID, "destination_zone_id": r.DestinationZoneID,
 		"protocol": r.Protocol, "logging_enabled": r.LoggingEnabled, "index": r.Index, "origin": r.Origin,
 	}
 }

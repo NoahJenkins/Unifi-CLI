@@ -248,9 +248,23 @@ func (s *DNSService) Update(ctx context.Context, id string, in DNSInput) (plan.P
 }
 
 func (s *DNSService) ApplyUpdate(ctx context.Context, id string, in DNSInput) (DNSRecord, error) {
-	rec, _, _, err := s.prepareUpdate(ctx, id, in)
+	return s.applyUpdate(ctx, id, in, nil)
+}
+
+func (s *DNSService) ApplyUpdatePrepared(ctx context.Context, target plan.Target, id string, in DNSInput) (DNSRecord, error) {
+	return s.applyUpdate(ctx, id, in, &target)
+}
+
+func (s *DNSService) applyUpdate(ctx context.Context, id string, in DNSInput, target *plan.Target) (DNSRecord, error) {
+	rec, before, after, err := s.prepareUpdate(ctx, id, in)
 	if err != nil {
 		return DNSRecord{}, err
+	}
+	if target != nil {
+		p := plan.Update("dns", rec.ID, rec.Name, fmt.Sprintf("update dns record %s", rec.Name), before, after)
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return DNSRecord{}, err
+		}
 	}
 	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies", rec.ID)
 	if err != nil {
@@ -305,12 +319,26 @@ func (s *DNSService) Delete(ctx context.Context, id string) (plan.Plan, DNSRecor
 }
 
 func (s *DNSService) ApplyDelete(ctx context.Context, id string) (DNSRecord, error) {
+	return s.applyDelete(ctx, id, nil)
+}
+
+func (s *DNSService) ApplyDeletePrepared(ctx context.Context, target plan.Target, id string) (DNSRecord, error) {
+	return s.applyDelete(ctx, id, &target)
+}
+
+func (s *DNSService) applyDelete(ctx context.Context, id string, target *plan.Target) (DNSRecord, error) {
 	rec, err := s.Get(ctx, id)
 	if err != nil {
 		return DNSRecord{}, err
 	}
 	if err := requireARecord(rec, "delete"); err != nil {
 		return DNSRecord{}, err
+	}
+	if target != nil {
+		p := plan.Delete("dns", rec.ID, rec.Name, fmt.Sprintf("delete dns record %s", rec.Name), dnsRecordSnapshot(rec))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return DNSRecord{}, err
+		}
 	}
 	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies", rec.ID)
 	if err != nil {
@@ -390,6 +418,14 @@ func (s *DNSService) SetResolvers(ctx context.Context, networkQuery string, serv
 }
 
 func (s *DNSService) ApplySetResolvers(ctx context.Context, networkQuery string, servers []string) (DNSResolver, error) {
+	return s.applySetResolvers(ctx, networkQuery, servers, nil)
+}
+
+func (s *DNSService) ApplySetResolversPrepared(ctx context.Context, target plan.Target, networkQuery string, servers []string) (DNSResolver, error) {
+	return s.applySetResolvers(ctx, networkQuery, servers, &target)
+}
+
+func (s *DNSService) applySetResolvers(ctx context.Context, networkQuery string, servers []string, target *plan.Target) (DNSResolver, error) {
 	if err := validateResolvers(servers); err != nil {
 		return DNSResolver{}, err
 	}
@@ -399,6 +435,15 @@ func (s *DNSService) ApplySetResolvers(ctx context.Context, networkQuery string,
 	}
 	if reflect.DeepEqual(r.DNS, servers) {
 		return DNSResolver{}, apperr.New(apperr.ValidationFailed, "resolver update would not change controller state")
+	}
+	if target != nil {
+		before := resolverSnapshot(r)
+		after := resolverSnapshot(DNSResolver{NetworkID: r.NetworkID, NetworkName: r.NetworkName, DNS: append([]string(nil), servers...), WAN: r.WAN})
+		p := plan.Update("dns_resolver", r.NetworkID, r.NetworkName,
+			fmt.Sprintf("set DNS resolvers on %s to %s", r.NetworkName, strings.Join(servers, ",")), before, after)
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return DNSResolver{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathRestNetwork, r.NetworkID)
 	body := resolverSetBody(r, servers)

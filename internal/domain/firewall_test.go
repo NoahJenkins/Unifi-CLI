@@ -360,6 +360,47 @@ func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *te
 	assertFirewallCall(t, api.calls, http.MethodGet, client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID), 1)
 }
 
+func TestFirewallBoundCreateDoesNotReresolveZoneNames(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	svc := domain.NewFirewallService(api)
+	in := domain.FirewallInput{Name: "Bound", Action: "block", SourceZone: "Internal", DestinationZone: "External"}
+	_, binding, err := svc.PrepareCreate(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, zone := range api.zones {
+		if zone["id"] == internalZoneID {
+			zone["name"] = "Renamed Internal"
+		}
+		if zone["id"] == externalZoneID {
+			zone["name"] = "Renamed External"
+		}
+	}
+	api.zones = append(api.zones,
+		map[string]any{"id": "ffffffff-ffff-4fff-8fff-fffffffffff8", "name": "Internal", "networkIds": []any{}, "metadata": map[string]any{"origin": "USER_DEFINED"}},
+		map[string]any{"id": "ffffffff-ffff-4fff-8fff-fffffffffff9", "name": "External", "networkIds": []any{}, "metadata": map[string]any{"origin": "USER_DEFINED"}},
+	)
+	observed := map[string]any{
+		"id": createdPolicyID, "name": "Bound", "enabled": true, "index": float64(120),
+		"action": map[string]any{"type": "BLOCK"},
+		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4_AND_IPV6"}, "loggingEnabled": false,
+		"metadata": map[string]any{"origin": "USER_DEFINED"},
+	}
+	api.postResponse = map[string]any{"id": createdPolicyID}
+	api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+	if _, err := svc.ApplyCreateBound(context.Background(), in, binding); err != nil {
+		t.Fatal(err)
+	}
+	posts := firewallCalls(api.calls, http.MethodPost)
+	body := posts[len(posts)-1].body.(map[string]any)
+	source := body["source"].(map[string]any)
+	destination := body["destination"].(map[string]any)
+	if source["zoneId"] != internalZoneID || destination["zoneId"] != externalZoneID {
+		t.Fatalf("bound create body = %#v", body)
+	}
+}
+
 func TestFirewallCreateVerificationComparesCompleteWritableDocument(t *testing.T) {
 	baseObserved := map[string]any{
 		"id": createdPolicyID, "name": "Allow HTTPS", "description": "Verified create", "enabled": true, "index": float64(120),
@@ -573,6 +614,27 @@ func TestFirewallUpdatePreservesCompleteOfficialWireDocument(t *testing.T) {
 		if _, ok := puts[0].body.(map[string]any)[field]; !ok {
 			t.Fatalf("update body lost %s: %#v", field, puts[0].body)
 		}
+	}
+}
+
+func TestFirewallPlanIncludesAllowReturnTraffic(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	p, current, err := domain.NewFirewallService(api).Update(context.Background(), allowDNSPolicyID, domain.FirewallInput{
+		AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.AllowReturnTraffic {
+		t.Fatal("fixture current allow_return_traffic = true, want false")
+	}
+	before := p.Changes[0].Before.(map[string]any)
+	after := p.Changes[0].After.(map[string]any)
+	if value, ok := before["allow_return_traffic"]; !ok || value != false {
+		t.Fatalf("before allow_return_traffic = %#v present=%t", value, ok)
+	}
+	if value, ok := after["allow_return_traffic"]; !ok || value != true {
+		t.Fatalf("after allow_return_traffic = %#v present=%t", value, ok)
 	}
 }
 

@@ -215,15 +215,30 @@ func (s *NetworkService) Update(ctx context.Context, id string, in NetworkInput)
 }
 
 func (s *NetworkService) ApplyUpdate(ctx context.Context, id string, in NetworkInput) (Network, error) {
+	return s.applyUpdate(ctx, id, in, nil)
+}
+
+func (s *NetworkService) ApplyUpdatePrepared(ctx context.Context, target plan.Target, id string, in NetworkInput) (Network, error) {
+	return s.applyUpdate(ctx, id, in, &target)
+}
+
+func (s *NetworkService) applyUpdate(ctx context.Context, id string, in NetworkInput, target *plan.Target) (Network, error) {
 	if err := validateNetworkUpdate(in); err != nil {
 		return Network{}, err
 	}
 	if supportsOfficialDetails(s.api) {
-		return s.applyOfficialUpdate(ctx, id, in)
+		return s.applyOfficialUpdate(ctx, id, in, target)
 	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Network{}, err
+	}
+	if target != nil {
+		p := plan.Update("network", n.ID, n.Name,
+			fmt.Sprintf("update network %s", n.Name), networkSnapshot(n), mergeNetworkAfter(n, in))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Network{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathRestNetwork, n.ID)
 	body := networkInputBody(in)
@@ -277,12 +292,27 @@ func (s *NetworkService) Delete(ctx context.Context, id string) (plan.Plan, Netw
 }
 
 func (s *NetworkService) ApplyDelete(ctx context.Context, id string) (Network, error) {
+	return s.applyDelete(ctx, id, nil)
+}
+
+func (s *NetworkService) ApplyDeletePrepared(ctx context.Context, target plan.Target, id string) (Network, error) {
+	return s.applyDelete(ctx, id, &target)
+}
+
+func (s *NetworkService) applyDelete(ctx context.Context, id string, target *plan.Target) (Network, error) {
 	if supportsOfficialDetails(s.api) {
-		return s.applyOfficialDelete(ctx, id)
+		return s.applyOfficialDelete(ctx, id, target)
 	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return Network{}, err
+	}
+	if target != nil {
+		p := plan.Delete("network", n.ID, n.Name,
+			fmt.Sprintf("delete network %s", n.Name), networkSnapshot(n))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Network{}, err
+		}
 	}
 	path := s.api.SitePath(client.PathRestNetwork, n.ID)
 	if err := s.api.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
@@ -486,7 +516,7 @@ func (s *NetworkService) prepareOfficialUpdate(ctx context.Context, query string
 	return doc, body, nil
 }
 
-func (s *NetworkService) applyOfficialUpdate(ctx context.Context, query string, in NetworkInput) (Network, error) {
+func (s *NetworkService) applyOfficialUpdate(ctx context.Context, query string, in NetworkInput, target *plan.Target) (Network, error) {
 	doc, body, err := s.prepareOfficialUpdate(ctx, query, in)
 	if err != nil {
 		return Network{}, err
@@ -495,6 +525,14 @@ func (s *NetworkService) applyOfficialUpdate(ctx context.Context, query string, 
 	path, err := transport.IntegrationSitePath(ctx, "networks", doc.normalized.ID)
 	if err != nil {
 		return Network{}, err
+	}
+	if target != nil {
+		after := NormalizeNetwork(networkResponseView(body, doc.wire))
+		p := plan.Update("network", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("update network %s", doc.normalized.Name), networkSnapshot(doc.normalized), networkSnapshot(after))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Network{}, err
+		}
 	}
 	var response map[string]any
 	if err := transport.DoOfficial(ctx, http.MethodPut, path, body, &response); err != nil {
@@ -513,10 +551,17 @@ func (s *NetworkService) applyOfficialUpdate(ctx context.Context, query string, 
 	return NormalizeNetwork(observed), nil
 }
 
-func (s *NetworkService) applyOfficialDelete(ctx context.Context, query string) (Network, error) {
+func (s *NetworkService) applyOfficialDelete(ctx context.Context, query string, target *plan.Target) (Network, error) {
 	doc, err := s.resolveOfficialDocument(ctx, query)
 	if err != nil {
 		return Network{}, err
+	}
+	if target != nil {
+		p := plan.Delete("network", doc.normalized.ID, doc.normalized.Name,
+			fmt.Sprintf("delete network %s", doc.normalized.Name), networkSnapshot(doc.normalized))
+		if err := requirePreparedTarget(*target, p.Changes); err != nil {
+			return Network{}, err
+		}
 	}
 	transport, _ := requireOfficialMutationAPI(s.api)
 	path, err := transport.IntegrationSitePath(ctx, "networks", doc.normalized.ID)

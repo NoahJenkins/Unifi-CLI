@@ -404,8 +404,8 @@ func TestOfficialStableReadGoldenOutput(t *testing.T) {
 		},
 		{
 			name: "firewall", run: func() error { return runFirewallGet(commandFirewallID) },
-			humanWant: "id: " + commandFirewallID + "\nname: Allow DNS\ndescription: Permit DNS\nenabled: true\naction: allow\nsource_zone_id: ffffffff-ffff-4fff-8fff-fffffffffff1\ndestination_zone_id: ffffffff-ffff-4fff-8fff-fffffffffff2\nprotocol: ipv4:udp\nlogging_enabled: false\nindex: 1\norigin: USER\n",
-			jsonWant:  `{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","description":"Permit DNS","enabled":true,"action":"allow","source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:udp","logging_enabled":false,"index":1,"origin":"USER"}`,
+			humanWant: "id: " + commandFirewallID + "\nname: Allow DNS\ndescription: Permit DNS\nenabled: true\naction: allow\nallow_return_traffic: false\nsource_zone_id: ffffffff-ffff-4fff-8fff-fffffffffff1\ndestination_zone_id: ffffffff-ffff-4fff-8fff-fffffffffff2\nprotocol: ipv4:udp\nlogging_enabled: false\nindex: 1\norigin: USER\n",
+			jsonWant:  `{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","description":"Permit DNS","enabled":true,"action":"allow","allow_return_traffic":false,"source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:udp","logging_enabled":false,"index":1,"origin":"USER"}`,
 		},
 		{
 			name: "dns", run: func() error { return runDNSGet(commandDNSID) },

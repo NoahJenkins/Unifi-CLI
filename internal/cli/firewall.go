@@ -235,6 +235,7 @@ func runFirewallGet(query string) error {
 	fmt.Fprintf(rt.Out, "description: %s\n", render.SafeText(item.Description))
 	fmt.Fprintf(rt.Out, "enabled: %s\n", strconv.FormatBool(item.Enabled))
 	fmt.Fprintf(rt.Out, "action: %s\n", render.SafeText(item.Action))
+	fmt.Fprintf(rt.Out, "allow_return_traffic: %s\n", strconv.FormatBool(item.AllowReturnTraffic))
 	fmt.Fprintf(rt.Out, "source_zone_id: %s\n", render.SafeText(item.SourceZoneID))
 	fmt.Fprintf(rt.Out, "destination_zone_id: %s\n", render.SafeText(item.DestinationZoneID))
 	fmt.Fprintf(rt.Out, "protocol: %s\n", render.SafeText(item.Protocol))
@@ -297,15 +298,44 @@ func runFirewallCreate(in domain.FirewallInput) error {
 	ctx := context.Background()
 	code := RunPreparedMutation(rt, "firewall", "create",
 		func() (plan.PreparedMutation, error) {
-			p, err := svc.Create(ctx, in)
+			p, binding, err := svc.PrepareCreate(ctx, in)
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
-			return plan.Untargeted(p, firewallMutationRisk["create"], true), nil
-		}, nil,
-		func(target plan.Target) (any, error) { return svc.ApplyCreate(ctx, in) },
+			encoded, err := json.Marshal(binding)
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			snapshot := map[string]any{"source_zone_id": binding.SourceZoneID, "destination_zone_id": binding.DestinationZoneID}
+			return plan.Targeted(p, string(encoded), snapshot, firewallMutationRisk["create"], true)
+		},
+		func(target plan.Target) (any, error) {
+			binding, err := decodeFirewallCreateBinding(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			return svc.ObserveCreateBinding(ctx, binding)
+		},
+		func(target plan.Target) (any, error) {
+			binding, err := decodeFirewallCreateBinding(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			return svc.ApplyCreateBound(ctx, in, binding)
+		},
 	)
 	return emittedExit(code)
+}
+
+func decodeFirewallCreateBinding(value string) (domain.FirewallCreateBinding, error) {
+	var binding domain.FirewallCreateBinding
+	if err := json.Unmarshal([]byte(value), &binding); err != nil {
+		return domain.FirewallCreateBinding{}, fmt.Errorf("decode firewall create zone binding: %w", err)
+	}
+	if binding.SourceZoneID == "" || binding.DestinationZoneID == "" {
+		return domain.FirewallCreateBinding{}, fmt.Errorf("firewall create zone binding is incomplete")
+	}
+	return binding, nil
 }
 
 func runFirewallUpdate(query string, in domain.FirewallInput) error {
@@ -327,7 +357,7 @@ func runFirewallUpdate(query string, in domain.FirewallInput) error {
 			p, _, err := svc.Update(ctx, target.ID(), in)
 			return p.Changes, err
 		},
-		func(target plan.Target) (any, error) { return svc.ApplyUpdate(ctx, target.ID(), in) },
+		func(target plan.Target) (any, error) { return svc.ApplyUpdatePrepared(ctx, target, target.ID(), in) },
 	)
 	return emittedExit(code)
 }
@@ -351,7 +381,7 @@ func runFirewallDelete(query string) error {
 			p, _, err := svc.Delete(ctx, target.ID())
 			return p.Changes, err
 		},
-		func(target plan.Target) (any, error) { return svc.ApplyDelete(ctx, target.ID()) },
+		func(target plan.Target) (any, error) { return svc.ApplyDeletePrepared(ctx, target, target.ID()) },
 	)
 	return emittedExit(code)
 }
@@ -402,7 +432,7 @@ func runFirewallReorder(in domain.FirewallReorder) error {
 			if err != nil {
 				return nil, err
 			}
-			return svc.ApplyReorder(ctx, resolved)
+			return svc.ApplyReorderPrepared(ctx, target, resolved)
 		},
 	)
 	return emittedExit(code)

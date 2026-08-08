@@ -259,7 +259,7 @@ func runNetworkUpdate(id string, in domain.NetworkInput) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyUpdate(ctx, target.ID(), in)
+			return svc.ApplyUpdatePrepared(ctx, target, target.ID(), in)
 		},
 	)
 	return emittedExit(code)
@@ -287,7 +287,7 @@ func runNetworkDelete(id string) error {
 			return p.Changes, err
 		},
 		func(target plan.Target) (any, error) {
-			return svc.ApplyDelete(ctx, target.ID())
+			return svc.ApplyDeletePrepared(ctx, target, target.ID())
 		},
 	)
 	return emittedExit(code)

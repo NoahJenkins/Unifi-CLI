@@ -189,7 +189,7 @@ func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
 
 	code := RunPreparedMutation(rt, "port", "update",
 		func() (plan.PreparedMutation, error) {
-			p, _, err := svc.Update(ctx, device, portIdx, in)
+			p, _, snapshot, err := svc.PrepareUpdate(ctx, device, portIdx, in)
 			if err != nil {
 				return plan.PreparedMutation{}, err
 			}
@@ -197,22 +197,22 @@ func runPortUpdate(device string, portIdx int, in domain.PortInput) error {
 				return plan.PreparedMutation{}, fmt.Errorf("port update produced invalid target plan")
 			}
 			risk, experimental := task7MutationPolicy("port", "update")
-			return plan.Targeted(p, p.Changes[0].ID, p.Changes, risk, experimental)
+			return plan.Targeted(p, p.Changes[0].ID, snapshot, risk, experimental)
 		},
 		func(target plan.Target) (any, error) {
 			deviceID, targetPortIdx, err := parsePortTarget(target.ID())
 			if err != nil {
 				return nil, err
 			}
-			p, _, err := svc.Update(ctx, deviceID, targetPortIdx, in)
-			return p.Changes, err
+			_, _, snapshot, err := svc.PrepareUpdate(ctx, deviceID, targetPortIdx, in)
+			return snapshot, err
 		},
 		func(target plan.Target) (any, error) {
 			deviceID, targetPortIdx, err := parsePortTarget(target.ID())
 			if err != nil {
 				return nil, err
 			}
-			return svc.ApplyUpdate(ctx, deviceID, targetPortIdx, in)
+			return svc.ApplyUpdatePrepared(ctx, target, deviceID, targetPortIdx, in)
 		},
 	)
 	return emittedExit(code)

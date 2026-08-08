@@ -300,6 +300,15 @@ func newFirewallMutationTestServer(t *testing.T) (*httptest.Server, *int) {
 			writePage([]map[string]any{{"id": commandSiteID, "internalReference": "default", "name": "Default"}}, 1)
 		case r.Method == http.MethodGet && r.URL.Path == sitePath+"/firewall/zones":
 			writePage(zones, len(zones))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, sitePath+"/firewall/zones/"):
+			id := strings.TrimPrefix(r.URL.Path, sitePath+"/firewall/zones/")
+			for _, zone := range zones {
+				if zone["id"] == id {
+					_ = json.NewEncoder(w).Encode(zone)
+					return
+				}
+			}
+			http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
 		case r.Method == http.MethodGet && r.URL.Path == sitePath+"/firewall/policies":
 			writePage(policies, len(policies))
 		case r.URL.Path == sitePath+"/firewall/policies/ordering":

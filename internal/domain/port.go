@@ -167,17 +167,28 @@ func (s *PortService) Get(ctx context.Context, deviceQuery string, portIdx int) 
 }
 
 func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (plan.Plan, Port, error) {
+	p, cur, _, err := s.PrepareUpdate(ctx, deviceQuery, portIdx, in)
+	return p, cur, err
+}
+
+// PrepareUpdate captures both the user-visible change and the complete
+// authoritative override document that a full legacy PUT would replace.
+func (s *PortService) PrepareUpdate(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (plan.Plan, Port, any, error) {
 	if err := validatePortUpdate(portIdx, in); err != nil {
-		return plan.Plan{}, Port{}, err
+		return plan.Plan{}, Port{}, nil, err
 	}
-	cur, _, err := s.loadAuthoritativePort(ctx, deviceQuery, portIdx)
+	cur, existing, err := s.loadAuthoritativePort(ctx, deviceQuery, portIdx)
 	if err != nil {
-		return plan.Plan{}, Port{}, err
+		return plan.Plan{}, Port{}, nil, err
 	}
+	return preparePortUpdate(cur, existing, in)
+}
+
+func preparePortUpdate(cur Port, existing []map[string]any, in PortInput) (plan.Plan, Port, any, error) {
 	before := portSnapshot(cur)
 	after := mergePortAfter(cur, in)
 	if reflect.DeepEqual(before, after) {
-		return plan.Plan{}, Port{}, apperr.New(apperr.ValidationFailed, "port update would not change controller state")
+		return plan.Plan{}, Port{}, nil, apperr.New(apperr.ValidationFailed, "port update would not change controller state")
 	}
 	name := fmt.Sprintf("%s:%d", cur.DeviceName, cur.PortIdx)
 	p := plan.Update("port", fmt.Sprintf("%s/%d", cur.DeviceID, cur.PortIdx), name,
@@ -185,10 +196,22 @@ func (s *PortService) Update(ctx context.Context, deviceQuery string, portIdx in
 		before,
 		after,
 	)
-	return p, cur, nil
+	snapshot := map[string]any{
+		"changes":        p.Changes,
+		"port_overrides": canonicalPortOverrides(existing),
+	}
+	return p, cur, snapshot, nil
 }
 
 func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portIdx int, in PortInput) (Port, error) {
+	return s.applyUpdate(ctx, deviceQuery, portIdx, in, nil)
+}
+
+func (s *PortService) ApplyUpdatePrepared(ctx context.Context, target plan.Target, deviceQuery string, portIdx int, in PortInput) (Port, error) {
+	return s.applyUpdate(ctx, deviceQuery, portIdx, in, &target)
+}
+
+func (s *PortService) applyUpdate(ctx context.Context, deviceQuery string, portIdx int, in PortInput, target *plan.Target) (Port, error) {
 	if err := validatePortUpdate(portIdx, in); err != nil {
 		return Port{}, err
 	}
@@ -196,8 +219,14 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 	if err != nil {
 		return Port{}, err
 	}
-	if reflect.DeepEqual(portSnapshot(cur), mergePortAfter(cur, in)) {
-		return Port{}, apperr.New(apperr.ValidationFailed, "port update would not change controller state")
+	_, _, snapshot, err := preparePortUpdate(cur, existing, in)
+	if err != nil {
+		return Port{}, err
+	}
+	if target != nil {
+		if err := requirePreparedTarget(*target, snapshot); err != nil {
+			return Port{}, err
+		}
 	}
 	patch := portInputOverride(portIdx, in)
 	merged := MergePortOverrides(existing, patch)
@@ -208,14 +237,30 @@ func (s *PortService) ApplyUpdate(ctx context.Context, deviceQuery string, portI
 		return Port{}, err
 	}
 
-	observed, _, err := s.loadAuthoritativePort(ctx, cur.DeviceID, portIdx)
+	observed, observedOverrides, err := s.loadAuthoritativePort(ctx, cur.DeviceID, portIdx)
 	if err != nil {
 		return Port{}, verificationError("updated port could not be verified", err)
 	}
 	if !portMatchesInput(observed, in) {
 		return Port{}, apperr.New(apperr.Conflict, "port update verification failed: observed fields differ from requested state")
 	}
+	if !portOverrideDocumentsEqual(observedOverrides, merged) {
+		return Port{}, apperr.New(apperr.Conflict, "port update verification failed: complete override document differs from requested state")
+	}
 	return observed, nil
+}
+
+func canonicalPortOverrides(overrides []map[string]any) []map[string]any {
+	canonical := make([]map[string]any, 0, len(overrides))
+	for _, override := range overrides {
+		canonical = append(canonical, deepCloneMap(override))
+	}
+	sort.SliceStable(canonical, func(i, j int) bool {
+		left, _ := asInt(canonical[i]["port_idx"])
+		right, _ := asInt(canonical[j]["port_idx"])
+		return left < right
+	})
+	return canonical
 }
 
 func portMatchesInput(observed Port, in PortInput) bool {
@@ -326,10 +371,20 @@ func (s *PortService) loadRestPortOverrides(ctx context.Context, devID string) (
 	if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return nil, err
 	}
-	if len(raw) == 0 {
+	if len(raw) != 1 {
+		return nil, apperr.Newf(apperr.Conflict, "port override detail returned %d devices, want exactly one", len(raw))
+	}
+	if strField(raw[0], "_id", "id") != devID {
+		return nil, apperr.New(apperr.Conflict, "port override detail ID does not match requested device")
+	}
+	overrides, err := strictPortOverrides(raw[0]["port_overrides"])
+	if err != nil {
+		return nil, err
+	}
+	if overrides == nil {
 		return nil, nil
 	}
-	return portOverridesFromDevice(raw[0]), nil
+	return overrides, nil
 }
 
 // ExtractPortsFromDevice builds Port DTOs from port_table, with port_overrides merged on top.
@@ -589,6 +644,60 @@ func sliceOfMaps(v any) []map[string]any {
 	default:
 		return nil
 	}
+}
+
+func strictPortOverrides(value any) ([]map[string]any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	var raw []any
+	switch typed := value.(type) {
+	case []any:
+		raw = typed
+	case []map[string]any:
+		raw = make([]any, len(typed))
+		for i := range typed {
+			raw[i] = typed[i]
+		}
+	default:
+		return nil, apperr.New(apperr.Conflict, "port override document is not an array")
+	}
+	out := make([]map[string]any, 0, len(raw))
+	seen := make(map[int]struct{}, len(raw))
+	for _, item := range raw {
+		override, ok := item.(map[string]any)
+		if !ok {
+			return nil, apperr.New(apperr.Conflict, "port override document contains a non-object entry")
+		}
+		index, ok := asInt(override["port_idx"])
+		if !ok || index < 1 {
+			return nil, apperr.New(apperr.Conflict, "port override document contains an invalid port index")
+		}
+		if _, duplicate := seen[index]; duplicate {
+			return nil, apperr.New(apperr.Conflict, "port override document contains a duplicate port index")
+		}
+		seen[index] = struct{}{}
+		cloned := cloneMap(override)
+		cloned["port_idx"] = index
+		out = append(out, cloned)
+	}
+	return out, nil
+}
+
+func portOverrideDocumentsEqual(left, right []map[string]any) bool {
+	canonical := func(items []map[string]any) []map[string]any {
+		out := make([]map[string]any, len(items))
+		for i, item := range items {
+			out[i] = cloneMap(item)
+		}
+		sort.Slice(out, func(i, j int) bool {
+			leftIndex, _ := asInt(out[i]["port_idx"])
+			rightIndex, _ := asInt(out[j]["port_idx"])
+			return leftIndex < rightIndex
+		})
+		return out
+	}
+	return wireDocumentsEqual(canonical(left), canonical(right))
 }
 
 func cloneMap(m map[string]any) map[string]any {
