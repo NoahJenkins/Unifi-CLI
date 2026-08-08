@@ -11,14 +11,18 @@ UniFi cloud or Site Manager.
 |---|---|
 | Earlier than 10.3.58 | Unsupported; required official schemas/endpoints may be absent or incompatible |
 | 10.3.58 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates |
-| 10.4.57 | In the supported target range, but this RC branch has not yet completed fresh live-controller verification; do not treat compatibility as proven until the Task 9 release gate records it |
+| 10.4.57 | Live verified on 2026-08-08: the guarded read-only suite passed, system health reported the official application version, and the isolated disabled DNS A-record create/update/delete lifecycle restored the exact baseline |
 | Later than 10.4.57 | Intended by the `10.3.58+` contract, subject to upstream API compatibility and release-specific verification |
 
-The implementation work for this RC intentionally made no live-controller
-calls. No fresh live verification of the rewritten official-API RC surface on
-10.4.57 has been recorded. The release checklist requires fresh read-only
-coverage and only the approved isolated DNS A-record lifecycle before
-publication.
+Live verification used the release-candidate executable from commit
+`434492b613e730916b8b06adeea9dc49f3fd1518`. Every configured read-only check
+passed; the DNS collection was the only successfully queried empty optional
+resource. The single write test created a uniquely named disabled A record,
+changed only its documentation-range address, deleted only its captured ID,
+and confirmed exact-name absence and baseline restoration. No device, client,
+port, WiFi, network, resolver, or firewall mutation was run. The controller's
+self-signed certificate required the documented explicit `insecure: true`
+compatibility setting for this local test; verified TLS remains the default.
 
 The schema target is Ubiquiti's [UniFi Network 10.3.58 API
 reference](https://developer.ui.com/network/v10.3.58). Upstream documentation
@@ -29,7 +33,7 @@ used to derive synthetic fixtures and validation bounds.
 
 | Surface | API and support |
 |---|---|
-| Site/device/client/network/WiFi/port/firewall/DNS/resolver/health reads | Stable official local integration API |
+| Site/device/client/network/WiFi/port/firewall/DNS/resolver/health reads | Stable official local integration API; health combines official application info with adopted-device status |
 | DNS A-record create/update/delete | Stable official local integration API |
 | Network/WiFi CRUD, restart/adopt/forget, firewall policy writes | Experimental official local integration API |
 | Rename/locate/upgrade, client actions, port update, resolver set | Experimental legacy local compatibility paths |

@@ -74,7 +74,9 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       all reported SHA-1/SHA-256 values, and an exact library/version inventory
       derived from each independently built trusted binary. Reject unrelated
       file claims and setuid, setgid, and sticky archive entries.
-- [ ] Run the authenticated read-only live suite with verified TLS.
+- [ ] Run the authenticated read-only live suite with verified TLS, or record
+      the explicit `insecure: true` compatibility exception when the authorized
+      local controller has a self-signed certificate.
 - [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.
 - [ ] Run only the approved isolated DNS A-record lifecycle on the authorized

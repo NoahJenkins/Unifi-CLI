@@ -16,9 +16,9 @@ plans every mutation before it can apply.
 
 The compatibility target is UniFi Network **10.3.58 and newer**. The current
 implementation is schema- and fixture-validated against the official 10.3.58
-API. Fresh live proof for this RC, including 10.4.57, is a release gate and has
-not yet been completed. See [Compatibility](docs/compatibility.md) for the
-exact status.
+API and has completed the guarded read-only suite plus the isolated DNS
+lifecycle against UniFi Network 10.4.57. See
+[Compatibility](docs/compatibility.md) for the exact status and limits.
 
 ## Install `v1.0.0-rc.1`
 
@@ -136,7 +136,7 @@ requires `--experimental`.
 | Surface | Status | Commands |
 |---|---|---|
 | Local auth/config/version | Local | `login`, `logout`, `auth status`, `config path`, `config show`, `version` |
-| Inventory and health reads | Stable official | `site`, `device`, `client`, `network`, `wlan`, `port`, `firewall`, `firewall zone`, `dns`, `dns resolvers`, and `system health` list/get operations as exposed by help |
+| Inventory and health reads | Stable official | `site`, `device`, `client`, `network`, `wlan`, `port`, `firewall`, `firewall zone`, `dns`, `dns resolvers`, and `system health` list/get operations as exposed by help; health includes the official application version and adopted-device status |
 | Local DNS A-record writes | Stable official | `dns create`, `dns update`, `dns delete` |
 | Network and WiFi writes | Experimental official | Network CRUD; WLAN CRUD, enable, and disable |
 | Device lifecycle writes | Experimental official | `device restart`, `device adopt`, `device forget` |
