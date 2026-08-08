@@ -270,11 +270,12 @@ and `port get` resolve one device and make one detail request.
   "schema_version": "1",
   "ok": true,
   "resource": "device",
-  "action": "list",
-  "data": [],
+  "action": "restart",
+  "data": {"accepted": true},
   "meta": {
     "site": "default",
-    "dry_run": false
+    "dry_run": false,
+    "experimental": true
   }
 }
 ```
@@ -283,8 +284,9 @@ Top-level `schema_version`, `ok`, `resource`, `action`, `data`, and `meta` are
 always present. `data` remains present on failures (as `null`). `error` is
 present only for failures and `plan` only for plan output. List responses may
 include optional `meta.count`, but current typed resource-list commands omit
-it. The v1 surface has no `--raw` flag and never embeds upstream controller
-payloads.
+it. `meta.experimental` is present and true for every experimental mutation
+plan, gate error, and successful apply; stable commands omit it. The v1
+surface has no `--raw` flag and never embeds upstream controller payloads.
 
 Version interfaces are:
 

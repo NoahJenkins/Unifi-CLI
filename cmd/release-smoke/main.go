@@ -85,6 +85,7 @@ func main() {
 	var all bool
 	var native bool
 	var artifacts string
+	var binary string
 	var expectedVersion string
 	var expectedCommit string
 	var trustedBinaries string
@@ -94,6 +95,7 @@ func main() {
 	flag.BoolVar(&all, "all", false, "cross-build and structurally verify all release targets")
 	flag.BoolVar(&native, "native", false, "build and execute the current native release target")
 	flag.StringVar(&artifacts, "artifacts", "", "verify an existing GoReleaser dist directory")
+	flag.StringVar(&binary, "binary", "", "execute the four-command smoke contract against a native release binary")
 	flag.StringVar(&expectedVersion, "expected-version", "", "exact release version without a leading v")
 	flag.StringVar(&expectedCommit, "expected-commit", "", "exact release commit")
 	flag.StringVar(&trustedBinaries, "trusted-binaries", "", "directory of trusted binaries cross-built from the exact checkout before artifact generation")
@@ -102,13 +104,13 @@ func main() {
 	flag.Parse()
 
 	selected := 0
-	for _, enabled := range []bool{describe, all, native, artifacts != "", writeSourceManifest != ""} {
+	for _, enabled := range []bool{describe, all, native, artifacts != "", binary != "", writeSourceManifest != ""} {
 		if enabled {
 			selected++
 		}
 	}
 	if selected != 1 || flag.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, --artifacts DIR, or --write-source-manifest FILE")
+		fmt.Fprintln(os.Stderr, "choose exactly one of --describe, --all, --native, --binary FILE, --artifacts DIR, or --write-source-manifest FILE")
 		os.Exit(2)
 	}
 	if artifacts != "" && (expectedVersion == "" || expectedCommit == "" || trustedBinaries == "" || trustedSourceManifest == "") {
@@ -117,6 +119,10 @@ func main() {
 	}
 	if writeSourceManifest != "" && expectedCommit == "" {
 		fmt.Fprintln(os.Stderr, "--write-source-manifest requires --expected-commit")
+		os.Exit(2)
+	}
+	if binary != "" && (expectedVersion == "" || expectedCommit == "") {
+		fmt.Fprintln(os.Stderr, "--binary requires --expected-version and --expected-commit")
 		os.Exit(2)
 	}
 
@@ -137,6 +143,16 @@ func main() {
 		}
 	} else if artifacts != "" {
 		err = verifyArtifacts(ctx, artifacts, expectedVersion, expectedCommit, trustedBinaries, trustedSourceManifest)
+	} else if binary != "" {
+		root, rootErr := repositoryRoot()
+		if rootErr != nil {
+			err = rootErr
+		} else {
+			nativeTarget := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
+			if err = verifyStructure(binary, nativeTarget); err == nil {
+				err = verifyNativeCommands(ctx, root, binary, expectedVersion, expectedCommit, "")
+			}
+		}
 	} else {
 		err = buildAndVerify(ctx, all)
 	}
@@ -504,10 +520,6 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 		if err != nil {
 			return fmt.Errorf("%s: %w", target, err)
 		}
-		if err := inspectCycloneDXSBOM(sbomPath, wantName, expectedVersion, executable); err != nil {
-			cleanup()
-			return fmt.Errorf("%s SBOM: %w", target, err)
-		}
 		if err := verifyStructure(executable.extractedPath, target); err != nil {
 			cleanup()
 			return err
@@ -515,6 +527,15 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 		if err := verifyTrustedArtifact(ctx, trustedBinaries[target], executable, target); err != nil {
 			cleanup()
 			return err
+		}
+		inventory, err := trustedSBOMInventory(trustedBinaries[target])
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("%s trusted SBOM inventory: %w", target, err)
+		}
+		if err := inspectCycloneDXSBOM(sbomPath, wantName, expectedVersion, executable, inventory); err != nil {
+			cleanup()
+			return fmt.Errorf("%s SBOM: %w", target, err)
 		}
 		fmt.Printf("%s archive: checksum, SBOM, structure, and trusted-binary equality verified\n", target)
 		cleanup()
@@ -917,6 +938,51 @@ type archiveExecutable struct {
 	sha256        string
 }
 
+type sbomComponentIdentity struct {
+	Type    string
+	Name    string
+	Version string
+}
+
+func trustedSBOMInventory(path string) (map[sbomComponentIdentity]struct{}, error) {
+	info, err := buildinfo.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read trusted binary build info: %w", err)
+	}
+	inventory := make(map[sbomComponentIdentity]struct{}, len(info.Deps)+2)
+	add := func(name, version string) error {
+		if name == "" || version == "" || version == "(devel)" {
+			return fmt.Errorf("trusted binary has unversioned module %q", name)
+		}
+		identity := sbomComponentIdentity{Type: "library", Name: name, Version: version}
+		if _, duplicate := inventory[identity]; duplicate {
+			return fmt.Errorf("trusted binary has duplicate module %s@%s", name, version)
+		}
+		inventory[identity] = struct{}{}
+		return nil
+	}
+	main := info.Main
+	if main.Replace != nil {
+		main = *main.Replace
+	}
+	if err := add(main.Path, main.Version); err != nil {
+		return nil, err
+	}
+	for _, dependency := range info.Deps {
+		module := *dependency
+		if module.Replace != nil {
+			module = *module.Replace
+		}
+		if err := add(module.Path, module.Version); err != nil {
+			return nil, err
+		}
+	}
+	if err := add("stdlib", info.GoVersion); err != nil {
+		return nil, err
+	}
+	return inventory, nil
+}
+
 func verifyTrustedArtifact(ctx context.Context, trustedPath string, artifact archiveExecutable, target target) error {
 	select {
 	case <-ctx.Done():
@@ -1002,6 +1068,9 @@ func inspectZipArchiveTrusted(ctx context.Context, archivePath string, target ta
 		if !isDir && !entry.Mode().IsRegular() {
 			return fmt.Errorf("archive entry %q has unsupported mode %s", entry.Name, entry.Mode())
 		}
+		if entry.Mode()&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0 {
+			return fmt.Errorf("archive entry %q has forbidden special mode bits", entry.Name)
+		}
 		if err := recordArchiveEntry(clean, isDir, seenPaths, seenNames); err != nil {
 			return err
 		}
@@ -1079,6 +1148,9 @@ func inspectTarArchiveTrusted(ctx context.Context, archivePath string, target ta
 		isDir := header.Typeflag == tar.TypeDir
 		if header.Typeflag != tar.TypeReg && !isDir {
 			return fmt.Errorf("archive entry %q has unsupported type %d", header.Name, header.Typeflag)
+		}
+		if header.Mode&0o7000 != 0 {
+			return fmt.Errorf("archive entry %q has forbidden special mode bits", header.Name)
 		}
 		clean, isDir, err := validateArchiveEntry(header.Name, expectedRoot, isDir)
 		if err != nil {
@@ -1336,6 +1408,9 @@ func inspectSourceArchive(ctx context.Context, archivePath, expectedRoot, expect
 		if header.Typeflag != tar.TypeReg && !isDir {
 			return fmt.Errorf("source entry %q has unsupported type %d", header.Name, header.Typeflag)
 		}
+		if header.Mode&0o7000 != 0 {
+			return fmt.Errorf("source entry %q has forbidden special mode bits", header.Name)
+		}
 		clean, _, err := validateSourceEntry(header.Name, expectedRoot, isDir)
 		if err != nil {
 			return err
@@ -1457,7 +1532,7 @@ func validateSourceEntry(name, expectedRoot string, directory bool) (string, boo
 	return clean, directory, nil
 }
 
-func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executable archiveExecutable) error {
+func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executable archiveExecutable, expectedInventory map[sbomComponentIdentity]struct{}) error {
 	data, err := readReleaseFile(sbomPath, maxReleaseSBOMBytes)
 	if err != nil {
 		return err
@@ -1501,15 +1576,21 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 		return fmt.Errorf("SBOM components are empty")
 	}
 	executableComponents := 0
+	observedInventory := make(map[sbomComponentIdentity]struct{}, len(expectedInventory))
 	for i, component := range bom.Components {
 		if component.Name == "" {
 			return fmt.Errorf("SBOM component %d has empty name", i)
 		}
 		switch component.Type {
-		case "library", "application":
+		case "library":
 			if component.Version == "" {
 				return fmt.Errorf("SBOM %s component %d has empty version", component.Type, i)
 			}
+			identity := sbomComponentIdentity{Type: component.Type, Name: component.Name, Version: component.Version}
+			if _, duplicate := observedInventory[identity]; duplicate {
+				return fmt.Errorf("SBOM has duplicate component %s@%s", component.Name, component.Version)
+			}
+			observedInventory[identity] = struct{}{}
 		case "file":
 			if len(component.Hashes) == 0 {
 				return fmt.Errorf("SBOM file component %d has no hashes", i)
@@ -1548,6 +1629,14 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 	}
 	if executableComponents != 1 {
 		return fmt.Errorf("SBOM matching executable component count = %d, want 1", executableComponents)
+	}
+	if len(observedInventory) != len(expectedInventory) {
+		return fmt.Errorf("SBOM dependency component count = %d, want %d from trusted binary", len(observedInventory), len(expectedInventory))
+	}
+	for identity := range expectedInventory {
+		if _, ok := observedInventory[identity]; !ok {
+			return fmt.Errorf("SBOM is missing trusted component %s@%s", identity.Name, identity.Version)
+		}
 	}
 	return nil
 }

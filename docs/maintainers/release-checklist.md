@@ -38,15 +38,17 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       settings, byte-for-byte equality between every archived executable and
       its corresponding trusted cross-build, exact source-manifest equality,
       and trusted Git hashes for LICENSE, README.md, and CHANGELOG.md inside
-      every platform archive before provenance attestation. The verifier never
-      executes an extracted artifact.
-      The macOS and Windows CI runners separately run the same four-command
-      native executable contract before release.
-- [ ] Confirm GoReleaser creates and uploads only a draft release using
-      `docs/releases/v1.0.0-rc.1.md`, artifact verification completes before
-      provenance attestation, and the exact tag is published only by the final
-      successful `gh release edit` step. A failed verification or attestation
-      must leave the release as a draft.
+      every platform archive before provenance attestation. The primary
+      artifact-set verifier does not execute untrusted archive content; after
+      equality is proven, the six native runner jobs extract their matching
+      archive and run the same four-command executable contract before release.
+- [ ] Confirm GoReleaser runs with `--skip=publish`, so artifact generation has
+      no contents-write, attestation, or OIDC authority. The transferred bundle
+      must be reverified before the six native runner smokes, reverified again
+      before attestation and publication, and uploaded only by the final
+      contents-write job. That job must download every exact-tag draft asset by
+      asset ID and compare its bytes with the verified local file before making
+      the release public. Any mismatch must leave the release as a draft.
 - [ ] Confirm the exact-tag preflight runs before Syft and GoReleaser. A missing
       release or an existing draft may proceed; an existing published release,
       malformed response, repository-access failure, authentication failure,
@@ -54,7 +56,9 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       Concurrent runs for the same repository and exact ref are serialized and
       never cancel an in-progress release run.
 - [ ] Verify SHA-256 checksums, provenance, the source archive's exact full-commit
-      PAX binding, and every SBOM's exact archived-executable path and digest.
+      PAX binding, every SBOM's exact archived-executable path and digest, and
+      an exact library/version inventory derived from each independently built
+      trusted binary. Reject setuid, setgid, and sticky archive entries.
 - [ ] Run the authenticated read-only live suite with verified TLS.
 - [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.

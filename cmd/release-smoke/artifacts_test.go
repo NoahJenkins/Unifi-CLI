@@ -326,7 +326,10 @@ func TestInspectCycloneDXSBOMAcceptsPinnedSyftFileComponent(t *testing.T) {
 		relativePath: "unifi-cli_0.0.0-SNAPSHOT-1aa4eee_windows_arm64/unifi.exe",
 		sha256:       sha256Hash,
 	}
-	if err := inspectCycloneDXSBOM(path, archiveName, "0.0.0-SNAPSHOT-1aa4eee", executable); err != nil {
+	expected := map[sbomComponentIdentity]struct{}{
+		{Type: "library", Name: "github.com/spf13/cobra", Version: "v1.10.2"}: {},
+	}
+	if err := inspectCycloneDXSBOM(path, archiveName, "0.0.0-SNAPSHOT-1aa4eee", executable, expected); err != nil {
 		t.Fatalf("pinned Syft 1.48.0 CycloneDX shape rejected: %v", err)
 	}
 }
@@ -403,6 +406,9 @@ func TestVerifyArtifactsRejectsInvalidSourceArchive(t *testing.T) {
 		"missing core file": {
 			{name: fixture.sourceRoot() + "/LICENSE", mode: 0o644, body: []byte("license")},
 		},
+		"setuid source file": append([]archiveEntry{{
+			name: fixture.sourceRoot() + "/LICENSE", mode: fs.ModeSetuid | 0o664, body: []byte("license"),
+		}}, fixture.validSourceEntries()[1:]...),
 	}
 	for name, entries := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -526,6 +532,12 @@ func TestVerifyArtifactsRejectsInvalidArchiveLayout(t *testing.T) {
 			{name: root + "/README.md", mode: 0o644, body: []byte("readme")},
 			{name: root + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
 		},
+		"setuid binary": {
+			{name: root + "/" + target.executableName(), mode: fs.ModeSetuid | 0o755, body: binary},
+			{name: root + "/LICENSE", mode: 0o644, body: []byte("license")},
+			{name: root + "/README.md", mode: 0o644, body: []byte("readme")},
+			{name: root + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
+		},
 		"missing root": {
 			{name: target.executableName(), mode: 0o755, body: binary},
 			{name: "LICENSE", mode: 0o644, body: []byte("license")},
@@ -569,6 +581,12 @@ func TestVerifyArtifactsRejectsInvalidWindowsZipLayout(t *testing.T) {
 		},
 		"wrong binary mode": {
 			{name: root + "/" + target.executableName(), mode: 0o644, body: binary},
+			{name: root + "/LICENSE", mode: 0o644, body: []byte("license")},
+			{name: root + "/README.md", mode: 0o644, body: []byte("readme")},
+			{name: root + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
+		},
+		"sticky binary": {
+			{name: root + "/" + target.executableName(), mode: fs.ModeSticky | 0o755, body: binary},
 			{name: root + "/LICENSE", mode: 0o644, body: []byte("license")},
 			{name: root + "/README.md", mode: 0o644, body: []byte("readme")},
 			{name: root + "/CHANGELOG.md", mode: 0o644, body: []byte("changelog")},
@@ -636,6 +654,19 @@ func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
 				"type": "file", "name": "/tmp/unifi",
 				"hashes": []any{map[string]any{"alg": "SHA-256", "content": "not-a-digest"}},
 			}}
+		},
+		"extra versioned library": func(bom map[string]any) {
+			bom["components"] = append(bom["components"].([]any), map[string]any{
+				"type": "library", "name": "example.invalid/injected", "version": "v9.9.9",
+			})
+		},
+		"changed trusted version": func(bom map[string]any) {
+			components := bom["components"].([]any)
+			components[0].(map[string]any)["version"] = "v9.9.9"
+		},
+		"missing trusted library": func(bom map[string]any) {
+			components := bom["components"].([]any)
+			bom["components"] = components[1:]
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -848,6 +879,7 @@ type releaseFixture struct {
 	binaries              map[target][]byte
 	trustedBinaries       string
 	trustedSourceManifest string
+	sbomInventories       map[target]map[sbomComponentIdentity]struct{}
 }
 
 type pinnedOutputSnapshot struct {
@@ -912,8 +944,7 @@ func materializePinnedOutputSnapshot(t *testing.T, fixture *releaseFixture) pinn
 		if err := json.Unmarshal(bomData, &bom); err != nil {
 			t.Fatal(err)
 		}
-		components := bom["components"].([]any)
-		components[1] = fixture.sbomFileComponent(target)
+		bom["components"] = fixture.sbomComponents(target)
 		fixture.writeSBOM(t, target, bom)
 	}
 	fixture.writeMetadata(t)
@@ -929,9 +960,10 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 		t.Fatal(err)
 	}
 	fixture := &releaseFixture{
-		dist:      t.TempDir(),
-		checksums: make(map[string]string),
-		binaries:  make(map[target][]byte),
+		dist:            t.TempDir(),
+		checksums:       make(map[string]string),
+		binaries:        make(map[target][]byte),
+		sbomInventories: make(map[target]map[sbomComponentIdentity]struct{}),
 	}
 	buildDir := t.TempDir()
 	for _, target := range targets {
@@ -947,6 +979,11 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			t.Fatal(err)
 		}
 		fixture.binaries[target] = binary
+		inventory, err := trustedSBOMInventory(binaryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.sbomInventories[target] = inventory
 		fixture.replaceArchive(t, target, fixture.validArchiveEntries(target))
 		sbomData, err := json.Marshal(fixture.sbom(target, fixture.archiveName(target), smokeVersion, true))
 		if err != nil {
@@ -994,6 +1031,7 @@ func (f *releaseFixture) clone(t *testing.T) *releaseFixture {
 		binaries:              f.binaries,
 		trustedBinaries:       f.trustedBinaries,
 		trustedSourceManifest: f.trustedSourceManifest,
+		sbomInventories:       f.sbomInventories,
 	}
 	for name, checksum := range f.checksums {
 		clone.checksums[name] = checksum
@@ -1186,12 +1224,27 @@ func (f *releaseFixture) sbom(target target, name, version string, components bo
 		"components": []any{},
 	}
 	if components {
-		bom["components"] = []any{
-			map[string]any{"type": "library", "name": "github.com/spf13/cobra", "version": "v1.10.2"},
-			f.sbomFileComponent(target),
-		}
+		bom["components"] = f.sbomComponents(target)
 	}
 	return bom
+}
+
+func (f *releaseFixture) sbomComponents(target target) []any {
+	identities := make([]sbomComponentIdentity, 0, len(f.sbomInventories[target]))
+	for identity := range f.sbomInventories[target] {
+		identities = append(identities, identity)
+	}
+	slices.SortFunc(identities, func(a, b sbomComponentIdentity) int {
+		if value := strings.Compare(a.Name, b.Name); value != 0 {
+			return value
+		}
+		return strings.Compare(a.Version, b.Version)
+	})
+	components := make([]any, 0, len(identities)+1)
+	for _, identity := range identities {
+		components = append(components, map[string]any{"type": identity.Type, "name": identity.Name, "version": identity.Version})
+	}
+	return append(components, f.sbomFileComponent(target))
 }
 
 func (f *releaseFixture) sbomFileComponent(target target) map[string]any {
@@ -1278,7 +1331,17 @@ func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
 			}
 			continue
 		}
-		header := &tar.Header{Name: entry.name, Linkname: entry.linkname, Mode: int64(entry.mode.Perm()), Size: int64(len(entry.body)), Typeflag: typeflag}
+		mode := int64(entry.mode.Perm())
+		if entry.mode&fs.ModeSetuid != 0 {
+			mode |= 0o4000
+		}
+		if entry.mode&fs.ModeSetgid != 0 {
+			mode |= 0o2000
+		}
+		if entry.mode&fs.ModeSticky != 0 {
+			mode |= 0o1000
+		}
+		header := &tar.Header{Name: entry.name, Linkname: entry.linkname, Mode: mode, Size: int64(len(entry.body)), Typeflag: typeflag}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}
