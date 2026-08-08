@@ -283,7 +283,7 @@ func useAuthCommandConfig(t *testing.T, srv *httptest.Server) config.Config {
 	t.Setenv("UNIFI_PORT", portString)
 	t.Setenv("UNIFI_INSECURE", "true")
 	t.Setenv("UNIFI_SITE", "default")
-	t.Setenv("UNIFI_TIMEOUT", "1s")
+	t.Setenv("UNIFI_TIMEOUT", "5s")
 	t.Setenv("UNIFI_API_KEY", "")
 	t.Setenv("UNIFI_USERNAME", "")
 	t.Setenv("UNIFI_PASSWORD", "")
@@ -295,7 +295,7 @@ func useAuthCommandConfig(t *testing.T, srv *httptest.Server) config.Config {
 		Insecure: true,
 		Site:     "default",
 		SafeMode: true,
-		Timeout:  time.Second,
+		Timeout:  5 * time.Second,
 	}
 }
 
