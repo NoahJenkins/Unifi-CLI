@@ -660,6 +660,11 @@ func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
 				"type": "library", "name": "example.invalid/injected", "version": "v9.9.9",
 			})
 		},
+		"extra application": func(bom map[string]any) {
+			bom["components"] = append(bom["components"].([]any), map[string]any{
+				"type": "application", "name": "injected", "version": "UNKNOWN",
+			})
+		},
 		"changed trusted version": func(bom map[string]any) {
 			components := bom["components"].([]any)
 			components[0].(map[string]any)["version"] = "v9.9.9"
@@ -979,7 +984,7 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			t.Fatal(err)
 		}
 		fixture.binaries[target] = binary
-		inventory, err := trustedSBOMInventory(binaryPath)
+		inventory, err := trustedSBOMInventory(binaryPath, target)
 		if err != nil {
 			t.Fatal(err)
 		}

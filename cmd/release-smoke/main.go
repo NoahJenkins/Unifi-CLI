@@ -528,7 +528,7 @@ func verifyArtifacts(ctx context.Context, dist, expectedVersion, expectedCommit,
 			cleanup()
 			return err
 		}
-		inventory, err := trustedSBOMInventory(trustedBinaries[target])
+		inventory, err := trustedSBOMInventory(trustedBinaries[target], target)
 		if err != nil {
 			cleanup()
 			return fmt.Errorf("%s trusted SBOM inventory: %w", target, err)
@@ -944,7 +944,7 @@ type sbomComponentIdentity struct {
 	Version string
 }
 
-func trustedSBOMInventory(path string) (map[sbomComponentIdentity]struct{}, error) {
+func trustedSBOMInventory(path string, target target) (map[sbomComponentIdentity]struct{}, error) {
 	info, err := buildinfo.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read trusted binary build info: %w", err)
@@ -979,6 +979,11 @@ func trustedSBOMInventory(path string) (map[sbomComponentIdentity]struct{}, erro
 	}
 	if err := add("stdlib", info.GoVersion); err != nil {
 		return nil, err
+	}
+	if target.goos == "windows" {
+		inventory[sbomComponentIdentity{
+			Type: "application", Name: strings.TrimSuffix(target.executableName(), ".exe"), Version: "UNKNOWN",
+		}] = struct{}{}
 	}
 	return inventory, nil
 }
@@ -1582,7 +1587,7 @@ func inspectCycloneDXSBOM(sbomPath, archiveName, expectedVersion string, executa
 			return fmt.Errorf("SBOM component %d has empty name", i)
 		}
 		switch component.Type {
-		case "library":
+		case "library", "application":
 			if component.Version == "" {
 				return fmt.Errorf("SBOM %s component %d has empty version", component.Type, i)
 			}
