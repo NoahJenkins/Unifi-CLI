@@ -141,11 +141,10 @@ done < "$existing_asset_file"
 for index in "${!asset_names[@]}"; do
   name="${asset_names[$index]}"
   local_path="${asset_paths[$index]}"
-  gh api --hostname uploads.github.com \
-    --method POST \
+  gh api --method POST \
     -H "Content-Type: application/octet-stream" \
     --input "$local_path" \
-    "$releases_endpoint/${release_id}/assets?name=$name" \
+    "https://uploads.github.com/$releases_endpoint/${release_id}/assets?name=$name" \
     --silent
 done
 gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.id, .name, .size] | @tsv' > "$asset_file"
