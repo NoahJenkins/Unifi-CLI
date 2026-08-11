@@ -34,16 +34,14 @@ jobs:
 
       - name: smoke (build + vet + unit tests)
         shell: bash
+        env:
+          UNIFI_RACE: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: bash ./scripts/smoke.sh
 
       - name: enforce internal CLI coverage
         if: runner.os == 'Linux'
         shell: bash
         run: bash ./scripts/check-coverage.sh
-
-      - name: run race-enabled unit tests
-        if: runner.os == 'Linux'
-        run: go test -race ./... -timeout 30m
 
       - name: smoke native release executable
         run: go run ./cmd/release-smoke --native

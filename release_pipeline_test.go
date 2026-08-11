@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -427,7 +428,7 @@ func TestRequiredCIIncludesLinuxRaceAndArtifactSmoke(t *testing.T) {
 	}
 	text := string(data)
 	for _, want := range []string{
-		"go test -race ./...",
+		"UNIFI_RACE: ${{ runner.os == 'Linux' && '1' || '0' }}",
 		"if: runner.os == 'Linux'",
 		"go run ./cmd/release-smoke --native",
 		"go run ./cmd/release-smoke --all",
@@ -435,6 +436,47 @@ func TestRequiredCIIncludesLinuxRaceAndArtifactSmoke(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("CI workflow missing %q", want)
 		}
+	}
+	if strings.Contains(text, "run: go test -race") {
+		t.Error("CI runs a second Linux test suite instead of selecting race mode for the shared smoke gate")
+	}
+}
+
+func TestSmokeRaceModeRunsOneRaceEnabledSuite(t *testing.T) {
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "go.log")
+	writeExecutable := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExecutable("go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$GO_LOG\"\n")
+	writeExecutable("git", "#!/usr/bin/env bash\nexit 0\n")
+
+	cmd := exec.Command("bash", "./scripts/smoke.sh")
+	cmd.Env = append(os.Environ(),
+		"GO_LOG="+logPath,
+		"PATH="+tmp+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"UNIFI_BIN="+filepath.Join(tmp, "unifi"),
+		"UNIFI_RACE=1",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run race-enabled smoke gate: %v\n%s", err, output)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"build -o " + filepath.Join(tmp, "unifi") + " ./cmd/unifi",
+		"vet ./...",
+		"test -race ./... -timeout 30m",
+		"",
+	}, "\n")
+	if string(data) != want {
+		t.Fatalf("race-enabled smoke Go commands:\n%s\nwant:\n%s", data, want)
 	}
 }
 

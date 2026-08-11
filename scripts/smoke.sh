@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Smoke checks for unifi-cli.
 # Default: build + vet + unit tests.
+# CI race mode: UNIFI_RACE=1 runs the unit suite with the race detector.
 # Live controller: UNIFI_IT=1 with UNIFI_HOST and UNIFI_API_KEY set.
 set -euo pipefail
 
@@ -24,8 +25,13 @@ fi
 echo "==> vet"
 go vet ./...
 
-echo "==> unit tests"
-go test ./...
+if [[ "${UNIFI_RACE:-}" == "1" ]]; then
+  echo "==> race-enabled unit tests"
+  go test -race ./... -timeout 30m
+else
+  echo "==> unit tests"
+  go test ./...
+fi
 
 if [[ "${UNIFI_IT:-}" != "1" ]]; then
   echo "==> skip live IT (set UNIFI_IT=1 to enable)"
