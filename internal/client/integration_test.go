@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -242,7 +243,11 @@ func TestFetchOfficialAllRejectsAggregateResponseBytes(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	cfg := testConfig(t, srv)
+	// This test intentionally transfers more than 32 MiB. Give race-enabled
+	// hosted runners enough time to reach the aggregate-size assertion.
+	cfg.Timeout = 30 * time.Second
+	c, err := client.NewWithAPIKey(cfg, "key", "interactive_api_key")
 	if err != nil {
 		t.Fatalf("NewWithAPIKey: %v", err)
 	}
