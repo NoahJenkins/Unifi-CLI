@@ -34,20 +34,40 @@ func (w Wlan) GetName() string { return w.Name }
 
 // WlanInput is the create/update payload from CLI flags.
 type WlanInput struct {
-	Name        string
-	SetName     bool
-	Security    string
-	SetSecurity bool
-	Network     string
-	SetNetwork  bool
-	Password    string
-	SetPassword bool
-	Band        string
-	SetBand     bool
-	Guest       bool
-	SetGuest    bool
-	Enabled     bool
-	SetEnabled  bool
+	Name                               string
+	SetName                            bool
+	Security                           string
+	SetSecurity                        bool
+	Network                            string
+	SetNetwork                         bool
+	Password                           string
+	SetPassword                        bool
+	Band                               string
+	SetBand                            bool
+	Guest                              bool
+	SetGuest                           bool
+	Enabled                            bool
+	SetEnabled                         bool
+	PMFMode                            string
+	SetPMFMode                         bool
+	SAEAnticloggingThresholdSeconds    int
+	SetSAEAnticloggingThresholdSeconds bool
+	SAESyncTimeSeconds                 int
+	SetSAESyncTimeSeconds              bool
+	FastRoamingEnabled                 bool
+	SetFastRoamingEnabled              bool
+	WPA3FastRoamingEnabled             bool
+	SetWPA3FastRoamingEnabled          bool
+	RadiusProfileID                    string
+	SetRadiusProfileID                 bool
+	RadiusNASIDSource                  string
+	SetRadiusNASIDSource               bool
+	RadiusNASID                        string
+	SetRadiusNASID                     bool
+	COAEnabled                         bool
+	SetCOAEnabled                      bool
+	WPA3SecurityMode                   string
+	SetWPA3SecurityMode                bool
 }
 
 type WlanService struct {
@@ -185,9 +205,9 @@ func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan
 		if err != nil {
 			return plan.Plan{}, Wlan{}, err
 		}
-		after := NormalizeWlan(wlanResponseView(body, doc.wire))
+		beforeSnapshot, afterSnapshot := officialWlanUpdateSnapshots(doc.wire, wlanResponseView(body, doc.wire), in)
 		p := plan.Update("wlan", doc.normalized.ID, doc.normalized.Name,
-			fmt.Sprintf("update wlan %s", doc.normalized.Name), wlanSnapshot(doc.normalized), wlanSnapshot(after))
+			fmt.Sprintf("update wlan %s", doc.normalized.Name), beforeSnapshot, afterSnapshot)
 		return p, doc.normalized, nil
 	}
 	w, err := s.getLegacy(ctx, id)
@@ -259,9 +279,14 @@ func (s *WlanService) applyUpdate(ctx context.Context, id string, in WlanInput, 
 }
 
 func validateWlanSecurityTransition(current Wlan, in WlanInput) error {
-	if strings.EqualFold(current.Security, "open") && inputSetsWlanSecurity(in) &&
-		!strings.EqualFold(in.Security, "open") && in.Password == "" {
-		return apperr.New(apperr.ValidationFailed, "securing an open WLAN requires a password")
+	if strings.EqualFold(current.Security, "open") && inputSetsWlanSecurity(in) {
+		target, err := canonicalOfficialWlanSecurity(in.Security)
+		if err != nil {
+			return err
+		}
+		if officialWlanSecurityIsPersonal(target) && in.Password == "" {
+			return apperr.New(apperr.ValidationFailed, "securing an open WLAN with personal security requires a password")
+		}
 	}
 	return nil
 }
@@ -554,25 +579,15 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 			delete(body, "hotspotConfiguration")
 		}
 	}
-	if inputSetsWlanSecurity(in) {
-		security, err := officialWlanSecurity(in.Security, in.Password)
+	if inputSetsWlanSecurity(in) || inputSetsWlanPassword(in) || inputSetsWlanAdvancedSecurity(in) {
+		current, ok := body["securityConfiguration"].(map[string]any)
+		if !ok || current == nil {
+			return wlanDocument{}, nil, apperr.New(apperr.Conflict, "WLAN has a malformed security configuration")
+		}
+		security, err := updateOfficialWlanSecurity(current, in)
 		if err != nil {
 			return wlanDocument{}, nil, err
 		}
-		if current, ok := body["securityConfiguration"].(map[string]any); ok &&
-			strings.EqualFold(strField(current, "type"), strField(security, "type")) && !inputSetsWlanPassword(in) {
-			// Preserve every supported security field when the effective type is unchanged.
-		} else {
-			body["securityConfiguration"] = security
-		}
-	}
-	if inputSetsWlanPassword(in) && !inputSetsWlanSecurity(in) {
-		security, ok := body["securityConfiguration"].(map[string]any)
-		if !ok || strings.EqualFold(strField(security, "type"), "OPEN") {
-			return wlanDocument{}, nil, apperr.New(apperr.ValidationFailed, "an open WLAN cannot accept a passphrase")
-		}
-		security = deepCloneMap(security)
-		security["passphrase"] = in.Password
 		body["securityConfiguration"] = security
 	}
 	if wlanWireDocumentsEqual(body, wlanWritableDocument(doc.wire)) {
@@ -581,15 +596,190 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 	return doc, body, nil
 }
 
+func updateOfficialWlanSecurity(current map[string]any, in WlanInput) (map[string]any, error) {
+	currentType := strings.ToUpper(strField(current, "type"))
+	targetType := currentType
+	if inputSetsWlanSecurity(in) {
+		var err error
+		targetType, err = canonicalOfficialWlanSecurity(in.Security)
+		if err != nil {
+			return nil, err
+		}
+		if targetType != currentType {
+			return officialWlanSecurity(in)
+		}
+	}
+	security := deepCloneMap(current)
+	if inputSetsWlanPassword(in) {
+		if !officialWlanSecurityIsPersonal(targetType) {
+			return nil, apperr.New(apperr.ValidationFailed, "only personal WLAN security accepts a passphrase")
+		}
+		if err := validateOfficialWlanPassphrase(in.Password); err != nil {
+			return nil, err
+		}
+		security["passphrase"] = in.Password
+	}
+	if in.SetPMFMode {
+		if !officialWlanSecuritySupportsPMF(targetType) {
+			return nil, apperr.New(apperr.ValidationFailed, "PMF mode is not configurable for this WLAN security type")
+		}
+		pmf, err := canonicalWlanPMFMode(in.PMFMode)
+		if err != nil {
+			return nil, err
+		}
+		security["pmfMode"] = pmf
+	}
+	if in.SetFastRoamingEnabled {
+		if targetType == "OPEN" {
+			return nil, apperr.New(apperr.ValidationFailed, "fast roaming is not a field of open WLAN security")
+		}
+		security["fastRoamingEnabled"] = in.FastRoamingEnabled
+	}
+	if in.SetWPA3FastRoamingEnabled {
+		if !officialWlanSecurityIsTransition(targetType) {
+			return nil, apperr.New(apperr.ValidationFailed, "WPA3 fast roaming applies only to WPA2/WPA3 transition security")
+		}
+		security["wpa3FastRoamingEnabled"] = in.WPA3FastRoamingEnabled
+	}
+	if in.SetSAEAnticloggingThresholdSeconds || in.SetSAESyncTimeSeconds {
+		if !officialWlanSecurityNeedsSAE(targetType) {
+			return nil, apperr.New(apperr.ValidationFailed, "SAE settings apply only to WPA3 personal security")
+		}
+		sae, _ := security["saeConfiguration"].(map[string]any)
+		if sae == nil {
+			return nil, apperr.New(apperr.Conflict, "WPA3 personal security has no SAE configuration")
+		}
+		sae = deepCloneMap(sae)
+		if in.SetSAEAnticloggingThresholdSeconds {
+			sae["anticloggingThresholdSeconds"] = in.SAEAnticloggingThresholdSeconds
+		}
+		if in.SetSAESyncTimeSeconds {
+			sae["syncTimeSeconds"] = in.SAESyncTimeSeconds
+		}
+		security["saeConfiguration"] = sae
+	}
+	if in.SetRadiusProfileID || in.SetRadiusNASIDSource || in.SetRadiusNASID {
+		if !officialWlanSecurityIsEnterprise(targetType) {
+			return nil, apperr.New(apperr.ValidationFailed, "RADIUS settings apply only to enterprise WLAN security")
+		}
+		radius, _ := security["radiusConfiguration"].(map[string]any)
+		if radius == nil {
+			return nil, apperr.New(apperr.Conflict, "enterprise WLAN security has no RADIUS configuration")
+		}
+		radius = deepCloneMap(radius)
+		if in.SetRadiusProfileID {
+			profileID := strings.TrimSpace(in.RadiusProfileID)
+			if !looksLikeUUID(profileID) {
+				return nil, apperr.New(apperr.ValidationFailed, "RADIUS profile ID must be a valid UUID")
+			}
+			radius["profileId"] = profileID
+		}
+		if in.SetRadiusNASIDSource && in.SetRadiusNASID {
+			return nil, apperr.New(apperr.ValidationFailed, "choose either a derived or user-defined RADIUS NAS ID")
+		}
+		if in.SetRadiusNASIDSource {
+			source, err := canonicalWlanRadiusNASIDSource(in.RadiusNASIDSource)
+			if err != nil {
+				return nil, err
+			}
+			radius["nasId"] = map[string]any{"type": "DERIVED", "source": source}
+		}
+		if in.SetRadiusNASID {
+			value := strings.TrimSpace(in.RadiusNASID)
+			if value == "" {
+				return nil, apperr.New(apperr.ValidationFailed, "RADIUS NAS ID cannot be empty")
+			}
+			radius["nasId"] = map[string]any{"type": "USER_DEFINED", "value": value}
+		}
+		security["radiusConfiguration"] = radius
+	}
+	if in.SetCOAEnabled {
+		if !officialWlanSecurityIsEnterprise(targetType) {
+			return nil, apperr.New(apperr.ValidationFailed, "COA applies only to enterprise WLAN security")
+		}
+		security["coaEnabled"] = in.COAEnabled
+	}
+	if in.SetWPA3SecurityMode {
+		if targetType != "WPA3_ENTERPRISE" {
+			return nil, apperr.New(apperr.ValidationFailed, "WPA3 security mode applies only to WPA3 enterprise security")
+		}
+		mode, err := canonicalWlanWPA3SecurityMode(in.WPA3SecurityMode)
+		if err != nil {
+			return nil, err
+		}
+		security["securityMode"] = mode
+	}
+	if err := validateOfficialWlanSecurityDocument(security); err != nil {
+		return nil, err
+	}
+	return security, nil
+}
+
+func validateOfficialWlanSecurityDocument(security map[string]any) error {
+	typ := strings.ToUpper(strField(security, "type"))
+	if typ == "OPEN" {
+		return nil
+	}
+	if officialWlanSecurityIsPersonal(typ) {
+		if err := validateOfficialWlanPassphrase(strField(security, "passphrase")); err != nil {
+			return apperr.New(apperr.Conflict, "controller WLAN has an invalid personal passphrase field")
+		}
+	}
+	if officialWlanSecurityNeedsSAE(typ) {
+		sae, _ := security["saeConfiguration"].(map[string]any)
+		anti, sync := intField(sae, "anticloggingThresholdSeconds"), intField(sae, "syncTimeSeconds")
+		if sae == nil || anti < 1 || anti > 60 || sync < 1 || sync > 60 {
+			return apperr.New(apperr.Conflict, "controller WLAN has an invalid SAE configuration")
+		}
+	}
+	if officialWlanSecurityIsTransition(typ) {
+		if _, ok := security["wpa3FastRoamingEnabled"]; !ok || strField(security, "pmfMode") == "" {
+			return apperr.New(apperr.Conflict, "controller WLAN transition security is missing required PMF or roaming fields")
+		}
+		if boolField(security, "wpa3FastRoamingEnabled") && !boolField(security, "fastRoamingEnabled") {
+			return apperr.New(apperr.ValidationFailed, "WPA3 fast roaming requires default fast roaming to be enabled")
+		}
+	}
+	if officialWlanSecurityIsEnterprise(typ) {
+		if _, ok := security["coaEnabled"]; !ok {
+			return apperr.New(apperr.Conflict, "controller enterprise WLAN is missing COA configuration")
+		}
+		radius, _ := security["radiusConfiguration"].(map[string]any)
+		if radius == nil || !looksLikeUUID(strField(radius, "profileId")) || !validWlanRadiusNASID(radius["nasId"]) {
+			return apperr.New(apperr.Conflict, "controller enterprise WLAN has an invalid RADIUS configuration")
+		}
+	}
+	if typ == "WPA3_ENTERPRISE" {
+		mode := strField(security, "securityMode")
+		if mode != "DEFAULT" && mode != "HIGH_SECURITY_192_BIT" {
+			return apperr.New(apperr.Conflict, "controller WPA3 enterprise WLAN has an invalid security mode")
+		}
+	}
+	return nil
+}
+
+func validWlanRadiusNASID(value any) bool {
+	nasID, _ := value.(map[string]any)
+	switch strField(nasID, "type") {
+	case "DERIVED":
+		source := strField(nasID, "source")
+		return source == "DEVICE_MAC_ADDRESS" || source == "DEVICE_NAME" || source == "SITE_NAME" || source == "BSSID"
+	case "USER_DEFINED":
+		return strings.TrimSpace(strField(nasID, "value")) != ""
+	default:
+		return false
+	}
+}
+
 func (s *WlanService) applyOfficialUpdate(ctx context.Context, query string, in WlanInput, target *plan.Target) (Wlan, error) {
 	doc, body, err := s.prepareOfficialUpdate(ctx, query, in)
 	if err != nil {
 		return Wlan{}, err
 	}
 	if target != nil {
-		after := NormalizeWlan(wlanResponseView(body, doc.wire))
+		beforeSnapshot, afterSnapshot := officialWlanUpdateSnapshots(doc.wire, wlanResponseView(body, doc.wire), in)
 		p := plan.Update("wlan", doc.normalized.ID, doc.normalized.Name,
-			fmt.Sprintf("update wlan %s", doc.normalized.Name), wlanSnapshot(doc.normalized), wlanSnapshot(after))
+			fmt.Sprintf("update wlan %s", doc.normalized.Name), beforeSnapshot, afterSnapshot)
 		if err := requirePreparedTarget(*target, p.Changes); err != nil {
 			return Wlan{}, err
 		}
@@ -645,7 +835,7 @@ func (s *WlanService) applyOfficialDelete(ctx context.Context, query string, tar
 }
 
 func officialWlanCreateBody(in WlanInput) (map[string]any, error) {
-	security, err := officialWlanSecurity(in.Security, in.Password)
+	security, err := officialWlanSecurity(in)
 	if err != nil {
 		return nil, err
 	}
@@ -661,6 +851,7 @@ func officialWlanCreateBody(in WlanInput) (map[string]any, error) {
 		"type": "STANDARD", "name": in.Name, "enabled": true, "hideName": false,
 		"clientIsolationEnabled": false, "multicastToUnicastConversionEnabled": false, "uapsdEnabled": true,
 		"advertiseDeviceName": false, "arpProxyEnabled": false, "bssTransitionEnabled": true,
+		"channel2gLockedTo6": false, "dtimPeriod2gLockedTo3": false,
 		"broadcastingFrequenciesGHz": frequencies, "securityConfiguration": security,
 		"network": map[string]any{"type": "NATIVE"},
 	}
@@ -673,27 +864,205 @@ func officialWlanCreateBody(in WlanInput) (map[string]any, error) {
 	return body, nil
 }
 
-func officialWlanSecurity(security, password string) (map[string]any, error) {
-	var typ string
-	switch strings.ToLower(security) {
-	case "open":
-		typ = "OPEN"
-	case "wpapsk", "wpa2_personal":
-		typ = "WPA2_PERSONAL"
-	case "wpa3_personal", "wpa2_wpa3_personal":
-		return nil, apperr.Newf(apperr.ValidationFailed,
-			"WLAN security %q requires SAE, PMF, and fast-roaming inputs not exposed by this command", security)
-	default:
-		return nil, apperr.Newf(apperr.ValidationFailed, "WLAN security %q is not safely configurable through the official command surface", security)
+func officialWlanSecurity(in WlanInput) (map[string]any, error) {
+	typ, err := canonicalOfficialWlanSecurity(in.Security)
+	if err != nil {
+		return nil, err
 	}
 	body := map[string]any{"type": typ}
-	if typ != "OPEN" {
-		if err := validateOfficialWlanPassphrase(password); err != nil {
+	if typ == "OPEN" {
+		if inputSetsWlanPassword(in) || inputSetsWlanAdvancedSecurity(in) {
+			return nil, apperr.New(apperr.ValidationFailed, "open WLAN security does not accept personal or enterprise security fields")
+		}
+		return body, nil
+	}
+	if officialWlanSecurityIsPersonal(typ) {
+		if err := validateOfficialWlanPassphrase(in.Password); err != nil {
 			return nil, err
 		}
-		body["passphrase"] = password
+		body["passphrase"] = in.Password
+	} else if inputSetsWlanPassword(in) {
+		return nil, apperr.New(apperr.ValidationFailed, "enterprise WLAN security does not accept a personal passphrase")
+	}
+	if in.SetPMFMode {
+		if !officialWlanSecuritySupportsPMF(typ) {
+			return nil, apperr.New(apperr.ValidationFailed, "PMF mode is not configurable for this WLAN security type")
+		}
+		pmf, err := canonicalWlanPMFMode(in.PMFMode)
+		if err != nil {
+			return nil, err
+		}
+		body["pmfMode"] = pmf
+	}
+	if in.SetFastRoamingEnabled {
+		body["fastRoamingEnabled"] = in.FastRoamingEnabled
+	}
+	if in.SetWPA3FastRoamingEnabled {
+		if !officialWlanSecurityIsTransition(typ) {
+			return nil, apperr.New(apperr.ValidationFailed, "WPA3 fast roaming applies only to WPA2/WPA3 transition security")
+		}
+		body["wpa3FastRoamingEnabled"] = in.WPA3FastRoamingEnabled
+	}
+	if in.WPA3FastRoamingEnabled && (!in.SetFastRoamingEnabled || !in.FastRoamingEnabled) {
+		return nil, apperr.New(apperr.ValidationFailed, "WPA3 fast roaming requires default fast roaming to be enabled")
+	}
+	if officialWlanSecurityNeedsSAE(typ) {
+		sae, err := officialWlanSAE(in)
+		if err != nil {
+			return nil, err
+		}
+		body["saeConfiguration"] = sae
+	} else if in.SetSAEAnticloggingThresholdSeconds || in.SetSAESyncTimeSeconds {
+		return nil, apperr.New(apperr.ValidationFailed, "SAE settings apply only to WPA3 personal security")
+	}
+	if officialWlanSecurityIsEnterprise(typ) {
+		radius, err := officialWlanRadius(in)
+		if err != nil {
+			return nil, err
+		}
+		if !in.SetCOAEnabled {
+			return nil, apperr.New(apperr.ValidationFailed, "enterprise WLAN security requires an explicit COA setting")
+		}
+		body["radiusConfiguration"] = radius
+		body["coaEnabled"] = in.COAEnabled
+	} else if in.SetRadiusProfileID || in.SetRadiusNASIDSource || in.SetRadiusNASID || in.SetCOAEnabled {
+		return nil, apperr.New(apperr.ValidationFailed, "RADIUS and COA settings apply only to enterprise WLAN security")
+	}
+	if typ == "WPA2_WPA3_PERSONAL" || typ == "WPA2_WPA3_ENTERPRISE" {
+		if !in.SetPMFMode || !in.SetWPA3FastRoamingEnabled {
+			return nil, apperr.New(apperr.ValidationFailed, "WPA2/WPA3 transition security requires explicit PMF and WPA3 fast-roaming settings")
+		}
+	}
+	if typ == "WPA3_ENTERPRISE" {
+		if !in.SetWPA3SecurityMode {
+			return nil, apperr.New(apperr.ValidationFailed, "WPA3 enterprise security requires an explicit security mode")
+		}
+		mode, err := canonicalWlanWPA3SecurityMode(in.WPA3SecurityMode)
+		if err != nil {
+			return nil, err
+		}
+		body["securityMode"] = mode
+	} else if in.SetWPA3SecurityMode {
+		return nil, apperr.New(apperr.ValidationFailed, "WPA3 security mode applies only to WPA3 enterprise security")
 	}
 	return body, nil
+}
+
+func canonicalOfficialWlanSecurity(value string) (string, error) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_")) {
+	case "open":
+		return "OPEN", nil
+	case "wpapsk", "wpa2_personal":
+		return "WPA2_PERSONAL", nil
+	case "wpa3_personal":
+		return "WPA3_PERSONAL", nil
+	case "wpa2_wpa3_personal":
+		return "WPA2_WPA3_PERSONAL", nil
+	case "wpaeap", "wpa2_enterprise":
+		return "WPA2_ENTERPRISE", nil
+	case "wpa2_wpa3_enterprise":
+		return "WPA2_WPA3_ENTERPRISE", nil
+	case "wpa3_enterprise":
+		return "WPA3_ENTERPRISE", nil
+	default:
+		return "", apperr.Newf(apperr.ValidationFailed, "WLAN security %q is not supported", value)
+	}
+}
+
+func officialWlanSecurityIsPersonal(typ string) bool {
+	return typ == "WPA2_PERSONAL" || typ == "WPA3_PERSONAL" || typ == "WPA2_WPA3_PERSONAL"
+}
+
+func officialWlanSecurityIsEnterprise(typ string) bool {
+	return typ == "WPA2_ENTERPRISE" || typ == "WPA2_WPA3_ENTERPRISE" || typ == "WPA3_ENTERPRISE"
+}
+
+func officialWlanSecurityNeedsSAE(typ string) bool {
+	return typ == "WPA3_PERSONAL" || typ == "WPA2_WPA3_PERSONAL"
+}
+
+func officialWlanSecurityIsTransition(typ string) bool {
+	return typ == "WPA2_WPA3_PERSONAL" || typ == "WPA2_WPA3_ENTERPRISE"
+}
+
+func officialWlanSecuritySupportsPMF(typ string) bool {
+	return typ == "WPA2_PERSONAL" || typ == "WPA2_WPA3_PERSONAL" ||
+		typ == "WPA2_ENTERPRISE" || typ == "WPA2_WPA3_ENTERPRISE"
+}
+
+func canonicalWlanPMFMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "required":
+		return "REQUIRED", nil
+	case "optional":
+		return "OPTIONAL", nil
+	default:
+		return "", apperr.Newf(apperr.ValidationFailed, "WLAN PMF mode %q is unsupported; use required or optional", value)
+	}
+}
+
+func officialWlanSAE(in WlanInput) (map[string]any, error) {
+	if !in.SetSAEAnticloggingThresholdSeconds || !in.SetSAESyncTimeSeconds {
+		return nil, apperr.New(apperr.ValidationFailed, "WPA3 personal security requires explicit SAE anticlogging and sync times")
+	}
+	if in.SAEAnticloggingThresholdSeconds < 1 || in.SAEAnticloggingThresholdSeconds > 60 || in.SAESyncTimeSeconds < 1 || in.SAESyncTimeSeconds > 60 {
+		return nil, apperr.New(apperr.ValidationFailed, "WLAN SAE times must be between 1 and 60 seconds")
+	}
+	return map[string]any{
+		"anticloggingThresholdSeconds": in.SAEAnticloggingThresholdSeconds,
+		"syncTimeSeconds":              in.SAESyncTimeSeconds,
+	}, nil
+}
+
+func officialWlanRadius(in WlanInput) (map[string]any, error) {
+	profileID := strings.TrimSpace(in.RadiusProfileID)
+	if !in.SetRadiusProfileID || !looksLikeUUID(profileID) {
+		return nil, apperr.New(apperr.ValidationFailed, "enterprise WLAN security requires a valid RADIUS profile ID")
+	}
+	if in.SetRadiusNASIDSource == in.SetRadiusNASID {
+		return nil, apperr.New(apperr.ValidationFailed, "enterprise WLAN security requires exactly one derived or user-defined RADIUS NAS ID")
+	}
+	var nasID map[string]any
+	if in.SetRadiusNASIDSource {
+		source, err := canonicalWlanRadiusNASIDSource(in.RadiusNASIDSource)
+		if err != nil {
+			return nil, err
+		}
+		nasID = map[string]any{"type": "DERIVED", "source": source}
+	} else {
+		value := strings.TrimSpace(in.RadiusNASID)
+		if value == "" {
+			return nil, apperr.New(apperr.ValidationFailed, "RADIUS NAS ID cannot be empty")
+		}
+		nasID = map[string]any{"type": "USER_DEFINED", "value": value}
+	}
+	return map[string]any{"profileId": profileID, "nasId": nasID}, nil
+}
+
+func canonicalWlanRadiusNASIDSource(value string) (string, error) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-")) {
+	case "device-mac-address":
+		return "DEVICE_MAC_ADDRESS", nil
+	case "device-name":
+		return "DEVICE_NAME", nil
+	case "site-name":
+		return "SITE_NAME", nil
+	case "bssid":
+		return "BSSID", nil
+	default:
+		return "", apperr.Newf(apperr.ValidationFailed, "RADIUS NAS ID source %q is unsupported", value)
+	}
+}
+
+func canonicalWlanWPA3SecurityMode(value string) (string, error) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-")) {
+	case "default":
+		return "DEFAULT", nil
+	case "high-security-192-bit":
+		return "HIGH_SECURITY_192_BIT", nil
+	default:
+		return "", apperr.Newf(apperr.ValidationFailed, "WPA3 security mode %q is unsupported", value)
+	}
 }
 
 func validateOfficialWlanPassphrase(passphrase string) error {
@@ -790,6 +1159,7 @@ func wlanPlanAfter(in WlanInput) map[string]any {
 	if in.SetGuest {
 		after["guest"] = in.Guest
 	}
+	appendWlanInputSecurityPlan(after, in)
 	return after
 }
 
@@ -802,6 +1172,90 @@ func wlanSnapshot(w Wlan) map[string]any {
 		"network_id": w.NetworkID,
 		"band":       w.Band,
 		"guest":      w.Guest,
+	}
+}
+
+func officialWlanSnapshot(raw map[string]any) map[string]any {
+	snapshot := wlanSnapshot(NormalizeWlan(raw))
+	security, _ := raw["securityConfiguration"].(map[string]any)
+	if security == nil {
+		return snapshot
+	}
+	appendWlanSecurityPlan(snapshot, security)
+	return snapshot
+}
+
+func officialWlanUpdateSnapshots(beforeRaw, afterRaw map[string]any, in WlanInput) (map[string]any, map[string]any) {
+	before := officialWlanSnapshot(beforeRaw)
+	after := officialWlanSnapshot(afterRaw)
+	if inputSetsWlanPassword(in) {
+		after["password"] = "***"
+	}
+	return before, after
+}
+
+func appendWlanInputSecurityPlan(snapshot map[string]any, in WlanInput) {
+	if in.SetPMFMode {
+		snapshot["pmf_mode"] = strings.ToLower(in.PMFMode)
+	}
+	if in.SetSAEAnticloggingThresholdSeconds {
+		snapshot["sae_anticlogging_threshold_seconds"] = in.SAEAnticloggingThresholdSeconds
+	}
+	if in.SetSAESyncTimeSeconds {
+		snapshot["sae_sync_time_seconds"] = in.SAESyncTimeSeconds
+	}
+	if in.SetFastRoamingEnabled {
+		snapshot["fast_roaming_enabled"] = in.FastRoamingEnabled
+	}
+	if in.SetWPA3FastRoamingEnabled {
+		snapshot["wpa3_fast_roaming_enabled"] = in.WPA3FastRoamingEnabled
+	}
+	if in.SetRadiusProfileID {
+		snapshot["radius_profile_id"] = in.RadiusProfileID
+	}
+	if in.SetRadiusNASIDSource {
+		snapshot["radius_nas_id_source"] = strings.ToLower(strings.ReplaceAll(in.RadiusNASIDSource, "_", "-"))
+	}
+	if in.SetRadiusNASID {
+		snapshot["radius_nas_id"] = in.RadiusNASID
+	}
+	if in.SetCOAEnabled {
+		snapshot["coa_enabled"] = in.COAEnabled
+	}
+	if in.SetWPA3SecurityMode {
+		snapshot["wpa3_security_mode"] = strings.ToLower(strings.ReplaceAll(in.WPA3SecurityMode, "_", "-"))
+	}
+}
+
+func appendWlanSecurityPlan(snapshot map[string]any, security map[string]any) {
+	if value := strField(security, "pmfMode"); value != "" {
+		snapshot["pmf_mode"] = strings.ToLower(value)
+	}
+	if sae, ok := security["saeConfiguration"].(map[string]any); ok {
+		snapshot["sae_anticlogging_threshold_seconds"] = intField(sae, "anticloggingThresholdSeconds")
+		snapshot["sae_sync_time_seconds"] = intField(sae, "syncTimeSeconds")
+	}
+	if _, ok := security["fastRoamingEnabled"]; ok {
+		snapshot["fast_roaming_enabled"] = boolField(security, "fastRoamingEnabled")
+	}
+	if _, ok := security["wpa3FastRoamingEnabled"]; ok {
+		snapshot["wpa3_fast_roaming_enabled"] = boolField(security, "wpa3FastRoamingEnabled")
+	}
+	if radius, ok := security["radiusConfiguration"].(map[string]any); ok {
+		snapshot["radius_profile_id"] = strField(radius, "profileId")
+		if nasID, ok := radius["nasId"].(map[string]any); ok {
+			if strField(nasID, "type") == "DERIVED" {
+				snapshot["radius_nas_id_source"] = strings.ToLower(strings.ReplaceAll(strField(nasID, "source"), "_", "-"))
+			} else if strField(nasID, "type") == "USER_DEFINED" {
+				snapshot["radius_nas_id"] = strField(nasID, "value")
+			}
+		}
+	}
+	if _, ok := security["coaEnabled"]; ok {
+		snapshot["coa_enabled"] = boolField(security, "coaEnabled")
+	}
+	if value := strField(security, "securityMode"); value != "" {
+		snapshot["wpa3_security_mode"] = strings.ToLower(strings.ReplaceAll(value, "_", "-"))
 	}
 }
 
@@ -846,7 +1300,7 @@ func validateWlanCreate(in WlanInput) error {
 
 func validateWlanUpdate(in WlanInput) error {
 	if !inputSetsWlanName(in) && !inputSetsWlanSecurity(in) && !inputSetsWlanNetwork(in) &&
-		!inputSetsWlanPassword(in) && !inputSetsWlanBand(in) && !in.SetGuest && !in.SetEnabled {
+		!inputSetsWlanPassword(in) && !inputSetsWlanBand(in) && !in.SetGuest && !in.SetEnabled && !inputSetsWlanAdvancedSecurity(in) {
 		return apperr.New(apperr.ValidationFailed, "WLAN update requires at least one changed field")
 	}
 	if inputSetsWlanName(in) {
@@ -858,10 +1312,10 @@ func validateWlanUpdate(in WlanInput) error {
 }
 
 func validateWlanFields(in WlanInput) error {
-	if err := validateEnum("WLAN security", in.Security,
-		"open", "wpapsk", "wpaeap", "wpa2_personal", "wpa3_personal", "wpa2_wpa3_personal",
-		"wpa2_enterprise", "wpa3_enterprise", "wpa2_wpa3_enterprise"); err != nil {
-		return err
+	if inputSetsWlanSecurity(in) {
+		if _, err := canonicalOfficialWlanSecurity(in.Security); err != nil {
+			return err
+		}
 	}
 	return validateEnum("WLAN band", in.Band, "2g", "5g", "6g", "both")
 }
@@ -871,6 +1325,12 @@ func inputSetsWlanSecurity(in WlanInput) bool { return in.SetSecurity || in.Secu
 func inputSetsWlanNetwork(in WlanInput) bool  { return in.SetNetwork || in.Network != "" }
 func inputSetsWlanPassword(in WlanInput) bool { return in.SetPassword || in.Password != "" }
 func inputSetsWlanBand(in WlanInput) bool     { return in.SetBand || in.Band != "" }
+
+func inputSetsWlanAdvancedSecurity(in WlanInput) bool {
+	return in.SetPMFMode || in.SetSAEAnticloggingThresholdSeconds || in.SetSAESyncTimeSeconds ||
+		in.SetFastRoamingEnabled || in.SetWPA3FastRoamingEnabled || in.SetRadiusProfileID ||
+		in.SetRadiusNASIDSource || in.SetRadiusNASID || in.SetCOAEnabled || in.SetWPA3SecurityMode
+}
 
 func wlanSecurityRequiresPassword(security string) bool {
 	switch strings.ToLower(security) {

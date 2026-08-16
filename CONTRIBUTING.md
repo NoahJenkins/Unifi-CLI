@@ -9,7 +9,7 @@ stable/experimental boundary before investing in implementation.
 New controller behavior must use the official local UniFi Network integration
 API whenever that API exposes the required operation. Do not add a cloud/Site
 Manager dependency. A legacy local endpoint is acceptable only when the
-official 10.3.58+ surface lacks the capability and all of the following are
+official 10.4.57+ surface lacks the capability and all of the following are
 true:
 
 - the command is explicitly classified experimental;
@@ -46,7 +46,7 @@ For behavior changes:
 
 ```bash
 ./scripts/smoke.sh
-go test -race ./...
+go test -race ./... -timeout 30m
 ./scripts/check-coverage.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 ```

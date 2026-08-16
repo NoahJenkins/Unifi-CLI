@@ -60,6 +60,7 @@ func TestRunPreparedMutationRequiresYes(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
+	assertSchemaV1Output(t, out.Bytes())
 	if !env.OK || env.Plan == nil || !env.Meta.DryRun || env.Data != nil {
 		t.Fatalf("expected plan envelope with data present as null: %+v", env)
 	}
@@ -87,6 +88,7 @@ func TestRunPreparedMutationDryRunWinsOverAllApplyGates(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d output=%s", code, out.String())
 	}
+	assertSchemaV1Output(t, out.Bytes())
 	if observed || applied {
 		t.Fatalf("--dry-run must win before experimental, force, observe, and apply; observed=%v applied=%v", observed, applied)
 	}
@@ -162,6 +164,7 @@ func TestRunPreparedMutationExperimentalGateOnlyBlocksApply(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
+	assertSchemaV1Output(t, out.Bytes())
 	if env.Error == nil || env.Error.Code != string(apperr.ValidationFailed) {
 		t.Fatalf("error = %+v", env.Error)
 	}
@@ -201,6 +204,7 @@ func TestRunPreparedMutationExperimentalPlanSetsMetadataWithoutOptIn(t *testing.
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
+	assertSchemaV1Output(t, out.Bytes())
 	if !env.Meta.Experimental || !env.Meta.DryRun {
 		t.Fatalf("meta = %+v, want experimental dry-run", env.Meta)
 	}
@@ -227,6 +231,7 @@ func TestRunPreparedMutationRejectsChangedSnapshot(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
+	assertSchemaV1Output(t, out.Bytes())
 	if env.Error == nil || env.Error.Code != string(apperr.Conflict) {
 		t.Fatalf("error = %+v, want conflict", env.Error)
 	}
@@ -293,6 +298,7 @@ func TestRunPreparedMutationRejectsInvalidRisk(t *testing.T) {
 	if code == 0 {
 		t.Fatal("invalid risk class was allowed to apply")
 	}
+	assertSchemaV1Output(t, out.Bytes())
 	if !strings.Contains(out.String(), "validation_failed") {
 		t.Fatalf("output = %q", out.String())
 	}

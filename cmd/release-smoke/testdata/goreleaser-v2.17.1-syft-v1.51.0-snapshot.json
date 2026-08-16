@@ -2,8 +2,8 @@
   "producer": {
     "goreleaser": "2.17.1",
     "goreleaser_commit": "83f4c19a5c5c0b9efef6bf2aedc6805bbcb9dfe2",
-    "syft": "1.48.0",
-    "syft_commit": "3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6"
+    "syft": "1.51.0",
+    "syft_commit": "2293641e3bd628a01bb37639318d62c0ebe89b39"
   },
   "version": "0.0.0-SNAPSHOT-1aa4eee",
   "commit": "1aa4eee2545655a1ed56e8efea396595c3b40c14",

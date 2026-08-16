@@ -4,13 +4,13 @@
 
 | Version | Security support |
 |---|---|
-| `v1.0.0-rc.1` | Supported until it is superseded by a newer RC or stable 1.x release |
-| Latest stable 1.x | Supported once published |
-| Older RCs, older 1.x minors, and pre-1.0 development commits | Not supported after a newer supported release is available |
+| Latest stable 1.x | Supported |
+| Latest release candidate | Supported until superseded by stable or a newer candidate |
+| Older RCs, older 1.x minors, and development commits | Not supported after a newer supported release is available |
 
-Before the `v1.0.0-rc.1` tag is published, only the release-candidate branch
-under review receives fixes. Security fixes may be released without advance
-public disclosure when disclosure would put users at risk.
+Before `v1.0.0` is published, only the active release candidate under review
+receives fixes. Security fixes can be released without advance public
+disclosure when disclosure would put users at risk.
 
 ## Report a vulnerability privately
 
@@ -60,6 +60,13 @@ using the credential.
   forwarded to another origin.
 - Targeted writes bind immutable IDs, revalidate observed state before one
   apply attempt, and fail closed on verification mismatches.
+- A saved-key authentication failure clears only the current process snapshot.
+  Persistent key deletion is explicit through `unifi logout`, which prevents a
+  delayed response from deleting a rotated credential.
+- Release publication accepts only an account-restricted immutable tag whose
+  commit is an ancestor of protected `origin/main`. Generation has no
+  publication token; the protected release environment gates the final
+  data-only publisher.
 - The normal live integration suite remains read-only. Non-DNS writes may be
   tested only on a dedicated sacrificial controller, never a production-like
   network. Generated evidence must remain redacted and uncommitted.

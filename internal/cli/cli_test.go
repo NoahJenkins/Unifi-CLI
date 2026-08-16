@@ -10,6 +10,7 @@ import (
 
 	"github.com/noahjenkins/unifi-cli/internal/buildinfo"
 	"github.com/noahjenkins/unifi-cli/internal/cli"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestRootHelpShowsPublicCommandsOnly(t *testing.T) {
@@ -75,6 +76,41 @@ func TestRootFlagsRemoveRawAndExposeExperimental(t *testing.T) {
 	}
 }
 
+func TestRootExposesOfficialSwitchingAndRadiusReadCommands(t *testing.T) {
+	root := cli.NewRoot()
+	for _, args := range [][]string{
+		{"switching", "lag", "list"},
+		{"switching", "lag", "get"},
+		{"switching", "mc-lag", "list"},
+		{"switching", "mc-lag", "get"},
+		{"switching", "stack", "list"},
+		{"switching", "stack", "get"},
+		{"radius", "profile", "list"},
+		{"radius", "profile", "get"},
+	} {
+		command, _, err := root.Find(args)
+		if err != nil || command == root || command.Name() != args[len(args)-1] {
+			t.Errorf("command %v unavailable: command=%v err=%v", args, command, err)
+		}
+	}
+}
+
+func TestFirewallExposesTrafficListCRUD(t *testing.T) {
+	root := cli.NewRoot()
+	for _, verb := range []string{"list", "get", "create", "update", "delete"} {
+		command, _, err := root.Find([]string{"firewall", "traffic-list", verb})
+		if err != nil || command.Name() != verb {
+			t.Errorf("traffic-list %s unavailable: command=%v err=%v", verb, command, err)
+		}
+	}
+	create, _, _ := root.Find([]string{"firewall", "traffic-list", "create"})
+	for _, flag := range []string{"type", "name", "item"} {
+		if create.Flags().Lookup(flag) == nil {
+			t.Errorf("traffic-list create missing --%s", flag)
+		}
+	}
+}
+
 func TestRootVersionFlag(t *testing.T) {
 	originalVersion := buildinfo.Version
 	buildinfo.Version = "v1.2.3-test"
@@ -113,6 +149,7 @@ func TestVersionCommandJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("version JSON: %v; output=%q", err, buf.String())
 	}
+	assertSchemaV1Output(t, buf.Bytes())
 	if got["schema_version"] != "1" || got["ok"] != true || got["resource"] != "version" || got["action"] != "show" {
 		t.Fatalf("version envelope = %#v", got)
 	}
@@ -131,6 +168,32 @@ func TestVersionCommandJSON(t *testing.T) {
 	}
 	if data["version"] != "v1.2.3-test" || data["commit"] != "abc123" || data["build_date"] != "2026-08-07T12:00:00Z" {
 		t.Fatalf("version linker fields = %#v", data)
+	}
+}
+
+func assertSchemaV1Output(t *testing.T, output []byte) {
+	t.Helper()
+	data, err := os.ReadFile("../../schemas/schema-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaDocument, outputDocument any
+	if err := json.Unmarshal(data, &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(output, &outputDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("schema-v1.json", schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("schema-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(outputDocument); err != nil {
+		t.Fatalf("output violates schema-v1: %v", err)
 	}
 }
 

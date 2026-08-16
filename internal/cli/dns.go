@@ -51,71 +51,127 @@ func newDNSGetCmd() *cobra.Command {
 }
 
 func newDNSCreateCmd() *cobra.Command {
-	var (
-		name    string
-		ip      string
-		enabled bool
-		ttl     int
-	)
+	var values dnsPolicyFlagValues
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a local DNS record",
+		Short: "Create an official local DNS policy",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			in := domain.DNSInput{
-				Name:       name,
-				IP:         ip,
-				Enabled:    enabled,
-				SetEnabled: true,
-				TTLSeconds: ttl,
-				SetTTL:     cmd.Flags().Changed("ttl"),
-			}
-			if !cmd.Flags().Changed("enabled") {
-				in.Enabled = true
+			in, err := values.input(cmd, true)
+			if err != nil {
+				return emitErr("dns", "create", err)
 			}
 			return runDNSCreate(in)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "hostname (e.g. nas.lan)")
-	cmd.Flags().StringVar(&ip, "ip", "", "IPv4 address")
-	cmd.Flags().BoolVar(&enabled, "enabled", true, "record enabled")
-	cmd.Flags().IntVar(&ttl, "ttl", 0, "positive TTL in seconds (default 300)")
+	values.bind(cmd, true)
 	_ = cmd.MarkFlagRequired("name")
-	_ = cmd.MarkFlagRequired("ip")
 	return cmd
 }
 
 func newDNSUpdateCmd() *cobra.Command {
-	var (
-		name    string
-		ip      string
-		enabled bool
-		ttl     int
-	)
+	var values dnsPolicyFlagValues
 	cmd := &cobra.Command{
 		Use:   "update <id>",
-		Short: "Update a local DNS record",
+		Short: "Update an official local DNS policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			in := domain.DNSInput{
-				Name:       name,
-				SetName:    cmd.Flags().Changed("name"),
-				IP:         ip,
-				SetIP:      cmd.Flags().Changed("ip"),
-				TTLSeconds: ttl,
-				SetTTL:     cmd.Flags().Changed("ttl"),
-			}
-			if cmd.Flags().Changed("enabled") {
-				in.Enabled = enabled
-				in.SetEnabled = true
+			in, err := values.input(cmd, false)
+			if err != nil {
+				return emitErr("dns", "update", err)
 			}
 			return runDNSUpdate(args[0], in)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "hostname")
-	cmd.Flags().StringVar(&ip, "ip", "", "IPv4 address")
-	cmd.Flags().BoolVar(&enabled, "enabled", true, "record enabled")
-	cmd.Flags().IntVar(&ttl, "ttl", 0, "positive TTL in seconds")
+	values.bind(cmd, false)
 	return cmd
+}
+
+type dnsPolicyFlagValues struct {
+	recordType       string
+	name             string
+	ip               string
+	ipv4             string
+	ipv6             string
+	targetDomain     string
+	mailServerDomain string
+	text             string
+	serverDomain     string
+	serverIP         string
+	priority         int
+	service          string
+	protocol         string
+	port             int
+	weight           int
+	enabled          bool
+	ttl              int
+}
+
+func (v *dnsPolicyFlagValues) bind(cmd *cobra.Command, includeType bool) {
+	if includeType {
+		cmd.Flags().StringVar(&v.recordType, "type", "a", "policy type: a, aaaa, cname, mx, txt, srv, or forward-domain")
+	}
+	cmd.Flags().StringVar(&v.name, "name", "", "policy domain name")
+	cmd.Flags().StringVar(&v.ip, "ip", "", "IPv4 address (legacy alias for --ipv4)")
+	cmd.Flags().StringVar(&v.ipv4, "ipv4", "", "A policy IPv4 address")
+	cmd.Flags().StringVar(&v.ipv6, "ipv6", "", "AAAA policy IPv6 address")
+	cmd.Flags().StringVar(&v.targetDomain, "target-domain", "", "CNAME target domain")
+	cmd.Flags().StringVar(&v.mailServerDomain, "mail-server-domain", "", "MX mail server domain")
+	cmd.Flags().StringVar(&v.text, "text", "", "TXT policy text")
+	cmd.Flags().StringVar(&v.serverDomain, "server-domain", "", "SRV server domain")
+	cmd.Flags().StringVar(&v.serverIP, "server-ip", "", "forward-domain DNS server IP address")
+	cmd.Flags().IntVar(&v.priority, "priority", 0, "MX or SRV priority (0-65535)")
+	cmd.Flags().StringVar(&v.service, "service", "", "SRV service token (for example, _sip)")
+	cmd.Flags().StringVar(&v.protocol, "protocol", "", "SRV protocol token (for example, _tcp)")
+	cmd.Flags().IntVar(&v.port, "port", 0, "SRV port (0-65535)")
+	cmd.Flags().IntVar(&v.weight, "weight", 0, "SRV weight (0-65535)")
+	cmd.Flags().BoolVar(&v.enabled, "enabled", true, "policy enabled")
+	cmd.Flags().IntVar(&v.ttl, "ttl", 0, "A, AAAA, or CNAME TTL in seconds (default 300 on create)")
+}
+
+func (v dnsPolicyFlagValues) input(cmd *cobra.Command, create bool) (domain.DNSInput, error) {
+	if cmd.Flags().Changed("ip") && cmd.Flags().Changed("ipv4") {
+		return domain.DNSInput{}, apperr.New(apperr.ValidationFailed, "use only one of --ip and --ipv4")
+	}
+	ipv4 := v.ipv4
+	if cmd.Flags().Changed("ip") {
+		ipv4 = v.ip
+	}
+	in := domain.DNSInput{
+		Name:                v.name,
+		SetName:             cmd.Flags().Changed("name"),
+		IP:                  ipv4,
+		SetIP:               cmd.Flags().Changed("ip") || cmd.Flags().Changed("ipv4"),
+		IPv6Address:         v.ipv6,
+		SetIPv6Address:      cmd.Flags().Changed("ipv6"),
+		TargetDomain:        v.targetDomain,
+		SetTargetDomain:     cmd.Flags().Changed("target-domain"),
+		MailServerDomain:    v.mailServerDomain,
+		SetMailServerDomain: cmd.Flags().Changed("mail-server-domain"),
+		Text:                v.text,
+		SetText:             cmd.Flags().Changed("text"),
+		ServerDomain:        v.serverDomain,
+		SetServerDomain:     cmd.Flags().Changed("server-domain"),
+		ServerIP:            v.serverIP,
+		SetServerIP:         cmd.Flags().Changed("server-ip"),
+		Priority:            v.priority,
+		SetPriority:         cmd.Flags().Changed("priority"),
+		Service:             v.service,
+		SetService:          cmd.Flags().Changed("service"),
+		Protocol:            v.protocol,
+		SetProtocol:         cmd.Flags().Changed("protocol"),
+		Port:                v.port,
+		SetPort:             cmd.Flags().Changed("port"),
+		Weight:              v.weight,
+		SetWeight:           cmd.Flags().Changed("weight"),
+		Enabled:             v.enabled,
+		SetEnabled:          cmd.Flags().Changed("enabled"),
+		TTLSeconds:          v.ttl,
+		SetTTL:              cmd.Flags().Changed("ttl"),
+	}
+	if create {
+		in.Type = v.recordType
+	}
+	return in, nil
 }
 
 func newDNSDeleteCmd() *cobra.Command {

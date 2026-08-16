@@ -2,17 +2,16 @@
 
 ## Supported target
 
-`v1.0.0-rc.1` targets the official local UniFi Network integration API in
-**UniFi Network 10.3.58 and newer**. It connects directly to
+`v1.0.0` targets the official local UniFi Network integration API in
+**UniFi Network 10.4.57 and newer**. It connects directly to
 `https://<host>:<port>/proxy/network/integration/v1`; it does not require the
 UniFi cloud or Site Manager.
 
 | UniFi Network version | RC status |
 |---|---|
-| Earlier than 10.3.58 | Unsupported; required official schemas/endpoints may be absent or incompatible |
-| 10.3.58 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates |
-| 10.4.57 | Live verified on 2026-08-08: the guarded read-only suite passed, system health reported the official application version, and the isolated disabled DNS A-record create/update/delete lifecycle restored the exact baseline |
-| Later than 10.4.57 | Intended by the `10.3.58+` contract, subject to upstream API compatibility and release-specific verification |
+| Earlier than 10.4.57 | Unsupported; required official schemas, discriminators, or endpoints can be absent or incompatible |
+| 10.4.57 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates. An earlier candidate passed read-only live checks and one A-record lifecycle; final v1 qualification remains a release gate |
+| Later than 10.4.57 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
 
 Live verification used the release-candidate executable from commit
 `434492b613e730916b8b06adeea9dc49f3fd1518`. Every configured read-only check
@@ -24,9 +23,9 @@ port, WiFi, network, resolver, or firewall mutation was run. The controller's
 self-signed certificate required the documented explicit `insecure: true`
 compatibility setting for this local test; verified TLS remains the default.
 
-The schema target is Ubiquiti's [UniFi Network 10.3.58 API
-reference](https://developer.ui.com/network/v10.3.58). Upstream documentation
-also exposes an [OpenAPI document](https://developer.ui.com/network/v10.3.58/openapi.json)
+The schema target is Ubiquiti's [UniFi Network 10.4.57 API
+reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
+also exposes an [OpenAPI document](https://developer.ui.com/network/v10.4.57/openapi.json)
 used to derive synthetic fixtures and validation bounds.
 
 ## Surface compatibility
@@ -34,9 +33,11 @@ used to derive synthetic fixtures and validation bounds.
 | Surface | API and support |
 |---|---|
 | Site/device/client/network/WiFi/port/firewall/DNS/resolver/health reads | Stable official local integration API; health combines official application info with adopted-device status |
-| DNS A-record create/update/delete | Stable official local integration API |
-| Network/WiFi CRUD, restart/adopt/forget, firewall policy writes | Experimental official local integration API |
+| LAG, MC-LAG, switch-stack, RADIUS-profile, and traffic-list reads | Stable official local integration API |
+| All seven official DNS policy create/update/delete variants | Stable official local integration API |
+| Network/WiFi CRUD, restart/adopt/forget, firewall policy/zone/traffic-list writes | Experimental official local integration API; no sacrificial-controller live proof |
 | Rename/locate/upgrade, client actions, port update, resolver set | Experimental legacy local compatibility paths |
+| Classic firewall and switching/RADIUS writes | Unsupported |
 
 Reads preserve the schema-v1 CLI contract rather than exposing raw upstream
 documents. Official collection pages are validated strictly. Required detail
@@ -45,16 +46,13 @@ fails the entire command when any required detail fails.
 
 ## Known intentional limits
 
-- Network create requires `--management`. UNMANAGED, SWITCH, and GATEWAY
-  variants fail closed where required inputs are not exposed; management-mode
-  transitions are rejected.
-- WiFi create supports OPEN and WPA2 Personal. WPA3 Personal, mixed WPA2/WPA3,
-  and enterprise creation are rejected because required SAE/PMF/fast-roaming
-  or RADIUS inputs are not exposed.
-- DNS writes are A-record only even though reads normalize all official policy
-  types.
+- Network management transitions require every target-mode field; DHCP ranges
+  and controller defaults are never inferred.
+- Personal WiFi secrets are accepted only by hidden prompt or bounded stdin.
+- DNS type changes are unsupported; update preserves the existing policy type.
 - Firewall uses modern zones/policies and complete atomic ordering; classic
-  rulesets and partial/per-policy reorder are unsupported.
+  rulesets and partial order replacement are unsupported.
+- Switching and RADIUS profiles are read-only.
 - Accepted action output does not claim asynchronous completion.
 
 ## Reporting a compatibility issue

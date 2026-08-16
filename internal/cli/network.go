@@ -49,25 +49,52 @@ func newNetworkGetCmd() *cobra.Command {
 
 func newNetworkCreateCmd() *cobra.Command {
 	var (
-		name       string
-		vlan       int
-		subnet     string
-		management string
-		domainName string
+		name                  string
+		vlan                  int
+		subnet                string
+		management            string
+		domainName            string
+		deviceID              string
+		enabled               bool
+		dhcpMode              string
+		dhcpRangeStart        string
+		dhcpRangeEnd          string
+		dhcpLeaseSeconds      int
+		dhcpConflictDetection bool
+		dhcpRelayServers      []string
+		dnsServers            []string
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a network",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.NetworkInput{
-				Name:          name,
-				SetName:       true,
-				Purpose:       management,
-				SetPurpose:    true,
-				Subnet:        subnet,
-				SetSubnet:     cmd.Flags().Changed("subnet"),
-				DomainName:    domainName,
-				SetDomainName: cmd.Flags().Changed("domain-name"),
+				Name:                            name,
+				SetName:                         true,
+				Purpose:                         management,
+				SetPurpose:                      true,
+				Enabled:                         enabled,
+				SetEnabled:                      cmd.Flags().Changed("enabled"),
+				DeviceID:                        deviceID,
+				SetDeviceID:                     cmd.Flags().Changed("device"),
+				Subnet:                          subnet,
+				SetSubnet:                       cmd.Flags().Changed("subnet"),
+				DHCPMode:                        dhcpMode,
+				SetDHCPMode:                     cmd.Flags().Changed("dhcp-mode"),
+				DHCPRangeStart:                  dhcpRangeStart,
+				SetDHCPRangeStart:               cmd.Flags().Changed("dhcp-range-start"),
+				DHCPRangeStop:                   dhcpRangeEnd,
+				SetDHCPRangeStop:                cmd.Flags().Changed("dhcp-range-end"),
+				DHCPLeaseTimeSeconds:            dhcpLeaseSeconds,
+				SetDHCPLeaseTimeSeconds:         cmd.Flags().Changed("dhcp-lease-seconds"),
+				DHCPConflictDetectionEnabled:    dhcpConflictDetection,
+				SetDHCPConflictDetectionEnabled: cmd.Flags().Changed("dhcp-conflict-detection"),
+				DHCPRelayServerIPAddresses:      dhcpRelayServers,
+				SetDHCPRelayServerIPAddresses:   cmd.Flags().Changed("dhcp-relay-server"),
+				DNSServerIPAddresses:            dnsServers,
+				SetDNSServerIPAddresses:         cmd.Flags().Changed("dns-server"),
+				DomainName:                      domainName,
+				SetDomainName:                   cmd.Flags().Changed("domain-name"),
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -80,6 +107,15 @@ func newNetworkCreateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
 	cmd.Flags().StringVar(&management, "management", "", "management mode (gateway|switch|unmanaged)")
+	cmd.Flags().StringVar(&deviceID, "device", "", "L3 switch device ID for switch management")
+	cmd.Flags().BoolVar(&enabled, "enabled", true, "network enabled")
+	cmd.Flags().StringVar(&dhcpMode, "dhcp-mode", "", "DHCP mode (none|server|relay)")
+	cmd.Flags().StringVar(&dhcpRangeStart, "dhcp-range-start", "", "first DHCP server address")
+	cmd.Flags().StringVar(&dhcpRangeEnd, "dhcp-range-end", "", "last DHCP server address")
+	cmd.Flags().IntVar(&dhcpLeaseSeconds, "dhcp-lease-seconds", 0, "DHCP lease duration in seconds")
+	cmd.Flags().BoolVar(&dhcpConflictDetection, "dhcp-conflict-detection", false, "ping before assigning a DHCP address")
+	cmd.Flags().StringSliceVar(&dhcpRelayServers, "dhcp-relay-server", nil, "DHCP relay server IPv4 address; repeat for more than one")
+	cmd.Flags().StringSliceVar(&dnsServers, "dns-server", nil, "DHCP DNS server address; repeat for more than one")
 	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("management")
@@ -88,12 +124,21 @@ func newNetworkCreateCmd() *cobra.Command {
 
 func newNetworkUpdateCmd() *cobra.Command {
 	var (
-		name            string
-		vlan            int
-		subnet          string
-		management      string
-		domainName      string
-		clearDomainName bool
+		name                  string
+		vlan                  int
+		subnet                string
+		management            string
+		domainName            string
+		clearDomainName       bool
+		deviceID              string
+		enabled               bool
+		dhcpMode              string
+		dhcpRangeStart        string
+		dhcpRangeEnd          string
+		dhcpLeaseSeconds      int
+		dhcpConflictDetection bool
+		dhcpRelayServers      []string
+		dnsServers            []string
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -101,15 +146,33 @@ func newNetworkUpdateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in := domain.NetworkInput{
-				Name:            name,
-				SetName:         cmd.Flags().Changed("name"),
-				Purpose:         management,
-				SetPurpose:      cmd.Flags().Changed("management"),
-				Subnet:          subnet,
-				SetSubnet:       cmd.Flags().Changed("subnet"),
-				DomainName:      domainName,
-				SetDomainName:   cmd.Flags().Changed("domain-name"),
-				ClearDomainName: clearDomainName,
+				Name:                            name,
+				SetName:                         cmd.Flags().Changed("name"),
+				Purpose:                         management,
+				SetPurpose:                      cmd.Flags().Changed("management"),
+				Enabled:                         enabled,
+				SetEnabled:                      cmd.Flags().Changed("enabled"),
+				DeviceID:                        deviceID,
+				SetDeviceID:                     cmd.Flags().Changed("device"),
+				Subnet:                          subnet,
+				SetSubnet:                       cmd.Flags().Changed("subnet"),
+				DHCPMode:                        dhcpMode,
+				SetDHCPMode:                     cmd.Flags().Changed("dhcp-mode"),
+				DHCPRangeStart:                  dhcpRangeStart,
+				SetDHCPRangeStart:               cmd.Flags().Changed("dhcp-range-start"),
+				DHCPRangeStop:                   dhcpRangeEnd,
+				SetDHCPRangeStop:                cmd.Flags().Changed("dhcp-range-end"),
+				DHCPLeaseTimeSeconds:            dhcpLeaseSeconds,
+				SetDHCPLeaseTimeSeconds:         cmd.Flags().Changed("dhcp-lease-seconds"),
+				DHCPConflictDetectionEnabled:    dhcpConflictDetection,
+				SetDHCPConflictDetectionEnabled: cmd.Flags().Changed("dhcp-conflict-detection"),
+				DHCPRelayServerIPAddresses:      dhcpRelayServers,
+				SetDHCPRelayServerIPAddresses:   cmd.Flags().Changed("dhcp-relay-server"),
+				DNSServerIPAddresses:            dnsServers,
+				SetDNSServerIPAddresses:         cmd.Flags().Changed("dns-server"),
+				DomainName:                      domainName,
+				SetDomainName:                   cmd.Flags().Changed("domain-name"),
+				ClearDomainName:                 clearDomainName,
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -122,6 +185,15 @@ func newNetworkUpdateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&vlan, "vlan", 0, "VLAN id")
 	cmd.Flags().StringVar(&subnet, "subnet", "", "subnet CIDR (gateway/prefix)")
 	cmd.Flags().StringVar(&management, "management", "", "management mode (gateway|switch|unmanaged)")
+	cmd.Flags().StringVar(&deviceID, "device", "", "L3 switch device ID for switch management")
+	cmd.Flags().BoolVar(&enabled, "enabled", true, "network enabled")
+	cmd.Flags().StringVar(&dhcpMode, "dhcp-mode", "", "DHCP mode (none|server|relay)")
+	cmd.Flags().StringVar(&dhcpRangeStart, "dhcp-range-start", "", "first DHCP server address")
+	cmd.Flags().StringVar(&dhcpRangeEnd, "dhcp-range-end", "", "last DHCP server address")
+	cmd.Flags().IntVar(&dhcpLeaseSeconds, "dhcp-lease-seconds", 0, "DHCP lease duration in seconds")
+	cmd.Flags().BoolVar(&dhcpConflictDetection, "dhcp-conflict-detection", false, "ping before assigning a DHCP address")
+	cmd.Flags().StringSliceVar(&dhcpRelayServers, "dhcp-relay-server", nil, "complete DHCP relay server IPv4 address replacement")
+	cmd.Flags().StringSliceVar(&dnsServers, "dns-server", nil, "complete DHCP DNS server address replacement")
 	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	cmd.Flags().BoolVar(&clearDomainName, "clear-domain-name", false, "clear the DHCP domain name")
 	return cmd

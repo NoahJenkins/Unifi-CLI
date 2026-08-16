@@ -331,7 +331,7 @@ func TestInspectCycloneDXSBOMAcceptsPinnedSyftFileComponent(t *testing.T) {
 		{Type: "library", Name: "github.com/spf13/cobra", Version: "v1.10.2"}: {},
 	}
 	if err := inspectCycloneDXSBOM(path, archiveName, "0.0.0-SNAPSHOT-1aa4eee", executable, expected); err != nil {
-		t.Fatalf("pinned Syft 1.48.0 CycloneDX shape rejected: %v", err)
+		t.Fatalf("pinned Syft 1.51.0 CycloneDX shape rejected: %v", err)
 	}
 }
 
@@ -919,7 +919,7 @@ type pinnedOutputSnapshot struct {
 
 func loadPinnedOutputSnapshot(t *testing.T) pinnedOutputSnapshot {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "goreleaser-v2.17.1-syft-v1.48.0-snapshot.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "goreleaser-v2.17.1-syft-v1.51.0-snapshot.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@
 Neither the author nor users of this project own the UniFi brand; Ubiquiti Inc. owns it.
 
 Manage a **local** UniFi Network controller from the terminal. The
-`v1.0.0-rc.1` release candidate uses the official local Network integration API
+The v1 release uses the official local Network integration API
 for its stable surface, emits a versioned JSON contract for automation, and
 plans every mutation before it can apply.
 
@@ -14,24 +14,25 @@ plans every mutation before it can apply.
 > UniFi cloud APIs, or the remote Connector examples shown in the upstream API
 > reference.
 
-The compatibility target is UniFi Network **10.3.58 and newer**. The current
-implementation is schema- and fixture-validated against the official 10.3.58
-API and has completed the guarded read-only suite plus the isolated DNS
-lifecycle against UniFi Network 10.4.57. See
+The compatibility target is UniFi Network **10.4.57 and newer**. The current
+implementation is schema- and fixture-validated against the official 10.4.57
+API. An earlier candidate completed the guarded read-only suite and an isolated
+DNS A-record lifecycle on 10.4.57. The expanded v1 surface still requires final
+read-only and seven-type DNS qualification before publication. See
 [Compatibility](docs/compatibility.md) for the exact status and limits.
 
-## Install `v1.0.0-rc.1`
+## Install v1
 
-After the RC tag is published:
+After the stable tag is published:
 
 ```bash
-go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.1
+go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0
 unifi --version
 unifi version --json
 ```
 
-Release archives will also be attached to the GitHub release during the Task 9
-delivery workflow. Until then, build the reviewed source checkout with the Go
+Release archives are also attached to each GitHub release. Before publication,
+build the reviewed source checkout with the Go
 version declared in `go.mod`:
 
 ```bash
@@ -40,7 +41,7 @@ go build -o dist/unifi ./cmd/unifi
 ./dist/unifi version
 ```
 
-Do not treat a locally built `dev` version as the published RC. Release builds
+Do not treat a locally built `dev` version as a published release. Release builds
 populate the version, commit, and build date through linker metadata.
 
 ## Quick start
@@ -136,12 +137,13 @@ requires `--experimental`.
 | Surface | Status | Commands |
 |---|---|---|
 | Local auth/config/version | Local | `login`, `logout`, `auth status`, `config path`, `config show`, `version` |
-| Inventory and health reads | Stable official | `site`, `device`, `client`, `network`, `wlan`, `port`, `firewall`, `firewall zone`, `dns`, `dns resolvers`, and `system health` list/get operations as exposed by help; health includes the official application version and adopted-device status |
-| Local DNS A-record writes | Stable official | `dns create`, `dns update`, `dns delete` |
+| Inventory and health reads | Stable official | `site`, `device`, `client`, `network`, `wlan`, `port`, `firewall`, `firewall zone`, `firewall traffic-list`, `dns`, `dns resolvers`, `switching lag`, `switching mc-lag`, `switching stack`, `radius profile`, and `system health` list/get operations as exposed by help |
+| Local DNS policy writes | Stable official | `dns create`, `dns update`, `dns delete` for A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain policies |
 | Network and WiFi writes | Experimental official | Network CRUD; WLAN CRUD, enable, and disable |
 | Device lifecycle writes | Experimental official | `device restart`, `device adopt`, `device forget` |
-| Firewall policy writes | Experimental official | Policy create, update, delete, and atomic reorder |
+| Firewall writes | Experimental official | Policy create/update/delete/reorder, relative policy move, custom-zone CRUD, and traffic-list CRUD |
 | Legacy device/client/port/resolver writes | Experimental legacy | Device rename/locate/upgrade; client reconnect/block/unblock; port update; resolver set |
+| Unsupported | None | Classic firewall rulesets; switching LAG, MC-LAG, and stack writes; RADIUS profile writes |
 
 The legacy-experimental rows are deliberately isolated compatibility paths;
 they are not described as stable official API support. There are no stable
@@ -173,10 +175,10 @@ an ambiguous write.
 | `routine` | Stable official | `dns create`, `dns update` | `--yes` |
 | `routine` | Experimental official | `device adopt`; `network create`; `wlan create/update/enable/disable` | `--experimental --yes` |
 | `routine` | Experimental legacy | `device rename/locate`; `client reconnect/block/unblock` | `--experimental --yes` |
-| `high_impact` | Experimental official | `device restart`; `network update`; `firewall create/update/reorder` | `--experimental --force --yes` |
+| `high_impact` | Experimental official | `device restart`; `network update`; `firewall create/update/reorder/move`; `firewall zone create/update`; `firewall traffic-list create/update` | `--experimental --force --yes` |
 | `high_impact` | Experimental legacy | `device upgrade`; `port update`; `dns resolvers set` | `--experimental --force --yes` |
 | `destructive` | Stable official | `dns delete` | `--force --yes` |
-| `destructive` | Experimental official | `device forget`; `network delete`; `wlan delete`; `firewall delete` | `--experimental --force --yes` |
+| `destructive` | Experimental official | `device forget`; `network delete`; `wlan delete`; `firewall delete`; `firewall zone delete`; `firewall traffic-list delete` | `--experimental --force --yes` |
 
 If `safe_mode` is explicitly disabled, `--force` is not required; all other
 gates remain. Successful applies emit `audit: applied <resource> <action>` on
@@ -198,10 +200,12 @@ unifi network update LAN --name Users --experimental --force --yes --dry-run
 ### DNS
 
 Reads normalize official A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain
-policies. Stable writes are intentionally limited to **A records only** and
-validate the DNS name, IPv4 address, and positive TTL locally. Updating or
-deleting any other policy type fails before a write. Create/update re-read by
-ID; delete verifies both ID absence and exact-domain absence.
+policies. Stable create accepts `--type a|aaaa|cname|mx|txt|srv|forward-domain`
+and defaults to `a`. Type-specific flags are validated strictly; update infers
+and preserves the existing type and rejects type changes. Create and update
+re-read the captured ID and compare the complete expected policy. Delete
+verifies the captured ID is absent and does not accept a different same-name
+policy as proof of deletion.
 
 ### Networks
 
@@ -209,28 +213,25 @@ Network writes use the official `--management gateway|switch|unmanaged`
 discriminator. The removed legacy `--purpose` vocabulary (`corporate`,
 `guest`, `wan`) is not accepted for official writes.
 
-Creation fails closed when the CLI cannot construct the required official
-document:
-
-- every create needs an explicit VLAN ID in `1..4009`;
-- `unmanaged` rejects subnet and DHCP/domain fields;
-- `switch` creation is rejected because the command does not expose the
-  required device ID;
-- `gateway` requires an IPv4 subnet with prefix `8..30` and rejects DHCP/domain
-  creation because the CLI cannot safely infer the required range, lease, and
-  conflict-detection fields;
-- updates cannot transition between management variants because the CLI cannot
-  construct every required target-mode field.
+Creation needs an explicit VLAN ID in `1..4009`. `gateway`, `switch`, and
+`unmanaged` have distinct official documents. Switch management requires
+`--device`. Gateway DHCP uses explicit `--dhcp-mode none|server|relay` fields.
+Server mode requires a complete range and lease value when the target mode
+cannot preserve them; relay mode requires one or more relay addresses. The CLI
+never invents a DHCP range. A management transition is accepted only when all
+required target-mode fields are present. Updates preserve and send the complete
+writable official document.
 
 ### WiFi
 
-Official create supports OPEN and WPA2 Personal (`wpapsk`/`wpa2_personal`)
-STANDARD broadcasts. Personal passphrases must be 8–63 characters and enter
-through the hidden `--password` prompt or bounded `--password-stdin`, never as
-an argument value. WPA3 Personal and mixed WPA2/WPA3 creation are rejected
-because required SAE/PMF/fast-roaming inputs are not exposed. Enterprise modes
-are rejected because RADIUS inputs are not exposed. Existing complete WPA3 or
-mixed documents can be preserved during unrelated full-document updates.
+Official create and update support OPEN, WPA2 Personal, WPA3 Personal, mixed
+WPA2/WPA3 Personal, WPA2 Enterprise, mixed WPA2/WPA3 Enterprise, and WPA3
+Enterprise STANDARD broadcasts. The typed flags cover PMF, SAE timers, fast
+roaming, RADIUS profile and NAS ID, Change of Authorization, and WPA3 enterprise
+security mode. Personal passphrases must be 8–63 characters and enter through
+the hidden `--password` prompt or bounded `--password-stdin`, never as an
+argument value or plan field. Updates preserve the complete official security
+document when a field is not changed.
 
 ### Firewall
 
@@ -243,6 +244,13 @@ user-defined order split between `--before-system-ids` and
 `--after-system-ids`. It rejects duplicates, omissions, no-ops, and system
 policy injection, sends one atomic official ordering request, and verifies the
 complete final order. It never falls back to per-rule updates.
+
+`firewall move <policy> --before|--after <policy>` reads and binds the complete
+order, requires both policies to be user-defined in the same zone pair, sends
+one complete replacement, and verifies the final order. Custom-zone and traffic
+matching-list CRUD preserve complete official documents and remain
+experimental. Traffic lists support ports, IPv4 addresses, and IPv6 addresses.
+Classic firewall rulesets and switching/RADIUS writes are unsupported.
 
 ### Action acceptance
 
@@ -287,6 +295,10 @@ include optional `meta.count`, but current typed resource-list commands omit
 it. `meta.experimental` is present and true for every experimental mutation
 plan, gate error, and successful apply; stable commands omit it. The v1
 surface has no `--raw` flag and never embeds upstream controller payloads.
+The executable JSON Schema 2020-12 contract is checked in at
+[`schemas/schema-v1.json`](schemas/schema-v1.json). Stable golden output,
+failures, plans, and experimental common envelopes validate against it in the
+test suite.
 
 Version interfaces are:
 
@@ -303,8 +315,9 @@ unifi version --json
 
 ```bash
 ./scripts/smoke.sh
-go test -race ./...
+go test -race ./... -timeout 30m
 ./scripts/check-coverage.sh
+UNIFI_RELEASE_HOST=1 ./scripts/check-performance.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 ```
 
@@ -315,11 +328,18 @@ sacrificial controller and are never run against a production-like network.
 See [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [RC release checklist](docs/maintainers/release-checklist.md).
 
+The coverage gate enforces 75% across `./internal/...` plus package floors.
+The performance script records three samples everywhere and enforces the
+10,000-item, 1,000-detail, and warm-help budgets only when
+`UNIFI_RELEASE_HOST=1` on darwin/arm64. Native credential-store qualification
+uses a unique synthetic entry and deletes it. CI runs it on macOS Keychain,
+Windows Credential Manager, and Linux Secret Service.
+
 ## Security and release information
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 See [CHANGELOG.md](CHANGELOG.md), [Compatibility](docs/compatibility.md), and
-the [`v1.0.0-rc.1` release notes](docs/releases/v1.0.0-rc.1.md).
+the [`v1.0.0` release notes](docs/releases/v1.0.0.md).
 
 ## License
 

@@ -148,6 +148,17 @@ func TestWlanCreateRequiresPasswordForSecuredMode(t *testing.T) {
 	}
 }
 
+func TestWlanCreatePasswordDistinguishesPersonalAndEnterprise(t *testing.T) {
+	if err := validateWlanCreatePassword("wpa3-personal", ""); err == nil {
+		t.Fatal("WPA3 personal accepted a missing passphrase")
+	}
+	for _, security := range []string{"wpa2-enterprise", "wpa2-wpa3-enterprise", "wpa3-enterprise"} {
+		if err := validateWlanCreatePassword(security, ""); err != nil {
+			t.Errorf("%s required a personal passphrase: %v", security, err)
+		}
+	}
+}
+
 func TestWlanCreateRejectsLegacyPasswordValueWithoutEchoingIt(t *testing.T) {
 	const secret = "legacy-password-value-not-for-output"
 	cmd := newWlanCreateCmd()

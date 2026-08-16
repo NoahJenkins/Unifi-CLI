@@ -52,6 +52,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require release commit on main
+        shell: bash
+        run: |
+          git fetch origin main
+          bash ./scripts/release-ancestry.sh "$RELEASE_COMMIT" origin/main
+
       - name: Refuse published release replacement
         shell: bash
         env:
@@ -153,14 +159,29 @@ jobs:
       - name: Install pinned Syft for archive SBOMs
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610
         with:
-          syft-version: v1.48.0
+          syft-version: v1.51.0
+
+      - name: Derive release metadata
+        id: metadata
+        shell: bash
+        run: |
+          METADATA="$(bash ./scripts/release-metadata.sh "$RELEASE_TAG")"
+          VERSION="$(printf '%s\n' "$METADATA" | awk -F $'\t' '$1 == "version" { print $2 }')"
+          PRERELEASE="$(printf '%s\n' "$METADATA" | awk -F $'\t' '$1 == "prerelease" { print $2 }')"
+          NOTES="$(printf '%s\n' "$METADATA" | awk -F $'\t' '$1 == "notes" { print $2 }')"
+          test -n "$VERSION"
+          [[ "$PRERELEASE" == true || "$PRERELEASE" == false ]]
+          [[ "$NOTES" == docs/releases/*.md ]]
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Build release artifacts without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           distribution: goreleaser
           version: v2.17.1
-          args: release --clean --skip=publish --release-notes docs/releases/v1.0.0-rc.1.md
+          args: release --clean --skip=publish --release-notes ${{ steps.metadata.outputs.notes }}
 
       - name: Seal generated artifact bundle
         id: seal
@@ -549,6 +570,7 @@ jobs:
     name: publish exact verified assets
     needs:
       - prepare_publication
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -612,4 +634,6 @@ jobs:
           done
           env -u GH_TOKEN go run ./cmd/release-smoke --write-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json" --expected-commit "$RELEASE_COMMIT"
           env -u GH_TOKEN go run ./cmd/release-smoke --artifacts "$RUNNER_TEMP/publication/dist" --expected-version "$RELEASE_VERSION" --expected-commit "$RELEASE_COMMIT" --trusted-binaries "$RUNNER_TEMP/publisher-trusted" --trusted-source-manifest "$RUNNER_TEMP/publisher-source-manifest.json"
-          GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/publisher-source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/docs/releases/v1.0.0-rc.1.md"
+          RELEASE_NOTES="$(bash "$RUNNER_TEMP/source/scripts/release-metadata.sh" "$RELEASE_TAG" | awk -F $'\t' '$1 == "notes" { print $2 }')"
+          [[ "$RELEASE_NOTES" == docs/releases/*.md ]]
+          GITHUB_REF_NAME="$RELEASE_TAG" GITHUB_SHA="$RELEASE_COMMIT" bash "$RUNNER_TEMP/publisher-source/scripts/publish-release.sh" "$RUNNER_TEMP/publication/dist" "$RUNNER_TEMP/source/$RELEASE_NOTES"

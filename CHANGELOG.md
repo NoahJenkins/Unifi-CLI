@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0-rc.2] - 2026-08-16
+
+### Added
+
+- Stable official reads for switching LAGs, MC-LAG domains, switch stacks,
+  RADIUS profiles, and traffic matching lists.
+- Stable official CRUD for all seven DNS policy types.
+- Typed Gateway, Switch, and Unmanaged network management, explicit DHCP
+  server/relay configuration, and complete WPA3 and enterprise WiFi security.
+- Experimental custom firewall-zone and traffic-list CRUD plus relative policy
+  moves with complete-order drift protection.
+- Checked-in JSON Schema 2020-12, full internal coverage floors, fuzz targets,
+  release-host performance budgets, documentation contracts, and native
+  keyring qualification on all supported operating systems.
+
+### Security
+
+- Configuration rejects unknown YAML fields and trailing documents.
+- A stale saved-key 401 can no longer delete persisted or rotated credentials.
+- Release publication derives stable/prerelease metadata from the tag, requires
+  protected-main ancestry, and limits write authority to the protected release
+  job.
+
+### Changed
+
+- The compatibility floor and fixture target are UniFi Network 10.4.57.
+- Go is pinned to 1.26.6, pflag to 1.0.10, Syft to 1.51.0, and the schema test
+  validator to jsonschema/v6 6.0.3.
+- Non-DNS writes remain experimental because no disposable sacrificial
+  controller has qualified them.
+
+See [`v1.0.0-rc.2` release notes](docs/releases/v1.0.0-rc.2.md).
+
 ## [1.0.0-rc.1] - 2026-08-07
 
 ### Added

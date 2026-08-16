@@ -1,0 +1,13 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "40000000-0000-4000-8000-000000000004",
+      "name": "Corporate",
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

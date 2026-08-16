@@ -15,8 +15,15 @@ if [[ ! "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   exit 2
 fi
 if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "release publish: invalid release tag" >&2
-  exit 2
+	echo "release publish: invalid release tag" >&2
+	exit 2
+fi
+
+release_metadata="$(bash "$(dirname "$0")/release-metadata.sh" "$release_tag")"
+release_prerelease="$(printf '%s\n' "$release_metadata" | awk -F $'\t' '$1 == "prerelease" { print $2 }')"
+if [[ "$release_prerelease" != true && "$release_prerelease" != false ]]; then
+	echo "release publish: invalid derived prerelease state" >&2
+	exit 1
 fi
 
 dist_dir="$(cd "$1" && pwd -P)"
@@ -109,8 +116,8 @@ else
     -f "tag_name=$release_tag" \
     -f "target_commitish=${RELEASE_COMMIT:-${GITHUB_SHA:-}}" \
     -f "name=$release_tag" \
-    -F draft=true \
-    -F prerelease=true \
+		-F draft=true \
+		-F "prerelease=$release_prerelease" \
     -F "body=@$notes_file" \
     --jq '.id')"
 fi
@@ -181,7 +188,7 @@ done
 # Close the tag-move window after uploads and remote readback. A moved tag
 # leaves the release as a draft and cannot relabel artifacts from GITHUB_SHA.
 bash "$(dirname "$0")/release-preflight.sh"
-gh api --method PATCH "$releases_endpoint/$release_id" -F draft=false -F prerelease=true --silent
+gh api --method PATCH "$releases_endpoint/$release_id" -F draft=false -F "prerelease=$release_prerelease" --silent
 if [[ "$(gh api --method GET "$releases_endpoint/$release_id" --jq '.draft')" != "false" ]]; then
   echo "release publish: release did not become public" >&2
   exit 1

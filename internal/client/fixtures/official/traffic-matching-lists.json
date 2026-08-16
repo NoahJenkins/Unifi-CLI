@@ -1,0 +1,17 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "50000000-0000-4000-8000-000000000005",
+      "type": "PORTS",
+      "name": "Web ports",
+      "items": [
+        {"type": "PORT_NUMBER", "value": 80},
+        {"type": "PORT_NUMBER_RANGE", "start": 8000, "stop": 8080}
+      ]
+    }
+  ]
+}
