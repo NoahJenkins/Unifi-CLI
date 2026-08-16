@@ -1,6 +1,7 @@
 package fileutil
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,14 +28,21 @@ func TestReadRegularFileRejectsUnsafeInputs(t *testing.T) {
 	for name, tt := range map[string]struct {
 		path    string
 		maximum int64
+		wantErr error
 		want    string
 	}{
-		"missing":   {filepath.Join(dir, "missing"), 10, "no such file"},
-		"directory": {dir, 10, "not a regular file"},
-		"too large": {tooLarge, 5, "exceeds 5 bytes"},
+		"missing":   {path: filepath.Join(dir, "missing"), maximum: 10, wantErr: os.ErrNotExist},
+		"directory": {path: dir, maximum: 10, want: "not a regular file"},
+		"too large": {path: tooLarge, maximum: 5, want: "exceeds 5 bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ReadRegularFile(tt.path, tt.maximum)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("ReadRegularFile() error = %v, want errors.Is(%v)", err, tt.wantErr)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("ReadRegularFile() error = %v, want %q", err, tt.want)
 			}
