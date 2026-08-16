@@ -130,5 +130,9 @@ jobs:
 
       - name: test Linux Secret Service
         if: runner.os == 'Linux'
-        shell: bash
-        run: dbus-run-session -- bash -c 'eval "$(gnome-keyring-daemon --start --components=secrets)"; UNIFI_NATIVE_KEYRING_IT=1 go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1'
+        shell: dbus-run-session -- bash --noprofile --norc -eo pipefail {0}
+        run: |
+          mkdir -p "$HOME/.cache" "$HOME/.local/share/keyrings"
+          chmod 700 "$HOME/.local" "$HOME/.local/share/keyrings"
+          printf '%s\n' 'unifi-cli-ci' | gnome-keyring-daemon --unlock
+          UNIFI_NATIVE_KEYRING_IT=1 go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1

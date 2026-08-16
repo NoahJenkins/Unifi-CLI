@@ -460,6 +460,33 @@ func TestRequiredCIIncludesLinuxRaceAndArtifactSmoke(t *testing.T) {
 	}
 }
 
+func TestLinuxNativeKeyringCIInitializesUnlockedLoginCollection(t *testing.T) {
+	workflow := readYAMLMap(t, ".github/workflows/ci.yml")
+	jobs := mapValue(t, workflow, "jobs")
+	keyringJob := mapValue(t, jobs, "native-keyring")
+	steps := jobSteps(t, keyringJob)
+	step := steps[stepIndex(t, steps, "test Linux Secret Service")].(map[string]any)
+
+	wantShell := "dbus-run-session -- bash --noprofile --norc -eo pipefail {0}"
+	if got := fmt.Sprint(step["shell"]); got != wantShell {
+		t.Errorf("Linux keyring shell = %q, want %q", got, wantShell)
+	}
+	run := fmt.Sprint(step["run"])
+	for _, want := range []string{
+		`mkdir -p "$HOME/.cache" "$HOME/.local/share/keyrings"`,
+		`chmod 700 "$HOME/.local" "$HOME/.local/share/keyrings"`,
+		`printf '%s\n' 'unifi-cli-ci' | gnome-keyring-daemon --unlock`,
+		`UNIFI_NATIVE_KEYRING_IT=1 go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1`,
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("Linux keyring setup missing %q", want)
+		}
+	}
+	if strings.Contains(run, "gnome-keyring-daemon --start") {
+		t.Error("Linux keyring setup starts a locked daemon instead of initializing the login collection")
+	}
+}
+
 func TestSmokeRaceModeRunsOneRaceEnabledSuite(t *testing.T) {
 	tmp := t.TempDir()
 	logPath := filepath.Join(tmp, "go.log")
