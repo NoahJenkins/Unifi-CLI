@@ -17,16 +17,17 @@ type ClientAPI interface {
 }
 
 type Client struct {
-	ID       string `json:"id"`
-	MAC      string `json:"mac"`
-	Hostname string `json:"hostname"`
-	Name     string `json:"name"`
-	IP       string `json:"ip"`
-	ESSID    string `json:"essid"`
-	Network  string `json:"network"`
-	IsWired  bool   `json:"is_wired"`
-	Blocked  bool   `json:"blocked"`
-	LastSeen string `json:"last_seen"`
+	ID        string `json:"id"`
+	MAC       string `json:"mac"`
+	Hostname  string `json:"hostname"`
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
+	ESSID     string `json:"essid"`
+	Network   string `json:"network"`
+	IsWired   bool   `json:"is_wired"`
+	Blocked   bool   `json:"blocked"`
+	LastSeen  string `json:"last_seen"`
+	networkID string
 }
 
 func (c Client) GetID() string  { return c.ID }
@@ -245,16 +246,17 @@ func (s *ClientService) applyObservedState(ctx context.Context, id, cmd string, 
 
 func NormalizeClient(m map[string]any) Client {
 	c := Client{
-		ID:       strField(m, "_id", "id"),
-		MAC:      strField(m, "mac", "macAddress"),
-		Hostname: strField(m, "hostname"),
-		Name:     strField(m, "name"),
-		IP:       strField(m, "ip", "last_ip", "ipAddress"),
-		ESSID:    strField(m, "essid"),
-		Network:  strField(m, "network", "network_name"),
-		IsWired:  boolField(m, "is_wired"),
-		Blocked:  boolField(m, "blocked"),
-		LastSeen: strField(m, "last_seen"),
+		ID:        strField(m, "_id", "id"),
+		MAC:       strField(m, "mac", "macAddress"),
+		Hostname:  strField(m, "hostname"),
+		Name:      strField(m, "name"),
+		IP:        strField(m, "ip", "last_ip", "ipAddress"),
+		ESSID:     strField(m, "essid"),
+		Network:   strField(m, "network", "network_name"),
+		IsWired:   boolField(m, "is_wired"),
+		Blocked:   boolField(m, "blocked"),
+		LastSeen:  strField(m, "last_seen"),
+		networkID: strField(m, "network_id", "networkconf_id"),
 	}
 	if strField(m, "type") == "WIRED" {
 		c.IsWired = true

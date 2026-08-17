@@ -36,7 +36,7 @@ used to derive synthetic fixtures and validation bounds.
 | LAG, MC-LAG, switch-stack, RADIUS-profile, and traffic-list reads | Stable official local integration API |
 | All seven official DNS policy create/update/delete variants | Stable official local integration API |
 | Network/WiFi CRUD, restart/adopt/forget, firewall policy/zone/traffic-list writes | Experimental official local integration API; no sacrificial-controller live proof |
-| Rename/locate/upgrade, client actions, port update, resolver set | Experimental legacy local compatibility paths |
+| Rename/locate/upgrade, client actions and connected-client fixed-IP set/clear, port update, resolver set | Experimental legacy local compatibility paths; no sacrificial-controller live proof |
 | Classic firewall and switching/RADIUS writes | Unsupported |
 
 Reads preserve the schema-v1 CLI contract rather than exposing raw upstream
@@ -54,6 +54,10 @@ fails the entire command when any required detail fails.
   rulesets and partial order replacement are unsupported.
 - Switching and RADIUS profiles are read-only.
 - Accepted action output does not claim asynchronous completion.
+- Fixed-IP set/clear supports currently connected clients only, infers the
+  current network, and verifies stored reservation state. It does not create
+  never-seen clients, select another network, renew DHCP leases, or reconnect a
+  client.
 
 ## Reporting a compatibility issue
 

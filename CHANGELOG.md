@@ -15,6 +15,11 @@ All notable changes to this project are documented here. The format follows
   server/relay configuration, and complete WPA3 and enterprise WiFi security.
 - Experimental custom firewall-zone and traffic-list CRUD plus relative policy
   moves with complete-order drift protection.
+- Experimental high-impact `client fixed-ip set` and `client fixed-ip clear`
+  commands for currently connected clients. The legacy local write path uses
+  plan/apply gates, subnet and conflict validation, immutable target checks,
+  one non-retried write, and controller-state verification. It does not renew
+  the DHCP lease or reconnect the client.
 - Checked-in JSON Schema 2020-12, full internal coverage floors, fuzz targets,
   release-host performance budgets, documentation contracts, and native
   keyring qualification on all supported operating systems.
