@@ -6,6 +6,7 @@ import (
 
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/config"
+	"github.com/noahjenkins/unifi-cli/internal/domain"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/render"
 )
@@ -71,6 +72,13 @@ func (rt *Runtime) Emit(resource, action string, data any, p *plan.Plan, err err
 
 func printData(w io.Writer, data any) {
 	switch v := data.(type) {
+	case domain.ClientFixedIPReservation:
+		fmt.Fprintf(w, "client_id: %s\n", render.SafeText(v.ClientID))
+		fmt.Fprintf(w, "mac: %s\n", render.SafeText(v.MAC))
+		fmt.Fprintf(w, "name: %s\n", render.SafeText(v.Name))
+		fmt.Fprintf(w, "network_id: %s\n", render.SafeText(v.NetworkID))
+		fmt.Fprintf(w, "fixed_ip_enabled: %t\n", v.FixedIPEnabled)
+		fmt.Fprintf(w, "fixed_ip: %s\n", render.SafeText(v.FixedIP))
 	case map[string]any:
 		keys := make([]string, 0, len(v))
 		for k := range v {

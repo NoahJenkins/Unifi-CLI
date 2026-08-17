@@ -14,6 +14,7 @@ func TestTask7MutationRiskTableIsExactAndExperimental(t *testing.T) {
 		"network create": plan.Routine, "wlan create": plan.Routine,
 		"wlan update": plan.Routine, "wlan enable": plan.Routine, "wlan disable": plan.Routine,
 		"device restart": plan.HighImpact, "device upgrade": plan.HighImpact,
+		"client fixed-ip set": plan.HighImpact, "client fixed-ip clear": plan.HighImpact,
 		"network update": plan.HighImpact, "port update": plan.HighImpact, "dns resolvers set": plan.HighImpact,
 		"device forget": plan.Destructive, "network delete": plan.Destructive, "wlan delete": plan.Destructive,
 	}

@@ -141,7 +141,7 @@ requires `--experimental`.
 | Network and WiFi writes | Experimental official | Network CRUD; WLAN CRUD, enable, and disable |
 | Device lifecycle writes | Experimental official | `device restart`, `device adopt`, `device forget` |
 | Firewall policy writes | Experimental official | Policy create, update, delete, and atomic reorder |
-| Legacy device/client/port/resolver writes | Experimental legacy | Device rename/locate/upgrade; client reconnect/block/unblock; port update; resolver set |
+| Legacy device/client/port/resolver writes | Experimental legacy | Device rename/locate/upgrade; client reconnect/block/unblock and fixed-IP set/clear; port update; resolver set |
 
 The legacy-experimental rows are deliberately isolated compatibility paths;
 they are not described as stable official API support. There are no stable
@@ -174,7 +174,7 @@ an ambiguous write.
 | `routine` | Experimental official | `device adopt`; `network create`; `wlan create/update/enable/disable` | `--experimental --yes` |
 | `routine` | Experimental legacy | `device rename/locate`; `client reconnect/block/unblock` | `--experimental --yes` |
 | `high_impact` | Experimental official | `device restart`; `network update`; `firewall create/update/reorder` | `--experimental --force --yes` |
-| `high_impact` | Experimental legacy | `device upgrade`; `port update`; `dns resolvers set` | `--experimental --force --yes` |
+| `high_impact` | Experimental legacy | `device upgrade`; `client fixed-ip set/clear`; `port update`; `dns resolvers set` | `--experimental --force --yes` |
 | `destructive` | Stable official | `dns delete` | `--force --yes` |
 | `destructive` | Experimental official | `device forget`; `network delete`; `wlan delete`; `firewall delete` | `--experimental --force --yes` |
 
@@ -221,6 +221,34 @@ document:
   conflict-detection fields;
 - updates cannot transition between management variants because the CLI cannot
   construct every required target-mode field.
+
+### Client fixed-IP reservations
+
+Fixed-IP reservations use the legacy local client configuration endpoint
+because the official integration API does not expose this write. The commands
+operate only on currently connected clients:
+
+```bash
+# Plan only
+unifi client fixed-ip set Laptop 192.168.1.50
+
+# Experimental high-impact apply
+unifi client fixed-ip set Laptop 192.168.1.50 --experimental --force --yes
+
+# Disable the reservation; this does not reconnect the client
+unifi client fixed-ip clear Laptop --experimental --force --yes
+```
+
+The CLI infers the client's current network. Set requires DHCP to be enabled
+and a usable IPv4 address inside that network's subnet. It rejects the network,
+broadcast, and gateway addresses, another enabled reservation, and an address
+currently used by another connected client. It does not require the address to
+be inside the dynamic DHCP pool.
+
+Set and clear verify the stored controller configuration after one write and
+do not retry ambiguous writes. Success does not mean the client renewed its
+DHCP lease or changed its active address. Use the separate experimental
+`client reconnect` action when an explicit reconnect is appropriate.
 
 ### WiFi
 

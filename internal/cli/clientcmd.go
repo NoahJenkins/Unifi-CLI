@@ -19,9 +19,36 @@ func newClientCmd() *cobra.Command {
 	cmd.AddCommand(
 		newClientListCmd(),
 		newClientGetCmd(),
+		newClientFixedIPCmd(),
 		newClientReconnectCmd(),
 		newClientBlockCmd(),
 		newClientUnblockCmd(),
+	)
+	return cmd
+}
+
+func newClientFixedIPCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "fixed-ip",
+		Short: "Manage a connected client's fixed-IP reservation",
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "set <id> <ipv4>",
+			Short: "Set a fixed-IP reservation for a connected client",
+			Args:  cobra.ExactArgs(2),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runClientFixedIPMutation("set", args[0], args[1])
+			},
+		},
+		&cobra.Command{
+			Use:   "clear <id>",
+			Short: "Clear a connected client's fixed-IP reservation",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runClientFixedIPMutation("clear", args[0], "")
+			},
+		},
 	)
 	return cmd
 }
@@ -194,6 +221,52 @@ func runClientMutation(action, id string) error {
 				return svc.ApplyUnblockPrepared(ctx, target, target.ID())
 			default:
 				return nil, fmt.Errorf("unknown action %s", action)
+			}
+		},
+	)
+	return emittedExit(code)
+}
+
+func runClientFixedIPMutation(action, id, fixedIP string) error {
+	actionName := "fixed-ip " + action
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("client", actionName, err)
+	}
+	svc := domain.NewClientFixedIPService(rt.Client)
+	ctx := context.Background()
+	build := func(query string) (plan.Plan, domain.ClientFixedIPSnapshot, error) {
+		switch action {
+		case "set":
+			return svc.Set(ctx, query, fixedIP)
+		case "clear":
+			return svc.Clear(ctx, query)
+		default:
+			return plan.Plan{}, domain.ClientFixedIPSnapshot{}, fmt.Errorf("unknown fixed-IP action %s", action)
+		}
+	}
+
+	code := RunPreparedMutation(rt, "client", actionName,
+		func() (plan.PreparedMutation, error) {
+			p, snapshot, err := build(id)
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			risk, experimental := task7MutationPolicy("client", actionName)
+			return plan.Targeted(p, snapshot.ClientID, snapshot, risk, experimental)
+		},
+		func(target plan.Target) (any, error) {
+			_, snapshot, err := build(target.ID())
+			return snapshot, err
+		},
+		func(target plan.Target) (any, error) {
+			switch action {
+			case "set":
+				return svc.ApplySetPrepared(ctx, target, target.ID(), fixedIP)
+			case "clear":
+				return svc.ApplyClearPrepared(ctx, target, target.ID())
+			default:
+				return nil, fmt.Errorf("unknown fixed-IP action %s", action)
 			}
 		},
 	)

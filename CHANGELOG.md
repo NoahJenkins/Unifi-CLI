@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Experimental high-impact `client fixed-ip set` and `client fixed-ip clear`
+  commands for currently connected clients. The legacy local write path uses
+  plan/apply gates, subnet and conflict validation, immutable target checks,
+  one non-retried write, and controller-state verification. It does not renew
+  the DHCP lease or reconnect the client.
+
 ## [1.0.0-rc.1] - 2026-08-07
 
 ### Added

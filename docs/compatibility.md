@@ -36,7 +36,7 @@ used to derive synthetic fixtures and validation bounds.
 | Site/device/client/network/WiFi/port/firewall/DNS/resolver/health reads | Stable official local integration API; health combines official application info with adopted-device status |
 | DNS A-record create/update/delete | Stable official local integration API |
 | Network/WiFi CRUD, restart/adopt/forget, firewall policy writes | Experimental official local integration API |
-| Rename/locate/upgrade, client actions, port update, resolver set | Experimental legacy local compatibility paths |
+| Rename/locate/upgrade, client actions and connected-client fixed-IP set/clear, port update, resolver set | Experimental legacy local compatibility paths |
 
 Reads preserve the schema-v1 CLI contract rather than exposing raw upstream
 documents. Official collection pages are validated strictly. Required detail
@@ -56,6 +56,10 @@ fails the entire command when any required detail fails.
 - Firewall uses modern zones/policies and complete atomic ordering; classic
   rulesets and partial/per-policy reorder are unsupported.
 - Accepted action output does not claim asynchronous completion.
+- Fixed-IP set/clear supports currently connected clients only, infers the
+  current network, and verifies stored reservation state. It does not create
+  never-seen clients, select another network, renew DHCP leases, or reconnect a
+  client.
 
 ## Reporting a compatibility issue
 
