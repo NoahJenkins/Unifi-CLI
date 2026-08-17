@@ -118,6 +118,10 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       main commit. Confirm the workflow publishes that exact verified draft.
 - [ ] Verify downloaded release artifacts and
       `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.2`.
+- [ ] Confirm the tagged source install reports `v1.0.0-rc.2` while `commit`
+      and `build_date` remain `unknown`. Confirm verified archives report
+      authoritative full metadata and have matching checksums, CycloneDX SBOMs,
+      and provenance.
 - [ ] If every RC.2 gate passes, create account-controlled `v1.0.0` on the same unchanged
       source commit. Verify `prerelease=false`, stable notes, installations,
       checksums, SBOMs, provenance, and final remote tag/rule state.

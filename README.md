@@ -43,6 +43,9 @@ go build -o dist/unifi ./cmd/unifi
 
 Do not treat a locally built `dev` version as a published release. Release builds
 populate the version, commit, and build date through linker metadata.
+Tagged `go install` builds report the tag version, but their `commit` and
+`build_date` remain `unknown`. Use a verified release archive when you need
+authoritative full build metadata, checksums, CycloneDX SBOMs, and provenance.
 
 ## Quick start
 
