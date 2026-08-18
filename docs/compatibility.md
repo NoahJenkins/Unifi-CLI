@@ -26,6 +26,11 @@ resolver, firewall, or fixed-IP mutation was run. The controller's self-signed
 certificate required the documented explicit `insecure: true` compatibility
 setting for this local test; verified TLS remains the default.
 
+Post-publication RC.2 installation verification found that tagged source
+installs reported `dev` only from the short root `--version` flag. RC.3 fixes
+that build-information path. It does not change controller API behavior or the
+live qualification conclusions above.
+
 The schema target is Ubiquiti's [UniFi Network 10.4.57 API
 reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
 also exposes an [OpenAPI document](https://developer.ui.com/network/v10.4.57/openapi.json)

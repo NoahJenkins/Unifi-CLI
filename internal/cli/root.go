@@ -23,11 +23,15 @@ var (
 )
 
 func NewRoot() *cobra.Command {
+	return newRoot(buildinfo.Current())
+}
+
+func newRoot(info buildinfo.Info) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "unifi",
 		Short:         "Manage a UniFi network via the local controller API",
 		Long:          "Manage a UniFi network via the local controller API.\n\n" + unofficialProjectDisclaimer,
-		Version:       buildinfo.Version,
+		Version:       info.Version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
