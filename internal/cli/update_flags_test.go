@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/spf13/cobra"
 )
 
 func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
@@ -13,8 +14,17 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 		typeOf reflect.Type
 		fields []string
 	}{
-		{name: "network", typeOf: reflect.TypeOf(domain.NetworkInput{}), fields: []string{"SetName", "SetPurpose", "SetSubnet", "SetDomainName", "ClearDomainName"}},
-		{name: "wlan", typeOf: reflect.TypeOf(domain.WlanInput{}), fields: []string{"SetName", "SetSecurity", "SetNetwork", "SetPassword", "SetBand"}},
+		{name: "network", typeOf: reflect.TypeOf(domain.NetworkInput{}), fields: []string{
+			"SetName", "SetPurpose", "SetEnabled", "SetDeviceID", "SetSubnet", "SetDHCPMode",
+			"SetDHCPRangeStart", "SetDHCPRangeStop", "SetDHCPLeaseTimeSeconds", "SetDHCPConflictDetectionEnabled",
+			"SetDHCPRelayServerIPAddresses", "SetDNSServerIPAddresses", "SetDomainName", "ClearDomainName",
+		}},
+		{name: "wlan", typeOf: reflect.TypeOf(domain.WlanInput{}), fields: []string{
+			"SetName", "SetSecurity", "SetNetwork", "SetPassword", "SetBand", "SetPMFMode",
+			"SetSAEAnticloggingThresholdSeconds", "SetSAESyncTimeSeconds", "SetFastRoamingEnabled",
+			"SetWPA3FastRoamingEnabled", "SetRadiusProfileID", "SetRadiusNASIDSource", "SetRadiusNASID",
+			"SetCOAEnabled", "SetWPA3SecurityMode",
+		}},
 		{name: "port", typeOf: reflect.TypeOf(domain.PortInput{}), fields: []string{"SetName", "ClearName", "SetProfile"}},
 		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled"}},
 	}
@@ -30,6 +40,20 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 
 	if newNetworkUpdateCmd().Flags().Lookup("clear-domain-name") == nil {
 		t.Error("network update is missing --clear-domain-name")
+	}
+	for _, command := range []*cobra.Command{newNetworkCreateCmd(), newNetworkUpdateCmd()} {
+		for _, flag := range []string{"device", "enabled", "dhcp-mode", "dhcp-range-start", "dhcp-range-end", "dhcp-lease-seconds", "dhcp-conflict-detection", "dhcp-relay-server", "dns-server", "domain-name"} {
+			if command.Flags().Lookup(flag) == nil {
+				t.Errorf("%s is missing --%s", command.CommandPath(), flag)
+			}
+		}
+	}
+	for _, command := range []*cobra.Command{newWlanCreateCmd(), newWlanUpdateCmd()} {
+		for _, flag := range []string{"pmf-mode", "sae-anticlogging-seconds", "sae-sync-seconds", "fast-roaming", "wpa3-fast-roaming", "radius-profile", "radius-nas-id-source", "radius-nas-id", "coa", "wpa3-security-mode"} {
+			if command.Flags().Lookup(flag) == nil {
+				t.Errorf("%s is missing --%s", command.CommandPath(), flag)
+			}
+		}
 	}
 	if newPortUpdateCmd().Flags().Lookup("clear-name") == nil {
 		t.Error("port update is missing --clear-name")

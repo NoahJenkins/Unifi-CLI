@@ -1,0 +1,21 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "20000000-0000-4000-8000-000000000002",
+      "name": "Core",
+      "peers": [
+        {
+          "deviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+          "linkPortIdxs": [49, 50],
+          "role": "TOP"
+        }
+      ],
+      "lags": [],
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

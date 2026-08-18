@@ -1,6 +1,7 @@
 # Maintainer release checklist
 
-This checklist is for Task 9 delivery of `v1.0.0-rc.1`. Documentation work must
+This checklist covers `v1.0.0-rc.2` qualification and unchanged-source
+promotion to `v1.0.0`. Documentation work must
 not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
 ## Pre-merge
@@ -12,6 +13,11 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       CLI help, and RC release notes.
 - [ ] Run formatting, vet, full unit, race, coverage, vulnerability, link,
       Markdown link/command, help, version, and schema checks.
+- [ ] Run every fuzz target for 30 seconds and run
+      `UNIFI_RELEASE_HOST=1 ./scripts/check-performance.sh` on the designated
+      darwin/arm64 host. Record the three-sample medians in the RC.2 notes.
+- [ ] Run the native keyring round trip on macOS, Windows, and Linux Secret
+      Service. Confirm each unique synthetic entry was deleted.
 - [ ] Run `go test . -run Release -count=1` to lint the GoReleaser and release
       workflow contract, then `go run ./cmd/release-smoke --all` to cross-build
       and structurally inspect the exact six release targets. Non-native targets
@@ -21,7 +27,7 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       claim.
 - [ ] Review [Compatibility](../compatibility.md),
       [SECURITY.md](../../SECURITY.md), and the [RC release
-      notes](../releases/v1.0.0-rc.1.md).
+      notes](../releases/v1.0.0-rc.2.md).
 
 ## Release gates
 
@@ -84,29 +90,45 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       all reported SHA-1/SHA-256 values, and an exact library/version inventory
       derived from each independently built trusted binary. Reject unrelated
       file claims and setuid, setgid, and sticky archive entries.
-- [ ] Run the authenticated read-only live suite with verified TLS, or record
+- [x] Run the authenticated read-only live suite with verified TLS, or record
       the explicit `insecure: true` compatibility exception when the authorized
       local controller has a self-signed certificate.
-- [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
+- [x] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.
-- [ ] Run only the approved isolated DNS A-record lifecycle on the authorized
-      controller and verify cleanup.
-- [ ] Do not run non-DNS mutations unless a separate dedicated sacrificial
+- [x] After separate explicit approval, run disabled and uniquely named
+      lifecycles for A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain DNS
+      policies. Capture every created ID, delete only those IDs, and prove the
+      exact baseline is restored.
+- [x] Do not run non-DNS mutations unless a separate dedicated sacrificial
       controller with disposable configuration is available and explicitly
       approved. Never use a production-like controller.
 
 ## Publish and post-merge
 
+- [ ] Confirm the release uses the authenticated NoahJenkins GitHub account and
+      no release signing key. Record that this is account-controlled, not a
+      cryptographically signed or independently approved tag.
 - [ ] Merge the reviewed PR after hosted checks.
-- [ ] Tag the unchanged merge commit `v1.0.0-rc.1`; do not create `v1.0.0`.
-      Confirm the workflow publishes that exact verified draft and no other
-      release.
+- [ ] Verify the account-only `v*` ruleset blocks tag creation, update,
+      deletion, and non-fast-forward changes except for the NoahJenkins
+      account.
+- [ ] Verify the protected `release` environment requires the configured
+      manual approval and that only the publisher job has write authority.
+- [ ] Create and verify the account-controlled `v1.0.0-rc.2` tag on the unchanged protected
+      main commit. Confirm the workflow publishes that exact verified draft.
 - [ ] Verify downloaded release artifacts and
-      `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.1`.
+      `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.2`.
+- [ ] Confirm the tagged source install reports `v1.0.0-rc.2` while `commit`
+      and `build_date` remain `unknown`. Confirm verified archives report
+      authoritative full metadata and have matching checksums, CycloneDX SBOMs,
+      and provenance.
+- [ ] If every RC.2 gate passes, create account-controlled `v1.0.0` on the same unchanged
+      source commit. Verify `prerelease=false`, stable notes, installations,
+      checksums, SBOMs, provenance, and final remote tag/rule state.
 - [ ] Update compatibility/release notes only with evidence actually produced.
 - [ ] Set the GitHub repository description to this exact text:
 
   `Unofficial CLI for safely managing local UniFi Network controllers. Not affiliated with or endorsed by Ubiquiti.`
 
-- [ ] Recheck the GitHub description after saving it. This is a Task 9
-      post-merge GitHub mutation and must not be performed during Task 8.
+- [ ] Recheck the GitHub description after saving it. This provider mutation
+      must not happen during local candidate verification.

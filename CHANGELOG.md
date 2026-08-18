@@ -4,15 +4,50 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0-rc.2] - 2026-08-17
 
 ### Added
 
+- Stable official reads for switching LAGs, MC-LAG domains, switch stacks,
+  RADIUS profiles, and traffic matching lists.
+- Stable official CRUD for all seven DNS policy types.
+- Typed Gateway, Switch, and Unmanaged network management, explicit DHCP
+  server/relay configuration, and complete WPA3 and enterprise WiFi security.
+- Experimental custom firewall-zone and traffic-list CRUD plus relative policy
+  moves with complete-order drift protection.
 - Experimental high-impact `client fixed-ip set` and `client fixed-ip clear`
   commands for currently connected clients. The legacy local write path uses
   plan/apply gates, subnet and conflict validation, immutable target checks,
   one non-retried write, and controller-state verification. It does not renew
   the DHCP lease or reconnect the client.
+- Checked-in JSON Schema 2020-12, full internal coverage floors, fuzz targets,
+  release-host performance budgets, documentation contracts, and native
+  keyring qualification on all supported operating systems.
+
+### Security
+
+- Configuration rejects unknown YAML fields and trailing documents.
+- A stale saved-key 401 can no longer delete persisted or rotated credentials.
+- Release publication derives stable/prerelease metadata from the tag, requires
+  protected-main ancestry, and limits write authority to the protected release
+  job.
+
+### Changed
+
+- The compatibility floor and fixture target are UniFi Network 10.4.57.
+- Go is pinned to 1.26.6, pflag to 1.0.10, Syft to 1.51.0, and the schema test
+  validator to jsonschema/v6 6.0.3.
+- Non-DNS writes remain experimental because no disposable sacrificial
+  controller has qualified them.
+
+### Fixed
+
+- SRV policy names now use the official base-domain form and reject duplicated
+  `_service._protocol` prefixes before contacting the controller.
+- The final candidate passed the guarded read-only suite and all seven disabled
+  DNS policy lifecycles on UniFi Network 10.5.67 with exact cleanup.
+
+See [`v1.0.0-rc.2` release notes](docs/releases/v1.0.0-rc.2.md).
 
 ## [1.0.0-rc.1] - 2026-08-07
 

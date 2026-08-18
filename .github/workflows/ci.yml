@@ -66,3 +66,73 @@ jobs:
 
       - name: scan reachable Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/config
+            target: FuzzStrictYAMLConfiguration
+          - package: ./internal/client
+            target: FuzzOfficialPaginationJSON
+          - package: ./internal/client
+            target: FuzzOfficialPathAndFilterEscaping
+          - package: ./cmd/release-smoke
+            target: FuzzReleaseBundleExtraction
+          - package: ./cmd/release-smoke
+            target: FuzzChecksumManifest
+          - package: ./cmd/release-smoke
+            target: FuzzSBOMSnapshotParsing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: fuzz for 30 seconds
+        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=30s
+
+  native-keyring:
+    name: native keyring (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: install Linux Secret Service
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring
+
+      - name: test native credential store
+        if: runner.os != 'Linux'
+        env:
+          UNIFI_NATIVE_KEYRING_IT: "1"
+        run: go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1
+
+      - name: test Linux Secret Service
+        if: runner.os == 'Linux'
+        shell: dbus-run-session -- bash --noprofile --norc -eo pipefail {0}
+        run: |
+          mkdir -p "$HOME/.cache" "$HOME/.local/share/keyrings"
+          chmod 700 "$HOME/.local" "$HOME/.local/share/keyrings"
+          printf '%s\n' 'unifi-cli-ci' | gnome-keyring-daemon --unlock
+          UNIFI_NATIVE_KEYRING_IT=1 go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1

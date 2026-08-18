@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
@@ -57,7 +59,15 @@ func Load(path string) (Config, error) {
 				return Config{}, legacyCredentialError(name)
 			}
 		}
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&cfg); err != nil {
+			return Config{}, fmt.Errorf("parse config: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err == nil {
+			return Config{}, fmt.Errorf("parse config: multiple YAML documents are not allowed")
+		} else if err != io.EOF {
 			return Config{}, fmt.Errorf("parse config: %w", err)
 		}
 	} else if !os.IsNotExist(err) {

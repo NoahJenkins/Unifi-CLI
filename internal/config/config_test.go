@@ -31,6 +31,49 @@ func TestLoadFromFileAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "site typo", field: "sitee"},
+		{name: "safe mode typo", field: "safe_mod"},
+		{name: "insecure typo", field: "insecur"},
+		{name: "host typo", field: "hosst"},
+		{name: "CA certificate typo", field: "ca_certificate"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			contents := "host: controller.example\n" + tt.field + ": value\n"
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := config.Load(path)
+			if err == nil {
+				t.Fatalf("Load unexpectedly accepted unknown field %q", tt.field)
+			}
+			if !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("error %q does not identify unknown field %q", err, tt.field)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("host: controller.example\n---\nhost: other.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := config.Load(path)
+	if err == nil || !strings.Contains(err.Error(), "multiple YAML documents") {
+		t.Fatalf("Load error = %v, want multiple-document failure", err)
+	}
+}
+
 func TestLoadRejectsOversizedAndNonRegularConfiguration(t *testing.T) {
 	t.Run("oversized regular file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.yaml")

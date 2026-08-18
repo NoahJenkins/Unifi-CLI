@@ -3,7 +3,6 @@ package client_test
 import (
 	"context"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -69,7 +68,7 @@ func (s *memoryAPIKeyStore) Delete(controller string) error {
 	return nil
 }
 
-func TestConcurrentSavedAPIKey401InvalidationIsSingleFlight(t *testing.T) {
+func TestConcurrentSavedAPIKey401InvalidationDoesNotDeletePersistedKey(t *testing.T) {
 	t.Setenv("UNIFI_API_KEY", "")
 	const workers = 4
 	arrived := make(chan string, workers)
@@ -113,8 +112,8 @@ func TestConcurrentSavedAPIKey401InvalidationIsSingleFlight(t *testing.T) {
 	store.mu.Lock()
 	deletes := store.deleteCalls
 	store.mu.Unlock()
-	if deletes != 1 {
-		t.Fatalf("saved key delete calls = %d, want 1", deletes)
+	if deletes != 0 {
+		t.Fatalf("saved key delete calls = %d, want 0", deletes)
 	}
 }
 
@@ -248,7 +247,7 @@ func TestMissingAPIKeyReturnsNotAuthenticatedBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestSavedAPIKey401DeletesOnlyThatControllerAndHintsLogin(t *testing.T) {
+func TestSavedAPIKey401PreservesPersistedKeyAndHintsLogin(t *testing.T) {
 	t.Setenv("UNIFI_API_KEY", "")
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -273,43 +272,58 @@ func TestSavedAPIKey401DeletesOnlyThatControllerAndHintsLogin(t *testing.T) {
 	if got := apperr.As(err).Hint; got != "run 'unifi login' to save an API key" {
 		t.Fatalf("hint = %q", got)
 	}
-	if store.deleteCalls != 1 || len(store.deletedControllers) != 1 || store.deletedControllers[0] != cfg.BaseURL() {
-		t.Fatalf("deleted controllers = %q, want only %q", store.deletedControllers, cfg.BaseURL())
+	if store.deleteCalls != 0 || len(store.deletedControllers) != 0 {
+		t.Fatalf("deleted controllers = %q, want none", store.deletedControllers)
 	}
-	if _, found := store.keys[cfg.BaseURL()]; found {
-		t.Fatal("expired controller API key was not deleted")
+	if got := store.keys[cfg.BaseURL()]; got != "expired-key" {
+		t.Fatalf("expired controller API key = %q, want persisted key unchanged", got)
 	}
 	if got := store.keys[otherController]; got != "other-key" {
 		t.Fatalf("other controller API key = %q, want other-key", got)
 	}
 }
 
-func TestSavedAPIKey401PreservesSafeDeleteFailureCause(t *testing.T) {
+func TestDelayedSavedAPIKey401CannotDeleteRotatedPersistedKey(t *testing.T) {
 	t.Setenv("UNIFI_API_KEY", "")
+	arrived := make(chan struct{})
+	release := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 
 	cfg := testConfig(t, srv)
-	deleteErr := errors.New("keyring path contains secret=do-not-render")
-	store := &memoryAPIKeyStore{
-		keys:      map[string]string{cfg.BaseURL(): "expired-key"},
-		deleteErr: deleteErr,
-	}
+	store := &memoryAPIKeyStore{keys: map[string]string{cfg.BaseURL(): "stale-key"}}
 	c, err := client.NewWithStore(cfg, store)
 	if err != nil {
 		t.Fatalf("NewWithStore: %v", err)
 	}
-	err = c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.Do(context.Background(), http.MethodGet, client.PathSelfSites, nil, nil)
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale-key request did not reach controller")
+	}
+	if err := store.Save(cfg.BaseURL(), "rotated-key", false); err != nil {
+		t.Fatalf("rotate persisted key: %v", err)
+	}
+	close(release)
+	err = <-errCh
 	if !apperr.Is(err, apperr.AuthFailed) {
 		t.Fatalf("err = %v, want auth_failed", err)
 	}
-	if !errors.Is(err, deleteErr) {
-		t.Fatalf("delete failure was not preserved as cause: %v", err)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := store.keys[cfg.BaseURL()]; got != "rotated-key" {
+		t.Fatalf("persisted key = %q, want rotated-key", got)
 	}
-	if strings.Contains(err.Error(), "secret=do-not-render") {
-		t.Fatalf("delete failure rendered sensitive detail: %v", err)
+	if store.deleteCalls != 0 {
+		t.Fatalf("saved key delete calls = %d, want 0", store.deleteCalls)
 	}
 }
 

@@ -1,0 +1,17 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "30000000-0000-4000-8000-000000000003",
+      "name": "Stack A",
+      "members": [
+        {"deviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"}
+      ],
+      "lags": [],
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

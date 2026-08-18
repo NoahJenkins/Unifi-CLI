@@ -141,14 +141,37 @@ type DNSResolver struct {
 
 // DNSInput is create/update payload for local records.
 type DNSInput struct {
-	Name       string
-	SetName    bool
-	IP         string
-	SetIP      bool
-	Enabled    bool
-	SetEnabled bool // when true, Enabled is applied; otherwise preserve existing
-	TTLSeconds int
-	SetTTL     bool
+	Type                string
+	Name                string
+	SetName             bool
+	IP                  string
+	SetIP               bool
+	IPv6Address         string
+	SetIPv6Address      bool
+	TargetDomain        string
+	SetTargetDomain     bool
+	MailServerDomain    string
+	SetMailServerDomain bool
+	Text                string
+	SetText             bool
+	ServerDomain        string
+	SetServerDomain     bool
+	ServerIP            string
+	SetServerIP         bool
+	Priority            int
+	SetPriority         bool
+	Service             string
+	SetService          bool
+	Protocol            string
+	SetProtocol         bool
+	Port                int
+	SetPort             bool
+	Weight              int
+	SetWeight           bool
+	Enabled             bool
+	SetEnabled          bool // when true, Enabled is applied; otherwise preserve existing
+	TTLSeconds          int
+	SetTTL              bool
 }
 
 type DNSService struct {
@@ -188,34 +211,30 @@ func (s *DNSService) Get(ctx context.Context, id string) (DNSRecord, error) {
 
 func (s *DNSService) Create(ctx context.Context, in DNSInput) (plan.Plan, error) {
 	_ = ctx
-	if err := validateDNSCreateInput(in); err != nil {
+	expected, err := expectedDNSCreateRecord(in)
+	if err != nil {
 		return plan.Plan{}, err
 	}
-	enabled := in.Enabled
-	if !in.SetEnabled {
-		enabled = true
-	}
-	ttlSeconds := effectiveDNSTTL(in)
 	p := plan.Create("dns", in.Name,
-		fmt.Sprintf("create dns record %s → %s", in.Name, in.IP),
-		dnsRecordSnapshot(DNSRecord{Type: "A_RECORD", Domain: in.Name, Name: in.Name, IPv4Address: in.IP, IP: in.IP, Enabled: enabled, TTLSeconds: ttlSeconds}),
+		fmt.Sprintf("create %s DNS policy %s", expected.Type, in.Name),
+		dnsRecordSnapshot(expected),
 	)
 	return p, nil
 }
 
 func (s *DNSService) ApplyCreate(ctx context.Context, in DNSInput) (DNSRecord, error) {
-	if err := validateDNSCreateInput(in); err != nil {
+	expected, err := expectedDNSCreateRecord(in)
+	if err != nil {
 		return DNSRecord{}, err
 	}
 	path, err := s.api.IntegrationSitePath(ctx, "dns", "policies")
 	if err != nil {
 		return DNSRecord{}, err
 	}
-	if !in.SetEnabled {
-		in.Enabled = true
-		in.SetEnabled = true
+	body, err := dnsWritableBody(expected)
+	if err != nil {
+		return DNSRecord{}, err
 	}
-	body := dnsInputBody(in)
 	var raw map[string]any
 	if err := s.api.Do(ctx, http.MethodPost, path, body, &raw); err != nil {
 		return DNSRecord{}, mapDNSEndpointErr(err, "create dns record")
@@ -224,18 +243,19 @@ func (s *DNSService) ApplyCreate(ctx context.Context, in DNSInput) (DNSRecord, e
 	if id == "" {
 		return DNSRecord{}, apperr.New(apperr.Internal, "controller did not return an ID for the created DNS policy")
 	}
+	expected.ID = id
 	created, err := s.getByID(ctx, id)
 	if err != nil {
 		return DNSRecord{}, verificationError("created DNS policy could not be verified", err)
 	}
-	if !dnsCreateMatches(created, in) {
+	if !dnsRecordsEqual(created, expected) {
 		return DNSRecord{}, apperr.New(apperr.Conflict, "created DNS policy does not match the requested fields")
 	}
 	return created, nil
 }
 
 func (s *DNSService) Update(ctx context.Context, id string, in DNSInput) (plan.Plan, DNSRecord, error) {
-	rec, before, after, err := s.prepareUpdate(ctx, id, in)
+	rec, _, before, after, err := s.prepareUpdate(ctx, id, in)
 	if err != nil {
 		return plan.Plan{}, DNSRecord{}, err
 	}
@@ -256,7 +276,7 @@ func (s *DNSService) ApplyUpdatePrepared(ctx context.Context, target plan.Target
 }
 
 func (s *DNSService) applyUpdate(ctx context.Context, id string, in DNSInput, target *plan.Target) (DNSRecord, error) {
-	rec, before, after, err := s.prepareUpdate(ctx, id, in)
+	rec, expected, before, after, err := s.prepareUpdate(ctx, id, in)
 	if err != nil {
 		return DNSRecord{}, err
 	}
@@ -270,7 +290,10 @@ func (s *DNSService) applyUpdate(ctx context.Context, id string, in DNSInput, ta
 	if err != nil {
 		return DNSRecord{}, err
 	}
-	body := dnsInputBodyMerged(rec, in)
+	body, err := dnsWritableBody(expected)
+	if err != nil {
+		return DNSRecord{}, err
+	}
 	if err := s.api.Do(ctx, http.MethodPut, path, body, nil); err != nil {
 		return DNSRecord{}, mapDNSEndpointErr(err, "update dns record")
 	}
@@ -278,29 +301,30 @@ func (s *DNSService) applyUpdate(ctx context.Context, id string, in DNSInput, ta
 	if err != nil {
 		return DNSRecord{}, verificationError("updated DNS policy could not be verified", err)
 	}
-	if !dnsUpdateMatches(updated, in) {
-		return DNSRecord{}, apperr.New(apperr.Conflict, "updated DNS policy does not match the requested fields")
+	if !dnsRecordsEqual(updated, expected) {
+		return DNSRecord{}, apperr.New(apperr.Conflict, "updated DNS policy does not match the complete requested state")
 	}
 	return updated, nil
 }
 
-func (s *DNSService) prepareUpdate(ctx context.Context, id string, in DNSInput) (DNSRecord, map[string]any, map[string]any, error) {
+func (s *DNSService) prepareUpdate(ctx context.Context, id string, in DNSInput) (DNSRecord, DNSRecord, map[string]any, map[string]any, error) {
 	if err := validateDNSUpdateInput(in); err != nil {
-		return DNSRecord{}, nil, nil, err
+		return DNSRecord{}, DNSRecord{}, nil, nil, err
 	}
 	rec, err := s.Get(ctx, id)
 	if err != nil {
-		return DNSRecord{}, nil, nil, err
+		return DNSRecord{}, DNSRecord{}, nil, nil, err
 	}
-	if err := requireARecord(rec, "update"); err != nil {
-		return DNSRecord{}, nil, nil, err
+	expected, err := expectedDNSRecord(rec, in)
+	if err != nil {
+		return DNSRecord{}, DNSRecord{}, nil, nil, err
 	}
 	before := dnsRecordSnapshot(rec)
-	after := mergeDNSAfter(rec, in)
+	after := dnsRecordSnapshot(expected)
 	if reflect.DeepEqual(before, after) {
-		return DNSRecord{}, nil, nil, apperr.New(apperr.ValidationFailed, "DNS update does not change the current policy")
+		return DNSRecord{}, DNSRecord{}, nil, nil, apperr.New(apperr.ValidationFailed, "DNS update does not change the current policy")
 	}
-	return rec, before, after, nil
+	return rec, expected, before, after, nil
 }
 
 func (s *DNSService) Delete(ctx context.Context, id string) (plan.Plan, DNSRecord, error) {
@@ -308,7 +332,7 @@ func (s *DNSService) Delete(ctx context.Context, id string) (plan.Plan, DNSRecor
 	if err != nil {
 		return plan.Plan{}, DNSRecord{}, err
 	}
-	if err := requireARecord(rec, "delete"); err != nil {
+	if err := requireSupportedDNSRecord(rec, "delete"); err != nil {
 		return plan.Plan{}, DNSRecord{}, err
 	}
 	p := plan.Delete("dns", rec.ID, rec.Name,
@@ -331,7 +355,7 @@ func (s *DNSService) applyDelete(ctx context.Context, id string, target *plan.Ta
 	if err != nil {
 		return DNSRecord{}, err
 	}
-	if err := requireARecord(rec, "delete"); err != nil {
+	if err := requireSupportedDNSRecord(rec, "delete"); err != nil {
 		return DNSRecord{}, err
 	}
 	if target != nil {
@@ -357,8 +381,8 @@ func (s *DNSService) applyDelete(ctx context.Context, id string, target *plan.Ta
 		return DNSRecord{}, verificationError("deleted DNS policy name could not be verified", err)
 	}
 	for _, item := range items {
-		if item.Domain == rec.Domain {
-			return DNSRecord{}, apperr.New(apperr.Conflict, "a DNS policy with the deleted exact name still exists")
+		if item.Type == rec.Type && item.Domain == rec.Domain {
+			return DNSRecord{}, apperr.New(apperr.Conflict, "a DNS policy with the deleted type and exact name still exists")
 		}
 	}
 	return rec, nil
@@ -642,80 +666,202 @@ func anyStringSlice(v any) []string {
 	}
 }
 
-func dnsInputBody(in DNSInput) map[string]any {
-	enabled := in.Enabled
-	if !in.SetEnabled {
-		enabled = true
+func expectedDNSCreateRecord(in DNSInput) (DNSRecord, error) {
+	recordType, err := canonicalDNSType(in.Type)
+	if err != nil {
+		return DNSRecord{}, err
 	}
-	body := map[string]any{
-		"enabled":    enabled,
-		"type":       "A_RECORD",
-		"ttlSeconds": effectiveDNSTTL(in),
+	record := DNSRecord{
+		Type:             recordType,
+		Domain:           in.Name,
+		Name:             in.Name,
+		IPv4Address:      in.IP,
+		IP:               in.IP,
+		IPv6Address:      in.IPv6Address,
+		TargetDomain:     in.TargetDomain,
+		MailServerDomain: in.MailServerDomain,
+		Text:             in.Text,
+		ServerDomain:     in.ServerDomain,
+		IPAddress:        in.ServerIP,
+		Priority:         in.Priority,
+		Service:          in.Service,
+		Protocol:         in.Protocol,
+		Port:             in.Port,
+		Weight:           in.Weight,
+		Enabled:          true,
 	}
-	if in.Name != "" {
-		body["domain"] = in.Name
+	if in.SetEnabled {
+		record.Enabled = in.Enabled
 	}
-	if in.IP != "" {
-		body["ipv4Address"] = in.IP
+	if dnsTypeUsesTTL(recordType) {
+		record.TTLSeconds = effectiveDNSTTL(in)
 	}
-	return body
+	if err := validateDNSInputForType(in, recordType, true); err != nil {
+		return DNSRecord{}, err
+	}
+	if err := validateDNSRecord(record); err != nil {
+		return DNSRecord{}, err
+	}
+	return record, nil
 }
 
-func dnsInputBodyMerged(rec DNSRecord, in DNSInput) map[string]any {
-	name := rec.Domain
+func expectedDNSRecord(rec DNSRecord, in DNSInput) (DNSRecord, error) {
+	if err := requireSupportedDNSRecord(rec, "update"); err != nil {
+		return DNSRecord{}, err
+	}
+	if in.Type != "" {
+		requestedType, err := canonicalDNSType(in.Type)
+		if err != nil {
+			return DNSRecord{}, err
+		}
+		if requestedType != rec.Type {
+			return DNSRecord{}, apperr.New(apperr.ValidationFailed, "DNS policy type cannot be changed")
+		}
+	}
+	if err := validateDNSInputForType(in, rec.Type, false); err != nil {
+		return DNSRecord{}, err
+	}
+	expected := rec
 	if inputSetsName(in) {
-		name = in.Name
+		expected.Domain = in.Name
+		expected.Name = in.Name
 	}
-	ip := rec.IPv4Address
-	if inputSetsIP(in) {
-		ip = in.IP
-	}
-	enabled := rec.Enabled
 	if in.SetEnabled {
-		enabled = in.Enabled
+		expected.Enabled = in.Enabled
 	}
-	ttlSeconds := rec.TTLSeconds
 	if inputSetsTTL(in) {
-		ttlSeconds = in.TTLSeconds
+		expected.TTLSeconds = in.TTLSeconds
 	}
-	if ttlSeconds <= 0 {
-		ttlSeconds = defaultDNSTTLSeconds
+	switch rec.Type {
+	case "A_RECORD":
+		if inputSetsIP(in) {
+			expected.IPv4Address, expected.IP = in.IP, in.IP
+		}
+	case "AAAA_RECORD":
+		if inputSetsIPv6(in) {
+			expected.IPv6Address = in.IPv6Address
+		}
+	case "CNAME_RECORD":
+		if inputSetsTargetDomain(in) {
+			expected.TargetDomain = in.TargetDomain
+		}
+	case "MX_RECORD":
+		if inputSetsMailServerDomain(in) {
+			expected.MailServerDomain = in.MailServerDomain
+		}
+		if in.SetPriority {
+			expected.Priority = in.Priority
+		}
+	case "TXT_RECORD":
+		if inputSetsText(in) {
+			expected.Text = in.Text
+		}
+	case "SRV_RECORD":
+		if inputSetsServerDomain(in) {
+			expected.ServerDomain = in.ServerDomain
+		}
+		if in.SetPriority {
+			expected.Priority = in.Priority
+		}
+		if inputSetsService(in) {
+			expected.Service = in.Service
+		}
+		if inputSetsProtocol(in) {
+			expected.Protocol = in.Protocol
+		}
+		if in.SetPort {
+			expected.Port = in.Port
+		}
+		if in.SetWeight {
+			expected.Weight = in.Weight
+		}
+	case "FORWARD_DOMAIN":
+		if inputSetsServerIP(in) {
+			expected.IPAddress = in.ServerIP
+		}
 	}
-	return map[string]any{
-		"type":        "A_RECORD",
-		"domain":      name,
-		"ipv4Address": ip,
-		"enabled":     enabled,
-		"ttlSeconds":  ttlSeconds,
+	if err := validateDNSRecord(expected); err != nil {
+		return DNSRecord{}, apperr.WithCause(
+			apperr.WithHint(
+				apperr.New(apperr.ValidationFailed, "DNS policy contains a value that cannot be preserved safely"),
+				"update the invalid policy in UniFi Network before you retry",
+			),
+			err,
+		)
 	}
+	return expected, nil
+}
+
+func dnsWritableBody(record DNSRecord) (map[string]any, error) {
+	if err := validateDNSRecord(record); err != nil {
+		return nil, err
+	}
+	body := map[string]any{
+		"type":    record.Type,
+		"domain":  record.Domain,
+		"enabled": record.Enabled,
+	}
+	switch record.Type {
+	case "A_RECORD":
+		body["ipv4Address"] = record.IPv4Address
+		body["ttlSeconds"] = record.TTLSeconds
+	case "AAAA_RECORD":
+		body["ipv6Address"] = record.IPv6Address
+		body["ttlSeconds"] = record.TTLSeconds
+	case "CNAME_RECORD":
+		body["targetDomain"] = record.TargetDomain
+		body["ttlSeconds"] = record.TTLSeconds
+	case "MX_RECORD":
+		body["mailServerDomain"] = record.MailServerDomain
+		body["priority"] = record.Priority
+	case "TXT_RECORD":
+		body["text"] = record.Text
+	case "SRV_RECORD":
+		body["serverDomain"] = record.ServerDomain
+		body["priority"] = record.Priority
+		body["service"] = record.Service
+		body["protocol"] = record.Protocol
+		body["port"] = record.Port
+		body["weight"] = record.Weight
+	case "FORWARD_DOMAIN":
+		body["ipAddress"] = record.IPAddress
+	}
+	return body, nil
 }
 
 func dnsRecordSnapshot(r DNSRecord) map[string]any {
-	return map[string]any{
-		"id":          r.ID,
-		"type":        r.Type,
-		"name":        r.Domain,
-		"ip":          r.IPv4Address,
-		"enabled":     r.Enabled,
-		"ttl_seconds": r.TTLSeconds,
+	out := map[string]any{
+		"id":      r.ID,
+		"type":    r.Type,
+		"name":    r.Domain,
+		"enabled": r.Enabled,
 	}
-}
-
-func mergeDNSAfter(r DNSRecord, in DNSInput) map[string]any {
-	after := dnsRecordSnapshot(r)
-	if inputSetsName(in) {
-		after["name"] = in.Name
+	switch r.Type {
+	case "A_RECORD":
+		out["ip"] = r.IPv4Address
+		out["ttl_seconds"] = r.TTLSeconds
+	case "AAAA_RECORD":
+		out["ipv6_address"] = r.IPv6Address
+		out["ttl_seconds"] = r.TTLSeconds
+	case "CNAME_RECORD":
+		out["target_domain"] = r.TargetDomain
+		out["ttl_seconds"] = r.TTLSeconds
+	case "MX_RECORD":
+		out["mail_server_domain"] = r.MailServerDomain
+		out["priority"] = r.Priority
+	case "TXT_RECORD":
+		out["text"] = r.Text
+	case "SRV_RECORD":
+		out["server_domain"] = r.ServerDomain
+		out["priority"] = r.Priority
+		out["service"] = r.Service
+		out["protocol"] = r.Protocol
+		out["port"] = r.Port
+		out["weight"] = r.Weight
+	case "FORWARD_DOMAIN":
+		out["ip_address"] = r.IPAddress
 	}
-	if inputSetsIP(in) {
-		after["ip"] = in.IP
-	}
-	if in.SetEnabled {
-		after["enabled"] = in.Enabled
-	}
-	if inputSetsTTL(in) {
-		after["ttl_seconds"] = in.TTLSeconds
-	}
-	return after
+	return out
 }
 
 func (s *DNSService) getByID(ctx context.Context, id string) (DNSRecord, error) {
@@ -740,49 +886,26 @@ func (s *DNSService) getByID(ctx context.Context, id string) (DNSRecord, error) 
 	return record, nil
 }
 
-func requireARecord(record DNSRecord, operation string) error {
-	if record.Type != "A_RECORD" {
-		return apperr.Newf(apperr.ValidationFailed, "DNS %s supports only A_RECORD policies", operation)
-	}
-	return nil
-}
-
-func validateDNSCreateInput(in DNSInput) error {
-	if err := validateDNSName(in.Name); err != nil {
-		return err
-	}
-	if err := validateDNSIPv4(in.IP); err != nil {
-		return err
-	}
-	if inputSetsTTL(in) && in.TTLSeconds <= 0 {
-		return apperr.New(apperr.ValidationFailed, "DNS TTL must be positive")
+func requireSupportedDNSRecord(record DNSRecord, operation string) error {
+	if !isSupportedDNSType(record.Type) {
+		return apperr.Newf(apperr.ValidationFailed, "DNS %s does not support policy type %q", operation, record.Type)
 	}
 	return nil
 }
 
 func validateDNSUpdateInput(in DNSInput) error {
-	if !inputSetsName(in) && !inputSetsIP(in) && !in.SetEnabled && !inputSetsTTL(in) {
+	if !inputSetsAnyDNSField(in) {
 		return apperr.New(apperr.ValidationFailed, "DNS update requires at least one changed field")
 	}
 	if inputSetsName(in) {
-		if err := validateDNSName(in.Name); err != nil {
-			return err
-		}
-	}
-	if inputSetsIP(in) {
-		if err := validateDNSIPv4(in.IP); err != nil {
-			return err
-		}
-	}
-	if inputSetsTTL(in) && in.TTLSeconds <= 0 {
-		return apperr.New(apperr.ValidationFailed, "DNS TTL must be positive")
+		return validateDNSName(in.Name)
 	}
 	return nil
 }
 
 func validateDNSName(name string) error {
-	if len(name) == 0 || len(name) > 253 {
-		return apperr.New(apperr.ValidationFailed, "DNS name must contain 1 to 253 characters")
+	if len(name) == 0 || len(name) > 127 {
+		return apperr.New(apperr.ValidationFailed, "DNS name must contain 1 to 127 characters")
 	}
 	for _, label := range strings.Split(name, ".") {
 		if len(label) == 0 || len(label) > 63 {
@@ -809,9 +932,214 @@ func validateDNSIPv4(value string) error {
 	return nil
 }
 
-func inputSetsName(in DNSInput) bool { return in.SetName || in.Name != "" }
-func inputSetsIP(in DNSInput) bool   { return in.SetIP || in.IP != "" }
-func inputSetsTTL(in DNSInput) bool  { return in.SetTTL || in.TTLSeconds != 0 }
+func validateDNSIPv6(value string) error {
+	address, err := netip.ParseAddr(value)
+	if err != nil || !address.Is6() {
+		return apperr.New(apperr.ValidationFailed, "DNS address must be a valid IPv6 address")
+	}
+	return nil
+}
+
+func validateDNSIP(value string) error {
+	if _, err := netip.ParseAddr(value); err != nil {
+		return apperr.New(apperr.ValidationFailed, "DNS server address must be a valid IP address")
+	}
+	return nil
+}
+
+func canonicalDNSType(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	switch normalized {
+	case "", "a", "a-record":
+		return "A_RECORD", nil
+	case "aaaa", "aaaa-record":
+		return "AAAA_RECORD", nil
+	case "cname", "cname-record":
+		return "CNAME_RECORD", nil
+	case "mx", "mx-record":
+		return "MX_RECORD", nil
+	case "txt", "txt-record":
+		return "TXT_RECORD", nil
+	case "srv", "srv-record":
+		return "SRV_RECORD", nil
+	case "forward-domain":
+		return "FORWARD_DOMAIN", nil
+	default:
+		return "", apperr.Newf(apperr.ValidationFailed, "unsupported DNS policy type %q", value)
+	}
+}
+
+func isSupportedDNSType(value string) bool {
+	switch value {
+	case "A_RECORD", "AAAA_RECORD", "CNAME_RECORD", "MX_RECORD", "TXT_RECORD", "SRV_RECORD", "FORWARD_DOMAIN":
+		return true
+	default:
+		return false
+	}
+}
+
+func dnsTypeUsesTTL(value string) bool {
+	return value == "A_RECORD" || value == "AAAA_RECORD" || value == "CNAME_RECORD"
+}
+
+func validateDNSInputForType(in DNSInput, recordType string, create bool) error {
+	usesA := inputSetsIP(in)
+	usesAAAA := inputSetsIPv6(in)
+	usesCNAME := inputSetsTargetDomain(in)
+	usesMX := inputSetsMailServerDomain(in) || in.SetPriority || in.Priority != 0
+	usesTXT := inputSetsText(in)
+	usesSRV := inputSetsServerDomain(in) || inputSetsService(in) || inputSetsProtocol(in) || in.SetPort || in.Port != 0 || in.SetWeight || in.Weight != 0
+	usesForward := inputSetsServerIP(in)
+
+	if !dnsTypeUsesTTL(recordType) && inputSetsTTL(in) {
+		return apperr.Newf(apperr.ValidationFailed, "DNS TTL is not writable for %s policies", recordType)
+	}
+	invalid := false
+	switch recordType {
+	case "A_RECORD":
+		invalid = usesAAAA || usesCNAME || usesMX || usesTXT || usesSRV || usesForward
+	case "AAAA_RECORD":
+		invalid = usesA || usesCNAME || usesMX || usesTXT || usesSRV || usesForward
+	case "CNAME_RECORD":
+		invalid = usesA || usesAAAA || usesMX || usesTXT || usesSRV || usesForward
+	case "MX_RECORD":
+		invalid = usesA || usesAAAA || usesCNAME || usesTXT || usesSRV || usesForward
+	case "TXT_RECORD":
+		invalid = usesA || usesAAAA || usesCNAME || usesMX || usesSRV || usesForward
+	case "SRV_RECORD":
+		invalid = usesA || usesAAAA || usesCNAME || inputSetsMailServerDomain(in) || usesTXT || usesForward
+	case "FORWARD_DOMAIN":
+		invalid = usesA || usesAAAA || usesCNAME || usesMX || usesTXT || usesSRV
+	default:
+		return apperr.Newf(apperr.ValidationFailed, "unsupported DNS policy type %q", recordType)
+	}
+	if invalid {
+		return apperr.Newf(apperr.ValidationFailed, "DNS input contains fields that do not apply to %s policies", recordType)
+	}
+	if !create {
+		return nil
+	}
+	switch recordType {
+	case "MX_RECORD":
+		if !in.SetPriority && in.Priority == 0 {
+			return apperr.New(apperr.ValidationFailed, "MX priority is required")
+		}
+	case "SRV_RECORD":
+		if !in.SetPriority && in.Priority == 0 {
+			return apperr.New(apperr.ValidationFailed, "SRV priority is required")
+		}
+		if !in.SetPort && in.Port == 0 {
+			return apperr.New(apperr.ValidationFailed, "SRV port is required")
+		}
+		if !in.SetWeight && in.Weight == 0 {
+			return apperr.New(apperr.ValidationFailed, "SRV weight is required")
+		}
+	}
+	return nil
+}
+
+func validateDNSRecord(record DNSRecord) error {
+	if !isSupportedDNSType(record.Type) {
+		return apperr.Newf(apperr.ValidationFailed, "unsupported DNS policy type %q", record.Type)
+	}
+	if err := validateDNSName(record.Domain); err != nil {
+		return err
+	}
+	switch record.Type {
+	case "A_RECORD":
+		if err := validateDNSIPv4(record.IPv4Address); err != nil {
+			return err
+		}
+		return validateDNSTTL(record.TTLSeconds, 86400)
+	case "AAAA_RECORD":
+		if err := validateDNSIPv6(record.IPv6Address); err != nil {
+			return err
+		}
+		return validateDNSTTL(record.TTLSeconds, 86400)
+	case "CNAME_RECORD":
+		if err := validateDNSName(record.TargetDomain); err != nil {
+			return apperr.New(apperr.ValidationFailed, "CNAME target domain is invalid")
+		}
+		return validateDNSTTL(record.TTLSeconds, 604800)
+	case "MX_RECORD":
+		if err := validateDNSName(record.MailServerDomain); err != nil {
+			return apperr.New(apperr.ValidationFailed, "MX mail server domain is invalid")
+		}
+		return validateDNSUint16("MX priority", record.Priority)
+	case "TXT_RECORD":
+		if len(record.Text) < 1 || len(record.Text) > 1024 {
+			return apperr.New(apperr.ValidationFailed, "DNS TXT text must contain 1 to 1024 characters")
+		}
+	case "SRV_RECORD":
+		if err := validateDNSName(record.ServerDomain); err != nil {
+			return apperr.New(apperr.ValidationFailed, "SRV server domain is invalid")
+		}
+		if err := validateDNSUnderscoreToken("service", record.Service); err != nil {
+			return err
+		}
+		if err := validateDNSUnderscoreToken("protocol", record.Protocol); err != nil {
+			return err
+		}
+		for label, value := range map[string]int{"SRV priority": record.Priority, "SRV port": record.Port, "SRV weight": record.Weight} {
+			if err := validateDNSUint16(label, value); err != nil {
+				return err
+			}
+		}
+	case "FORWARD_DOMAIN":
+		return validateDNSIP(record.IPAddress)
+	}
+	return nil
+}
+
+func validateDNSTTL(value, maximum int) error {
+	if value < 1 || value > maximum {
+		return apperr.Newf(apperr.ValidationFailed, "DNS TTL must be between 1 and %d seconds", maximum)
+	}
+	return nil
+}
+
+func validateDNSUint16(label string, value int) error {
+	if value < 0 || value > 65535 {
+		return apperr.Newf(apperr.ValidationFailed, "%s must be between 0 and 65535", label)
+	}
+	return nil
+}
+
+func validateDNSUnderscoreToken(label, value string) error {
+	if len(value) < 2 || len(value) > 63 || value[0] != '_' || value[len(value)-1] == '-' {
+		return apperr.Newf(apperr.ValidationFailed, "SRV %s must start with an underscore and contain 2 to 63 characters", label)
+	}
+	for _, char := range value[1:] {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' {
+			continue
+		}
+		return apperr.Newf(apperr.ValidationFailed, "SRV %s contains an invalid character", label)
+	}
+	return nil
+}
+
+func inputSetsAnyDNSField(in DNSInput) bool {
+	return in.Type != "" || inputSetsName(in) || inputSetsIP(in) || inputSetsIPv6(in) ||
+		inputSetsTargetDomain(in) || inputSetsMailServerDomain(in) || inputSetsText(in) ||
+		inputSetsServerDomain(in) || inputSetsServerIP(in) || in.SetPriority || in.Priority != 0 ||
+		inputSetsService(in) || inputSetsProtocol(in) || in.SetPort || in.Port != 0 ||
+		in.SetWeight || in.Weight != 0 || in.SetEnabled || inputSetsTTL(in)
+}
+
+func inputSetsName(in DNSInput) bool         { return in.SetName || in.Name != "" }
+func inputSetsIP(in DNSInput) bool           { return in.SetIP || in.IP != "" }
+func inputSetsTTL(in DNSInput) bool          { return in.SetTTL || in.TTLSeconds != 0 }
+func inputSetsIPv6(in DNSInput) bool         { return in.SetIPv6Address || in.IPv6Address != "" }
+func inputSetsTargetDomain(in DNSInput) bool { return in.SetTargetDomain || in.TargetDomain != "" }
+func inputSetsMailServerDomain(in DNSInput) bool {
+	return in.SetMailServerDomain || in.MailServerDomain != ""
+}
+func inputSetsText(in DNSInput) bool         { return in.SetText || in.Text != "" }
+func inputSetsServerDomain(in DNSInput) bool { return in.SetServerDomain || in.ServerDomain != "" }
+func inputSetsServerIP(in DNSInput) bool     { return in.SetServerIP || in.ServerIP != "" }
+func inputSetsService(in DNSInput) bool      { return in.SetService || in.Service != "" }
+func inputSetsProtocol(in DNSInput) bool     { return in.SetProtocol || in.Protocol != "" }
 
 func effectiveDNSTTL(in DNSInput) int {
 	if inputSetsTTL(in) {
@@ -820,32 +1148,13 @@ func effectiveDNSTTL(in DNSInput) int {
 	return defaultDNSTTLSeconds
 }
 
-func dnsCreateMatches(record DNSRecord, in DNSInput) bool {
-	enabled := true
-	if in.SetEnabled {
-		enabled = in.Enabled
-	}
-	return record.Type == "A_RECORD" && record.Domain == in.Name && record.IPv4Address == in.IP &&
-		record.Enabled == enabled && record.TTLSeconds == effectiveDNSTTL(in)
-}
-
-func dnsUpdateMatches(record DNSRecord, in DNSInput) bool {
-	if record.Type != "A_RECORD" {
+func dnsRecordsEqual(record, expected DNSRecord) bool {
+	if record.ID != expected.ID {
 		return false
 	}
-	if inputSetsName(in) && record.Domain != in.Name {
-		return false
-	}
-	if inputSetsIP(in) && record.IPv4Address != in.IP {
-		return false
-	}
-	if in.SetEnabled && record.Enabled != in.Enabled {
-		return false
-	}
-	if inputSetsTTL(in) && record.TTLSeconds != in.TTLSeconds {
-		return false
-	}
-	return true
+	recordBody, recordErr := dnsWritableBody(record)
+	expectedBody, expectedErr := dnsWritableBody(expected)
+	return recordErr == nil && expectedErr == nil && reflect.DeepEqual(recordBody, expectedBody)
 }
 
 func verificationError(message string, cause error) error {

@@ -90,7 +90,43 @@ func TestPublishReleaseCreatesDraftAndCapturesID(t *testing.T) {
 	}
 }
 
+func TestPublishReleaseUsesTagDerivedPrereleaseState(t *testing.T) {
+	for _, tt := range []struct {
+		tag  string
+		want string
+	}{
+		{tag: "v1.0.0-rc.2", want: "true"},
+		{tag: "v1.0.0", want: "false"},
+	} {
+		t.Run(tt.tag, func(t *testing.T) {
+			output, err, calls := runReleasePublishTag(t, "match", true, false, tt.tag)
+			if err != nil {
+				t.Fatalf("publish failed: %v\n%s", err, output)
+			}
+			for _, method := range []string{"--method POST repos/owner/repo/releases", "--method PATCH repos/owner/repo/releases/42"} {
+				line := callLineContaining(calls, method)
+				if !strings.Contains(line, "prerelease="+tt.want) {
+					t.Fatalf("%s call = %q, want prerelease=%s", method, line, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func callLineContaining(calls, value string) string {
+	for _, line := range strings.Split(calls, "\n") {
+		if strings.Contains(line, value) {
+			return line
+		}
+	}
+	return ""
+}
+
 func runReleasePublish(t *testing.T, mode string, trailingNewline, existingDraft bool) (string, error, string) {
+	return runReleasePublishTag(t, mode, trailingNewline, existingDraft, "v1.0.0-rc.1")
+}
+
+func runReleasePublishTag(t *testing.T, mode string, trailingNewline, existingDraft bool, releaseTag string) (string, error, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dist := filepath.Join(dir, "dist")
@@ -117,6 +153,13 @@ func runReleasePublish(t *testing.T, mode string, trailingNewline, existingDraft
 	if err := os.WriteFile(notes, []byte("release notes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	canonicalNotesDir := filepath.Join(dir, "docs", "releases")
+	if err := os.MkdirAll(canonicalNotesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canonicalNotesDir, releaseTag+".md"), []byte("# `"+releaseTag+"` release notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	logPath := filepath.Join(dir, "calls")
 	createdPath := filepath.Join(dir, "created")
 	publishedPath := filepath.Join(dir, "published")
@@ -131,24 +174,24 @@ if [[ "$1" == api ]]; then
   if [[ "$*" == *"repos/owner/repo --silent"* ]]; then
     exit 0
   fi
-  if [[ "$*" == *"repos/owner/repo/commits/v1.0.0-rc.1"* ]]; then
+  if [[ "$*" == *"repos/owner/repo/commits/$RELEASE_TAG"* ]]; then
     echo 0000000000000000000000000000000000000001
     exit 0
   fi
-  if [[ "$*" == *"releases/tags/v1.0.0-rc.1"* && "$*" == *".draft"* ]]; then
+  if [[ "$*" == *"releases/tags/$RELEASE_TAG"* && "$*" == *".draft"* ]]; then
     if [[ -f "$GH_FAKE_PUBLISHED" ]]; then echo false; exit 0; fi
     if [[ -f "$GH_FAKE_CREATED" ]]; then echo true; exit 0; fi
     echo 'gh: Not Found (HTTP 404)' >&2
     exit 1
   fi
-  if [[ "$*" == *"releases/tags/v1.0.0-rc.1"* && "$*" == *".id"* ]]; then
+  if [[ "$*" == *"releases/tags/$RELEASE_TAG"* && "$*" == *".id"* ]]; then
     if [[ -f "$GH_FAKE_CREATED" ]]; then echo 42; exit 0; fi
     echo 'gh: Not Found (HTTP 404)' >&2
     exit 1
   fi
   if [[ "$*" == *"repos/owner/repo/releases?per_page=100"* ]]; then
     if [[ "$GH_FAKE_EXISTING" == true ]]; then
-      printf '42\tv1.0.0-rc.1\ttrue\n'
+      printf '42\t%s\ttrue\n' "$RELEASE_TAG"
     fi
     exit 0
   fi
@@ -220,7 +263,7 @@ printf '%s  %s\n' "$GH_FAKE_DIGEST" "$1"
 		"PATH=" + dir + ":/usr/bin:/bin",
 		"GH_TOKEN=test-token",
 		"GITHUB_REPOSITORY=owner/repo",
-		"RELEASE_TAG=v1.0.0-rc.1",
+		"RELEASE_TAG=" + releaseTag,
 		"RELEASE_COMMIT=0000000000000000000000000000000000000001",
 		"GITHUB_REF_NAME=wrong-ref",
 		"GITHUB_SHA=0000000000000000000000000000000000000002",
@@ -231,6 +274,7 @@ printf '%s  %s\n' "$GH_FAKE_DIGEST" "$1"
 		"GH_FAKE_CREATED=" + createdPath,
 		"GH_FAKE_PUBLISHED=" + publishedPath,
 		"GH_FAKE_DIGEST=" + hex.EncodeToString(digest[:]),
+		"RELEASE_SOURCE_ROOT=" + dir,
 	}
 	output, err := cmd.CombinedOutput()
 	calls, readErr := os.ReadFile(logPath)

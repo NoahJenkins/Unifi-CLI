@@ -120,7 +120,7 @@ func TestDNSListUsesOfficialCollectionFetcherAndPreservesAllPolicyFields(t *test
 		{ID: "10000000-0000-4000-8000-000000000003", Type: "CNAME_RECORD", Domain: "alias.example.test", Enabled: true, TargetDomain: "target.example.test", TTLSeconds: 900, Name: "alias.example.test"},
 		{ID: "10000000-0000-4000-8000-000000000004", Type: "MX_RECORD", Domain: "example.test", Enabled: true, MailServerDomain: "mail.example.test", TTLSeconds: 1200, Priority: 10, Name: "example.test"},
 		{ID: "10000000-0000-4000-8000-000000000005", Type: "TXT_RECORD", Domain: "txt.example.test", Enabled: false, Text: "verification=value", TTLSeconds: 1800, Name: "txt.example.test"},
-		{ID: "10000000-0000-4000-8000-000000000006", Type: "SRV_RECORD", Domain: "_sip._tcp.example.test", Enabled: true, ServerDomain: "sip.example.test", TTLSeconds: 2400, Priority: 20, Service: "_sip", Protocol: "_tcp", Port: 5060, Weight: 5, Name: "_sip._tcp.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000006", Type: "SRV_RECORD", Domain: "example.test", Enabled: true, ServerDomain: "sip.example.test", TTLSeconds: 2400, Priority: 20, Service: "_sip", Protocol: "_tcp", Port: 5060, Weight: 5, Name: "example.test"},
 		{ID: "10000000-0000-4000-8000-000000000007", Type: "FORWARD_DOMAIN", Domain: "forward.example.test", Enabled: true, ServerDomain: "resolver.example.test", IPAddress: "198.51.100.53", Name: "forward.example.test"},
 	}
 	if !reflect.DeepEqual(records, want) {
@@ -139,7 +139,7 @@ func TestDNSListUsesOfficialCollectionFetcherAndPreservesAllPolicyFields(t *test
 
 func TestDNSSRVJSONRetainsApplicableZeroNumericFields(t *testing.T) {
 	record := domain.NormalizeDNSRecord(map[string]any{
-		"id": "dns-srv-zero", "type": "SRV_RECORD", "domain": "_sip._tcp.example.test", "enabled": true,
+		"id": "dns-srv-zero", "type": "SRV_RECORD", "domain": "example.test", "enabled": true,
 		"serverDomain": "sip.example.test", "ttlSeconds": float64(300), "priority": float64(0),
 		"service": "_sip", "protocol": "_tcp", "port": float64(5060), "weight": float64(0),
 	})
@@ -244,14 +244,78 @@ func TestDNSUpdateRejectsEffectiveNoOpBeforePUT(t *testing.T) {
 	}
 }
 
-func TestDNSUpdateAndDeleteRejectNonARecordsBeforeMutation(t *testing.T) {
+func TestDNSCreateSupportsEveryOfficialPolicyType(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       domain.DNSInput
+		observed map[string]any
+		wantBody map[string]any
+	}{
+		{
+			name: "A", in: domain.DNSInput{Name: "a.example.test", IP: "192.0.2.1"},
+			observed: map[string]any{"id": "dns-new", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 300},
+			wantBody: map[string]any{"type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 300},
+		},
+		{
+			name: "AAAA", in: domain.DNSInput{Type: "aaaa", Name: "aaaa.example.test", IPv6Address: "2001:db8::1", SetIPv6Address: true},
+			observed: map[string]any{"id": "dns-new", "type": "AAAA_RECORD", "domain": "aaaa.example.test", "ipv6Address": "2001:db8::1", "enabled": true, "ttlSeconds": 300},
+			wantBody: map[string]any{"type": "AAAA_RECORD", "domain": "aaaa.example.test", "ipv6Address": "2001:db8::1", "enabled": true, "ttlSeconds": 300},
+		},
+		{
+			name: "CNAME", in: domain.DNSInput{Type: "cname", Name: "alias.example.test", TargetDomain: "target.example.test", SetTargetDomain: true},
+			observed: map[string]any{"id": "dns-new", "type": "CNAME_RECORD", "domain": "alias.example.test", "targetDomain": "target.example.test", "enabled": true, "ttlSeconds": 300},
+			wantBody: map[string]any{"type": "CNAME_RECORD", "domain": "alias.example.test", "targetDomain": "target.example.test", "enabled": true, "ttlSeconds": 300},
+		},
+		{
+			name: "MX", in: domain.DNSInput{Type: "mx", Name: "example.test", MailServerDomain: "mail.example.test", SetMailServerDomain: true, Priority: 0, SetPriority: true},
+			observed: map[string]any{"id": "dns-new", "type": "MX_RECORD", "domain": "example.test", "mailServerDomain": "mail.example.test", "enabled": true, "priority": 0},
+			wantBody: map[string]any{"type": "MX_RECORD", "domain": "example.test", "mailServerDomain": "mail.example.test", "enabled": true, "priority": 0},
+		},
+		{
+			name: "TXT", in: domain.DNSInput{Type: "txt", Name: "txt.example.test", Text: "verification=value", SetText: true},
+			observed: map[string]any{"id": "dns-new", "type": "TXT_RECORD", "domain": "txt.example.test", "text": "verification=value", "enabled": true},
+			wantBody: map[string]any{"type": "TXT_RECORD", "domain": "txt.example.test", "text": "verification=value", "enabled": true},
+		},
+		{
+			name: "SRV", in: domain.DNSInput{Type: "srv", Name: "example.test", ServerDomain: "sip.example.test", SetServerDomain: true, Priority: 0, SetPriority: true, Service: "_sip", SetService: true, Protocol: "_tcp", SetProtocol: true, Port: 5060, SetPort: true, Weight: 0, SetWeight: true},
+			observed: map[string]any{"id": "dns-new", "type": "SRV_RECORD", "domain": "example.test", "serverDomain": "sip.example.test", "enabled": true, "priority": 0, "service": "_sip", "protocol": "_tcp", "port": 5060, "weight": 0},
+			wantBody: map[string]any{"type": "SRV_RECORD", "domain": "example.test", "serverDomain": "sip.example.test", "enabled": true, "priority": 0, "service": "_sip", "protocol": "_tcp", "port": 5060, "weight": 0},
+		},
+		{
+			name: "forward domain", in: domain.DNSInput{Type: "forward-domain", Name: "forward.example.test", ServerIP: "2001:db8::53", SetServerIP: true},
+			observed: map[string]any{"id": "dns-new", "type": "FORWARD_DOMAIN", "domain": "forward.example.test", "ipAddress": "2001:db8::53", "enabled": true},
+			wantBody: map[string]any{"type": "FORWARD_DOMAIN", "domain": "forward.example.test", "ipAddress": "2001:db8::53", "enabled": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := &stableDNSAPI{createResponse: map[string]any{"id": "dns-new"}, byID: map[string]map[string]any{"dns-new": tt.observed}}
+			created, err := domain.NewDNSService(api).ApplyCreate(context.Background(), tt.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.ID != "dns-new" {
+				t.Fatalf("created = %#v", created)
+			}
+			if len(api.calls) != 2 || api.calls[0].method != http.MethodPost {
+				t.Fatalf("calls = %#v, want POST then GET", api.calls)
+			}
+			if !reflect.DeepEqual(api.calls[0].body, tt.wantBody) {
+				t.Fatalf("body = %#v, want %#v", api.calls[0].body, tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestDNSUpdateAndDeleteSupportNonARecords(t *testing.T) {
 	record := map[string]any{"id": "dns-aaaa", "type": "AAAA_RECORD", "domain": "aaaa.example.test", "ipv6Address": "2001:db8::1", "enabled": true, "ttlSeconds": 300}
 	for _, operation := range []struct {
 		name string
 		run  func(*domain.DNSService) error
 	}{
 		{name: "update", run: func(svc *domain.DNSService) error {
-			_, _, err := svc.Update(context.Background(), "dns-aaaa", domain.DNSInput{IP: "192.0.2.2", SetIP: true})
+			_, _, err := svc.Update(context.Background(), "dns-aaaa", domain.DNSInput{IPv6Address: "2001:db8::2", SetIPv6Address: true})
 			return err
 		}},
 		{name: "delete", run: func(svc *domain.DNSService) error {
@@ -262,15 +326,69 @@ func TestDNSUpdateAndDeleteRejectNonARecordsBeforeMutation(t *testing.T) {
 		t.Run(operation.name, func(t *testing.T) {
 			api := &stableDNSAPI{records: []map[string]any{record}, byID: map[string]map[string]any{"dns-aaaa": record}}
 			err := operation.run(domain.NewDNSService(api))
+			if err != nil {
+				t.Fatalf("operation failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestDNSCreateRejectsInvalidTypeSpecificInputBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   domain.DNSInput
+	}{
+		{name: "unsupported type", in: domain.DNSInput{Type: "naptr", Name: "example.test"}},
+		{name: "domain too long", in: domain.DNSInput{Name: strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + ".c", IP: "192.0.2.1"}},
+		{name: "AAAA with A field", in: domain.DNSInput{Type: "aaaa", Name: "aaaa.example.test", IP: "192.0.2.1", IPv6Address: "2001:db8::1"}},
+		{name: "A TTL too large", in: domain.DNSInput{Name: "a.example.test", IP: "192.0.2.1", TTLSeconds: 86401, SetTTL: true}},
+		{name: "CNAME TTL too large", in: domain.DNSInput{Type: "cname", Name: "alias.example.test", TargetDomain: "target.example.test", TTLSeconds: 604801, SetTTL: true}},
+		{name: "MX missing explicit zero priority", in: domain.DNSInput{Type: "mx", Name: "example.test", MailServerDomain: "mail.example.test"}},
+		{name: "TXT empty", in: domain.DNSInput{Type: "txt", Name: "txt.example.test", Text: "", SetText: true}},
+		{name: "SRV domain repeats service and protocol", in: domain.DNSInput{Type: "srv", Name: "_sip._tcp.example.test", ServerDomain: "sip.example.test", SetServerDomain: true, Priority: 0, SetPriority: true, Service: "_sip", SetService: true, Protocol: "_tcp", SetProtocol: true, Port: 5060, SetPort: true, Weight: 0, SetWeight: true}},
+		{name: "SRV missing port", in: domain.DNSInput{Type: "srv", Name: "example.test", ServerDomain: "sip.example.test", Priority: 0, SetPriority: true, Service: "_sip", Protocol: "_tcp", Weight: 0, SetWeight: true}},
+		{name: "forward domain invalid server IP", in: domain.DNSInput{Type: "forward-domain", Name: "forward.example.test", ServerIP: "not-an-ip"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := &stableDNSAPI{}
+			_, err := domain.NewDNSService(api).ApplyCreate(context.Background(), tt.in)
 			if !apperr.Is(err, apperr.ValidationFailed) {
 				t.Fatalf("err = %v, want validation_failed", err)
 			}
-			for _, call := range api.calls {
-				if call.method != http.MethodGet {
-					t.Fatalf("non-A policy reached mutation: %#v", api.calls)
-				}
+			if len(api.calls) != 0 {
+				t.Fatalf("invalid input reached controller: %#v", api.calls)
 			}
 		})
+	}
+}
+
+func TestDNSUpdateRejectsTypeChangeBeforePUT(t *testing.T) {
+	record := map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 300}
+	api := &stableDNSAPI{records: []map[string]any{record}, byID: map[string]map[string]any{"dns-a": record}}
+
+	_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), "dns-a", domain.DNSInput{Type: "aaaa"})
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("err = %v, want validation_failed", err)
+	}
+	if countMethod(api.calls, http.MethodPut) != 0 {
+		t.Fatalf("type change reached PUT: %#v", api.calls)
+	}
+}
+
+func TestDNSUpdateRejectsInvalidNameBeforeControllerRead(t *testing.T) {
+	api := &stableDNSAPI{}
+
+	_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), "dns-srv", domain.DNSInput{
+		Name:    "_sip._tcp.example.test",
+		SetName: true,
+	})
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("err = %v, want validation_failed", err)
+	}
+	if len(api.calls) != 0 {
+		t.Fatalf("invalid input reached controller: %#v", api.calls)
 	}
 }
 
@@ -357,6 +475,80 @@ func TestDNSUpdateVerifiesRequestedFieldsWithGETByIDAndDoesNotRetryMutation(t *t
 	}
 }
 
+func TestDNSUpdateRejectsCollateralRecordChanges(t *testing.T) {
+	before := map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 300}
+	tests := []struct {
+		name  string
+		after map[string]any
+	}{
+		{name: "domain", after: map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "changed.example.test", "ipv4Address": "192.0.2.2", "enabled": true, "ttlSeconds": 300}},
+		{name: "enabled", after: map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.2", "enabled": false, "ttlSeconds": 300}},
+		{name: "TTL", after: map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.2", "enabled": true, "ttlSeconds": 600}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := &stableDNSAPI{records: []map[string]any{before}, byID: map[string]map[string]any{"dns-a": tt.after}}
+			_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), "dns-a", domain.DNSInput{IP: "192.0.2.2", SetIP: true})
+			if !apperr.Is(err, apperr.Conflict) {
+				t.Fatalf("err = %v, want conflict", err)
+			}
+			if got := methods(api.calls); !reflect.DeepEqual(got, []string{http.MethodPut, http.MethodGet}) {
+				t.Fatalf("methods = %#v, want one PUT and one verification GET", got)
+			}
+		})
+	}
+}
+
+func TestDNSUpdateRejectsCollateralNonARecordChanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		before map[string]any
+		after  map[string]any
+		in     domain.DNSInput
+	}{
+		{
+			name:   "MX priority",
+			before: map[string]any{"id": "dns-mx", "type": "MX_RECORD", "domain": "example.test", "mailServerDomain": "mail.example.test", "enabled": true, "priority": 10},
+			after:  map[string]any{"id": "dns-mx", "type": "MX_RECORD", "domain": "example.test", "mailServerDomain": "new-mail.example.test", "enabled": true, "priority": 20},
+			in:     domain.DNSInput{MailServerDomain: "new-mail.example.test", SetMailServerDomain: true},
+		},
+		{
+			name:   "TXT domain",
+			before: map[string]any{"id": "dns-txt", "type": "TXT_RECORD", "domain": "txt.example.test", "text": "old", "enabled": true},
+			after:  map[string]any{"id": "dns-txt", "type": "TXT_RECORD", "domain": "changed.example.test", "text": "new", "enabled": true},
+			in:     domain.DNSInput{Text: "new", SetText: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := tt.before["id"].(string)
+			api := &stableDNSAPI{records: []map[string]any{tt.before}, byID: map[string]map[string]any{id: tt.after}}
+			_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), id, tt.in)
+			if !apperr.Is(err, apperr.Conflict) {
+				t.Fatalf("err = %v, want conflict", err)
+			}
+			if countMethod(api.calls, http.MethodPut) != 1 {
+				t.Fatalf("calls = %#v, want one PUT", api.calls)
+			}
+		})
+	}
+}
+
+func TestDNSUpdateRejectsInvalidPreservedTTLBeforePUT(t *testing.T) {
+	record := map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 0}
+	api := &stableDNSAPI{records: []map[string]any{record}, byID: map[string]map[string]any{"dns-a": record}}
+
+	_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), "dns-a", domain.DNSInput{IP: "192.0.2.2", SetIP: true})
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("err = %v, want validation_failed", err)
+	}
+	if countMethod(api.calls, http.MethodPut) != 0 {
+		t.Fatalf("invalid preserved TTL reached PUT: %#v", api.calls)
+	}
+}
+
 func TestDNSDeleteVerifiesIDAndExactNameAbsence(t *testing.T) {
 	record := map[string]any{"id": "dns-a", "type": "A_RECORD", "domain": "a.example.test", "ipv4Address": "192.0.2.1", "enabled": true, "ttlSeconds": 300}
 	t.Run("success", func(t *testing.T) {
@@ -384,6 +576,15 @@ func TestDNSDeleteVerifiesIDAndExactNameAbsence(t *testing.T) {
 		}
 		if got := methods(api.calls); !reflect.DeepEqual(got, []string{http.MethodDelete, http.MethodGet}) {
 			t.Fatalf("methods = %#v, want no mutation retry", got)
+		}
+	})
+
+	t.Run("different type with same exact name may remain", func(t *testing.T) {
+		aaaa := map[string]any{"id": "dns-aaaa", "type": "AAAA_RECORD", "domain": "a.example.test", "ipv6Address": "2001:db8::1", "enabled": true, "ttlSeconds": 300}
+		api := &stableDNSAPI{records: []map[string]any{record, aaaa}, byID: map[string]map[string]any{"dns-a": record, "dns-aaaa": aaaa}}
+		_, err := domain.NewDNSService(api).ApplyDelete(context.Background(), "dns-a")
+		if err != nil {
+			t.Fatal(err)
 		}
 	})
 }

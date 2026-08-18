@@ -7,7 +7,7 @@
 <!-- List the commands or checks you ran. -->
 
 - [ ] `./scripts/smoke.sh`
-- [ ] `go test -race ./...` when concurrency behavior changed
+- [ ] `go test -race ./... -timeout 30m` when concurrency behavior changed
 - [ ] `./scripts/check-coverage.sh` when CLI commands changed
 - [ ] Documentation updated for user-visible behavior
 

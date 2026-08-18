@@ -384,9 +384,9 @@ func TestOfficialNetworkMutationEnforcesOpenAPIBoundsBeforeWrites(t *testing.T) 
 	})
 }
 
-func TestOfficialNetworkUpdateRejectsEveryManagementTransitionBeforeWrite(t *testing.T) {
+func TestOfficialNetworkUpdateRejectsIncompleteManagedTransitionsBeforeWrite(t *testing.T) {
 	for _, current := range []string{"GATEWAY", "SWITCH", "UNMANAGED"} {
-		for _, target := range []string{"GATEWAY", "SWITCH", "UNMANAGED"} {
+		for _, target := range []string{"GATEWAY", "SWITCH"} {
 			if target == current {
 				continue
 			}
@@ -401,6 +401,18 @@ func TestOfficialNetworkUpdateRejectsEveryManagementTransitionBeforeWrite(t *tes
 				}
 			})
 		}
+	}
+	for _, current := range []string{"GATEWAY", "SWITCH"} {
+		t.Run(current+"_to_UNMANAGED", func(t *testing.T) {
+			api := networkMutationAPIForDocument(officialNetworkDocumentForManagement(current))
+			p, _, err := domain.NewNetworkService(api).Update(context.Background(), "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", domain.NetworkInput{Purpose: "unmanaged", SetPurpose: true})
+			if err != nil || p.Changes[0].ID == "" {
+				t.Fatalf("complete unmanaged transition: plan=%#v error=%v", p, err)
+			}
+			if got := len(mutationCalls(api.official, http.MethodPut)); got != 0 {
+				t.Fatalf("planning PUT count = %d, want 0", got)
+			}
+		})
 	}
 }
 
@@ -593,6 +605,7 @@ func TestOfficialWlanCreateEmitsExactSupportedOpenAPISchema(t *testing.T) {
 				"type": "STANDARD", "name": "Lab", "enabled": true, "hideName": false,
 				"clientIsolationEnabled": false, "multicastToUnicastConversionEnabled": false, "uapsdEnabled": true,
 				"advertiseDeviceName": false, "arpProxyEnabled": false, "bssTransitionEnabled": true,
+				"channel2gLockedTo6": false, "dtimPeriod2gLockedTo3": false,
 				"broadcastingFrequenciesGHz": []any{2.4, 5.0},
 				"securityConfiguration":      map[string]any{"type": "OPEN"},
 				"network":                    map[string]any{"type": "NATIVE"},
@@ -605,6 +618,7 @@ func TestOfficialWlanCreateEmitsExactSupportedOpenAPISchema(t *testing.T) {
 				"type": "STANDARD", "name": "Lab", "enabled": true, "hideName": false,
 				"clientIsolationEnabled": false, "multicastToUnicastConversionEnabled": false, "uapsdEnabled": true,
 				"advertiseDeviceName": false, "arpProxyEnabled": false, "bssTransitionEnabled": true,
+				"channel2gLockedTo6": false, "dtimPeriod2gLockedTo3": false,
 				"broadcastingFrequenciesGHz": []any{2.4, 5.0},
 				"securityConfiguration":      map[string]any{"type": "WPA2_PERSONAL", "passphrase": "password"},
 				"network":                    map[string]any{"type": "NATIVE"},

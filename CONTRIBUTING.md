@@ -9,7 +9,7 @@ stable/experimental boundary before investing in implementation.
 New controller behavior must use the official local UniFi Network integration
 API whenever that API exposes the required operation. Do not add a cloud/Site
 Manager dependency. A legacy local endpoint is acceptable only when the
-official 10.3.58+ surface lacks the capability and all of the following are
+official 10.4.57+ surface lacks the capability and all of the following are
 true:
 
 - the command is explicitly classified experimental;
@@ -46,7 +46,7 @@ For behavior changes:
 
 ```bash
 ./scripts/smoke.sh
-go test -race ./...
+go test -race ./... -timeout 30m
 ./scripts/check-coverage.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 ```
@@ -78,8 +78,9 @@ Unit tests and schema-derived fixtures are required; they are not permission to
 mutate a live controller.
 
 - The standard `UNIFI_IT=1 ./scripts/smoke.sh` suite is read-only.
-- The approved isolated DNS A-record lifecycle may run only when its temporary
-  name/IP and cleanup behavior have been reviewed for that authorized lab.
+- Approved isolated DNS lifecycles may run only when every temporary value,
+  disabled state, captured-ID cleanup rule, and final baseline comparison has
+  been reviewed for that authorized lab.
 - **Every non-DNS write requires a dedicated sacrificial controller and
   disposable network configuration.** Never run it on a home, office,
   customer, shared, production, or production-like controller.

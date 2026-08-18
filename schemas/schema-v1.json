@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/noahjenkins/unifi-cli/schemas/schema-v1.json",
+  "title": "unifi-cli schema-v1 envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ok", "resource", "action", "data", "meta"],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "ok": {"type": "boolean"},
+    "resource": {"type": "string", "minLength": 1},
+    "action": {"type": "string", "minLength": 1},
+    "data": true,
+    "meta": {"$ref": "#/$defs/meta"},
+    "error": {"$ref": "#/$defs/error"},
+    "plan": {"$ref": "#/$defs/plan"}
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/failureEnvelope"},
+    {"$ref": "#/$defs/planEnvelope"},
+    {"$ref": "#/$defs/experimentalSuccessEnvelope"},
+    {"$ref": "#/$defs/stableSuccessEnvelope"}
+  ],
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["site", "dry_run"],
+      "properties": {
+        "site": {"type": "string"},
+        "count": {"type": "integer", "minimum": 0},
+        "dry_run": {"type": "boolean"},
+        "experimental": {"type": "boolean"}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "auth_failed", "not_authenticated", "controller_unreachable", "not_found", "ambiguous_id",
+            "conflict", "permission_denied", "validation_failed", "safe_mode_blocked", "not_implemented", "internal"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1},
+        "hint": {"type": "string", "minLength": 1}
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "changes"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/change"}
+        }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "resource"],
+      "properties": {
+        "op": {"enum": ["create", "update", "delete"]},
+        "resource": {"type": "string", "minLength": 1},
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "before": true,
+        "after": true
+      }
+    },
+    "failureEnvelope": {
+      "properties": {
+        "ok": {"const": false},
+        "data": {"type": "null"},
+        "meta": {"properties": {"dry_run": {"const": false}}}
+      },
+      "required": ["error"],
+      "not": {"required": ["plan"]}
+    },
+    "planEnvelope": {
+      "properties": {
+        "ok": {"const": true},
+        "data": {"type": "null"},
+        "meta": {"properties": {"dry_run": {"const": true}}}
+      },
+      "required": ["plan"],
+      "not": {"required": ["error"]}
+    },
+    "experimentalSuccessEnvelope": {
+      "properties": {
+        "ok": {"const": true},
+        "meta": {
+          "required": ["experimental"],
+          "properties": {
+            "dry_run": {"const": false},
+            "experimental": {"const": true}
+          }
+        }
+      },
+      "not": {"anyOf": [{"required": ["error"]}, {"required": ["plan"]}]}
+    },
+    "stableSuccessEnvelope": {
+      "properties": {
+        "ok": {"const": true},
+        "meta": {
+          "properties": {
+            "dry_run": {"const": false},
+            "experimental": {"const": false}
+          }
+        }
+      },
+      "not": {"anyOf": [{"required": ["error"]}, {"required": ["plan"]}]},
+      "oneOf": [
+        {"$ref": "#/$defs/versionSuccess"},
+        {"$ref": "#/$defs/configPathSuccess"},
+        {"$ref": "#/$defs/configShowSuccess"},
+        {"$ref": "#/$defs/authSuccess"},
+        {"$ref": "#/$defs/siteListSuccess"},
+        {"$ref": "#/$defs/siteGetSuccess"},
+        {"$ref": "#/$defs/deviceListSuccess"},
+        {"$ref": "#/$defs/deviceGetSuccess"},
+        {"$ref": "#/$defs/clientListSuccess"},
+        {"$ref": "#/$defs/clientGetSuccess"},
+        {"$ref": "#/$defs/networkListSuccess"},
+        {"$ref": "#/$defs/networkGetSuccess"},
+        {"$ref": "#/$defs/wlanListSuccess"},
+        {"$ref": "#/$defs/wlanGetSuccess"},
+        {"$ref": "#/$defs/portListSuccess"},
+        {"$ref": "#/$defs/portGetSuccess"},
+        {"$ref": "#/$defs/firewallListSuccess"},
+        {"$ref": "#/$defs/firewallGetSuccess"},
+        {"$ref": "#/$defs/firewallZoneListSuccess"},
+        {"$ref": "#/$defs/firewallZoneGetSuccess"},
+        {"$ref": "#/$defs/dnsListSuccess"},
+        {"$ref": "#/$defs/dnsRecordSuccess"},
+        {"$ref": "#/$defs/dnsResolverListSuccess"},
+        {"$ref": "#/$defs/healthSuccess"},
+        {"$ref": "#/$defs/lagListSuccess"},
+        {"$ref": "#/$defs/lagGetSuccess"},
+        {"$ref": "#/$defs/mcLagListSuccess"},
+        {"$ref": "#/$defs/mcLagGetSuccess"},
+        {"$ref": "#/$defs/stackListSuccess"},
+        {"$ref": "#/$defs/stackGetSuccess"},
+        {"$ref": "#/$defs/radiusListSuccess"},
+        {"$ref": "#/$defs/radiusGetSuccess"},
+        {"$ref": "#/$defs/trafficListListSuccess"},
+        {"$ref": "#/$defs/trafficListGetSuccess"}
+      ]
+    },
+
+    "versionSuccess": {"properties": {"resource": {"const": "version"}, "action": {"const": "show"}, "data": {"$ref": "#/$defs/version"}}},
+    "configPathSuccess": {"properties": {"resource": {"const": "config"}, "action": {"const": "path"}, "data": {"$ref": "#/$defs/configPath"}}},
+    "configShowSuccess": {"properties": {"resource": {"const": "config"}, "action": {"const": "show"}, "data": {"$ref": "#/$defs/config"}}},
+    "authSuccess": {"properties": {"resource": {"const": "auth"}, "action": {"enum": ["status", "login", "logout"]}, "data": {"$ref": "#/$defs/auth"}}},
+    "siteListSuccess": {"properties": {"resource": {"const": "site"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/site"}}}},
+    "siteGetSuccess": {"properties": {"resource": {"const": "site"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/site"}}},
+    "deviceListSuccess": {"properties": {"resource": {"const": "device"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/device"}}}},
+    "deviceGetSuccess": {"properties": {"resource": {"const": "device"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/device"}}},
+    "clientListSuccess": {"properties": {"resource": {"const": "client"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/client"}}}},
+    "clientGetSuccess": {"properties": {"resource": {"const": "client"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/client"}}},
+    "networkListSuccess": {"properties": {"resource": {"const": "network"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/network"}}}},
+    "networkGetSuccess": {"properties": {"resource": {"const": "network"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/network"}}},
+    "wlanListSuccess": {"properties": {"resource": {"const": "wlan"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/wlan"}}}},
+    "wlanGetSuccess": {"properties": {"resource": {"const": "wlan"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/wlan"}}},
+    "portListSuccess": {"properties": {"resource": {"const": "port"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/port"}}}},
+    "portGetSuccess": {"properties": {"resource": {"const": "port"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/port"}}},
+    "firewallListSuccess": {"properties": {"resource": {"const": "firewall"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/firewallPolicy"}}}},
+    "firewallGetSuccess": {"properties": {"resource": {"const": "firewall"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/firewallPolicy"}}},
+    "firewallZoneListSuccess": {"properties": {"resource": {"const": "firewall"}, "action": {"const": "zone list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/firewallZone"}}}},
+    "firewallZoneGetSuccess": {"properties": {"resource": {"const": "firewall"}, "action": {"const": "zone get"}, "data": {"$ref": "#/$defs/firewallZone"}}},
+    "dnsListSuccess": {"properties": {"resource": {"const": "dns"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/dnsRecord"}}}},
+    "dnsRecordSuccess": {"properties": {"resource": {"const": "dns"}, "action": {"enum": ["get", "create", "update", "delete"]}, "data": {"$ref": "#/$defs/dnsRecord"}}},
+    "dnsResolverListSuccess": {"properties": {"resource": {"const": "dns"}, "action": {"const": "resolvers list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/dnsResolver"}}}},
+    "healthSuccess": {"properties": {"resource": {"const": "system"}, "action": {"const": "health"}, "data": {"$ref": "#/$defs/health"}}},
+    "lagListSuccess": {"properties": {"resource": {"const": "switching_lag"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/lag"}}}},
+    "lagGetSuccess": {"properties": {"resource": {"const": "switching_lag"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/lag"}}},
+    "mcLagListSuccess": {"properties": {"resource": {"const": "switching_mc_lag"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/mcLag"}}}},
+    "mcLagGetSuccess": {"properties": {"resource": {"const": "switching_mc_lag"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/mcLag"}}},
+    "stackListSuccess": {"properties": {"resource": {"const": "switching_stack"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/stack"}}}},
+    "stackGetSuccess": {"properties": {"resource": {"const": "switching_stack"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/stack"}}},
+    "radiusListSuccess": {"properties": {"resource": {"const": "radius_profile"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/radiusProfile"}}}},
+    "radiusGetSuccess": {"properties": {"resource": {"const": "radius_profile"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/radiusProfile"}}},
+    "trafficListListSuccess": {"properties": {"resource": {"const": "traffic_list"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/trafficList"}}}},
+    "trafficListGetSuccess": {"properties": {"resource": {"const": "traffic_list"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/trafficList"}}},
+
+    "version": {"type": "object", "additionalProperties": false, "required": ["version", "commit", "build_date", "go_version"], "properties": {"version": {"type": "string"}, "commit": {"type": "string"}, "build_date": {"type": "string"}, "go_version": {"type": "string", "pattern": "^go"}}},
+    "configPath": {"type": "object", "additionalProperties": false, "required": ["path"], "properties": {"path": {"type": "string"}}},
+    "config": {"type": "object", "additionalProperties": false, "required": ["host", "port", "insecure", "site", "safe_mode", "timeout"], "properties": {"host": {"type": "string"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "insecure": {"type": "boolean"}, "site": {"type": "string"}, "safe_mode": {"type": "boolean"}, "timeout": {"type": "string"}}},
+    "auth": {"type": "object", "additionalProperties": false, "required": ["host", "site", "auth_method"], "properties": {"host": {"type": "string"}, "site": {"type": "string"}, "auth_method": {"type": "string"}}},
+    "site": {"type": "object", "additionalProperties": false, "required": ["id", "name", "desc", "role"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "desc": {"type": "string"}, "role": {"type": "string"}}},
+    "device": {"type": "object", "additionalProperties": false, "required": ["id", "mac", "name", "model", "type", "state", "ip", "version", "uplink", "adopted"], "properties": {"id": {"type": "string"}, "mac": {"type": "string"}, "name": {"type": "string"}, "model": {"type": "string"}, "type": {"type": "string"}, "state": {"type": "string"}, "ip": {"type": "string"}, "version": {"type": "string"}, "uplink": {"type": "string"}, "adopted": {"type": "boolean"}}},
+    "client": {"type": "object", "additionalProperties": false, "required": ["id", "mac", "hostname", "name", "ip", "essid", "network", "is_wired", "blocked", "last_seen"], "properties": {"id": {"type": "string"}, "mac": {"type": "string"}, "hostname": {"type": "string"}, "name": {"type": "string"}, "ip": {"type": "string"}, "essid": {"type": "string"}, "network": {"type": "string"}, "is_wired": {"type": "boolean"}, "blocked": {"type": "boolean"}, "last_seen": {"type": "string"}}},
+    "network": {"type": "object", "additionalProperties": false, "required": ["id", "name", "purpose", "subnet", "dhcp_enabled", "domain_name", "wan"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "purpose": {"type": "string"}, "vlan": {"type": "integer"}, "subnet": {"type": "string"}, "dhcp_enabled": {"type": "boolean"}, "domain_name": {"type": "string"}, "wan": {"type": "boolean"}}},
+    "wlan": {"type": "object", "additionalProperties": false, "required": ["id", "name", "enabled", "security", "network_id", "band", "guest"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "security": {"type": "string"}, "network_id": {"type": "string"}, "band": {"type": "string"}, "guest": {"type": "boolean"}}},
+    "port": {"type": "object", "additionalProperties": false, "required": ["device_id", "device_name", "port_idx", "name", "media", "speed", "poe", "profile", "networks"], "properties": {"device_id": {"type": "string"}, "device_name": {"type": "string"}, "port_idx": {"type": "integer"}, "name": {"type": "string"}, "media": {"type": "string"}, "speed": {"type": "string"}, "poe": {"type": "string"}, "enabled": {"type": "boolean"}, "profile": {"type": "string"}, "networks": {"type": "string"}}},
+    "firewallPolicy": {"type": "object", "additionalProperties": false, "required": ["id", "name", "description", "enabled", "action", "allow_return_traffic", "source_zone_id", "destination_zone_id", "protocol", "logging_enabled", "index", "origin"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "enabled": {"type": "boolean"}, "action": {"type": "string"}, "allow_return_traffic": {"type": "boolean"}, "source_zone_id": {"type": "string"}, "destination_zone_id": {"type": "string"}, "protocol": {"type": "string"}, "logging_enabled": {"type": "boolean"}, "index": {"type": "integer"}, "origin": {"type": "string"}}},
+    "firewallZone": {"type": "object", "additionalProperties": false, "required": ["id", "name", "network_ids", "origin", "configurable"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "network_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "origin": {"type": "string"}, "configurable": {"type": "boolean"}}},
+    "dnsRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "domain", "enabled"],
+      "properties": {
+        "id": {"type": "string"}, "type": {"enum": ["A_RECORD", "AAAA_RECORD", "CNAME_RECORD", "MX_RECORD", "TXT_RECORD", "SRV_RECORD", "FORWARD_DOMAIN"]},
+        "domain": {"type": "string"}, "enabled": {"type": "boolean"}, "ipv4_address": {"type": "string"}, "ipv6_address": {"type": "string"},
+        "target_domain": {"type": "string"}, "mail_server_domain": {"type": "string"}, "text": {"type": "string"}, "server_domain": {"type": "string"},
+        "ip_address": {"type": "string"}, "ttl_seconds": {"type": "integer", "minimum": 0}, "priority": {"type": "integer", "minimum": 0},
+        "service": {"type": "string"}, "protocol": {"type": "string"}, "port": {"type": "integer", "minimum": 0}, "weight": {"type": "integer", "minimum": 0}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "A_RECORD"}}}, "then": {"required": ["ipv4_address", "ttl_seconds"]}},
+        {"if": {"properties": {"type": {"const": "AAAA_RECORD"}}}, "then": {"required": ["ipv6_address", "ttl_seconds"]}},
+        {"if": {"properties": {"type": {"const": "CNAME_RECORD"}}}, "then": {"required": ["target_domain", "ttl_seconds"]}},
+        {"if": {"properties": {"type": {"const": "MX_RECORD"}}}, "then": {"required": ["mail_server_domain", "priority", "ttl_seconds"]}},
+        {"if": {"properties": {"type": {"const": "TXT_RECORD"}}}, "then": {"required": ["text", "ttl_seconds"]}},
+        {"if": {"properties": {"type": {"const": "SRV_RECORD"}}}, "then": {"required": ["server_domain", "priority", "service", "protocol", "port", "weight", "ttl_seconds"]}},
+        {"if": {"properties": {"type": {"const": "FORWARD_DOMAIN"}}}, "then": {"required": ["server_domain", "ip_address"]}}
+      ]
+    },
+    "dnsResolver": {"type": "object", "additionalProperties": false, "required": ["network_id", "network_name", "dns", "wan"], "properties": {"network_id": {"type": "string"}, "network_name": {"type": "string"}, "dns": {"type": "array", "items": {"type": "string"}, "maxItems": 4}, "wan": {"type": "boolean"}}},
+    "healthSubsystem": {"type": "object", "additionalProperties": false, "required": ["name", "status"], "properties": {"name": {"type": "string"}, "status": {"type": "string"}}},
+    "health": {"type": "object", "additionalProperties": false, "required": ["application_version", "status", "device_total", "device_connected", "client_total"], "properties": {"application_version": {"type": "string"}, "status": {"enum": ["ok", "degraded", "error"]}, "device_total": {"type": "integer", "minimum": 0}, "device_connected": {"type": "integer", "minimum": 0}, "client_total": {"type": "integer", "minimum": 0}, "subsystems": {"type": "array", "items": {"$ref": "#/$defs/healthSubsystem"}}}},
+    "switchingMember": {"type": "object", "additionalProperties": false, "required": ["device_id"], "properties": {"device_id": {"type": "string"}, "port_idxs": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true}}},
+    "lag": {"type": "object", "additionalProperties": false, "required": ["id", "type", "members", "origin"], "properties": {"id": {"type": "string"}, "type": {"type": "string"}, "switch_stack_id": {"type": "string"}, "mc_lag_domain_id": {"type": "string"}, "members": {"type": "array", "items": {"$ref": "#/$defs/switchingMember"}}, "origin": {"type": "string"}}},
+    "mcLagPeer": {"type": "object", "additionalProperties": false, "required": ["device_id", "link_port_idxs", "role"], "properties": {"device_id": {"type": "string"}, "link_port_idxs": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true}, "role": {"type": "string"}}},
+    "mcLag": {"type": "object", "additionalProperties": false, "required": ["id", "name", "peers", "lag_ids", "origin"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "peers": {"type": "array", "items": {"$ref": "#/$defs/mcLagPeer"}}, "lag_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "origin": {"type": "string"}}},
+    "stack": {"type": "object", "additionalProperties": false, "required": ["id", "name", "device_ids", "lag_ids", "origin"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "device_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "lag_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "origin": {"type": "string"}}},
+    "radiusProfile": {"type": "object", "additionalProperties": false, "required": ["id", "name", "origin"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "origin": {"type": "string"}}},
+    "trafficListItem": {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"type": "string"}, "value": {"type": ["string", "integer", "number"]}, "start": {"type": ["string", "integer", "number"]}, "stop": {"type": ["string", "integer", "number"]}}},
+    "trafficList": {"type": "object", "additionalProperties": false, "required": ["id", "type", "name", "items"], "properties": {"id": {"type": "string"}, "type": {"enum": ["PORTS", "IPV4_ADDRESSES", "IPV6_ADDRESSES"]}, "name": {"type": "string"}, "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/trafficListItem"}}}}
+  }
+}

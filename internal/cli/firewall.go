@@ -20,6 +20,13 @@ var firewallMutationRisk = map[string]plan.RiskClass{
 	"update":  plan.HighImpact,
 	"delete":  plan.Destructive,
 	"reorder": plan.HighImpact,
+	"move":    plan.HighImpact,
+}
+
+var firewallZoneMutationRisk = map[string]plan.RiskClass{
+	"create": plan.HighImpact,
+	"update": plan.HighImpact,
+	"delete": plan.Destructive,
 }
 
 func newFirewallCmd() *cobra.Command {
@@ -31,9 +38,11 @@ func newFirewallCmd() *cobra.Command {
 		newFirewallListCmd(),
 		newFirewallGetCmd(),
 		newFirewallZoneCmd(),
+		newTrafficListCmd(),
 		newFirewallCreateCmd(),
 		newFirewallUpdateCmd(),
 		newFirewallDeleteCmd(),
+		newFirewallMoveCmd(),
 		newFirewallReorderCmd(),
 	)
 	return cmd
@@ -61,7 +70,7 @@ func newFirewallGetCmd() *cobra.Command {
 }
 
 func newFirewallZoneCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "zone", Short: "Read firewall zones"}
+	cmd := &cobra.Command{Use: "zone", Short: "Manage firewall zones"}
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:   "list",
@@ -78,8 +87,63 @@ func newFirewallZoneCmd() *cobra.Command {
 				return runFirewallZoneGet(args[0])
 			},
 		},
+		newFirewallZoneCreateCmd(),
+		newFirewallZoneUpdateCmd(),
+		newFirewallZoneDeleteCmd(),
 	)
 	return cmd
+}
+
+func newFirewallZoneCreateCmd() *cobra.Command {
+	var name string
+	var networkIDs []string
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create an experimental custom firewall zone",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFirewallZoneCreate(domain.FirewallZoneInput{Name: name, SetName: true, NetworkIDs: networkIDs, SetNetworkIDs: true})
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "custom firewall zone name")
+	cmd.Flags().StringSliceVar(&networkIDs, "network", nil, "network ID to attach; repeat for more than one")
+	_ = cmd.MarkFlagRequired("name")
+	return cmd
+}
+
+func newFirewallZoneUpdateCmd() *cobra.Command {
+	var name string
+	var networkIDs []string
+	var clearNetworks bool
+	cmd := &cobra.Command{
+		Use:   "update <id|exact-name>",
+		Short: "Update an experimental firewall zone",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if clearNetworks {
+				networkIDs = []string{}
+			}
+			return runFirewallZoneUpdate(args[0], domain.FirewallZoneInput{
+				Name: name, SetName: cmd.Flags().Changed("name"),
+				NetworkIDs: networkIDs, SetNetworkIDs: cmd.Flags().Changed("network") || clearNetworks,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "custom firewall zone name")
+	cmd.Flags().StringSliceVar(&networkIDs, "network", nil, "complete network ID replacement; repeat for more than one")
+	cmd.Flags().BoolVar(&clearNetworks, "clear-networks", false, "remove all attached networks")
+	cmd.MarkFlagsMutuallyExclusive("network", "clear-networks")
+	return cmd
+}
+
+func newFirewallZoneDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <id|exact-name>",
+		Short: "Delete an experimental custom firewall zone",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFirewallZoneDelete(args[0])
+		},
+	}
 }
 
 func newFirewallCreateCmd() *cobra.Command {
@@ -161,6 +225,22 @@ func newFirewallDeleteCmd() *cobra.Command {
 			return runFirewallDelete(args[0])
 		},
 	}
+}
+
+func newFirewallMoveCmd() *cobra.Command {
+	var before, after string
+	cmd := &cobra.Command{
+		Use:   "move <policy>",
+		Short: "Move an experimental firewall policy relative to another policy",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFirewallMove(domain.FirewallMove{Policy: args[0], Before: before, After: after})
+		},
+	}
+	cmd.Flags().StringVar(&before, "before", "", "policy ID or exact name to place this policy before")
+	cmd.Flags().StringVar(&after, "after", "", "policy ID or exact name to place this policy after")
+	cmd.MarkFlagsMutuallyExclusive("before", "after")
+	return cmd
 }
 
 func newFirewallReorderCmd() *cobra.Command {
@@ -289,6 +369,63 @@ func runFirewallZoneGet(query string) error {
 	return nil
 }
 
+func runFirewallZoneCreate(in domain.FirewallZoneInput) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("firewall", "zone create", err)
+	}
+	svc, ctx := domain.NewFirewallService(rt.Client), context.Background()
+	code := RunPreparedMutation(rt, "firewall", "zone create", func() (plan.PreparedMutation, error) {
+		p, err := svc.CreateZone(ctx, in)
+		return plan.Untargeted(p, firewallZoneMutationRisk["create"], true), err
+	}, nil, func(target plan.Target) (any, error) {
+		return svc.ApplyCreateZone(ctx, in)
+	})
+	return emittedExit(code)
+}
+
+func runFirewallZoneUpdate(query string, in domain.FirewallZoneInput) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("firewall", "zone update", err)
+	}
+	svc, ctx := domain.NewFirewallService(rt.Client), context.Background()
+	code := RunPreparedMutation(rt, "firewall", "zone update", func() (plan.PreparedMutation, error) {
+		p, item, err := svc.UpdateZone(ctx, query, in)
+		if err != nil {
+			return plan.PreparedMutation{}, err
+		}
+		return plan.Targeted(p, item.ID, p.Changes, firewallZoneMutationRisk["update"], true)
+	}, func(target plan.Target) (any, error) {
+		p, _, err := svc.UpdateZone(ctx, target.ID(), in)
+		return p.Changes, err
+	}, func(target plan.Target) (any, error) {
+		return svc.ApplyUpdateZonePrepared(ctx, target, target.ID(), in)
+	})
+	return emittedExit(code)
+}
+
+func runFirewallZoneDelete(query string) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("firewall", "zone delete", err)
+	}
+	svc, ctx := domain.NewFirewallService(rt.Client), context.Background()
+	code := RunPreparedMutation(rt, "firewall", "zone delete", func() (plan.PreparedMutation, error) {
+		p, item, err := svc.DeleteZone(ctx, query)
+		if err != nil {
+			return plan.PreparedMutation{}, err
+		}
+		return plan.Targeted(p, item.ID, p.Changes, firewallZoneMutationRisk["delete"], true)
+	}, func(target plan.Target) (any, error) {
+		p, _, err := svc.DeleteZone(ctx, target.ID())
+		return p.Changes, err
+	}, func(target plan.Target) (any, error) {
+		return svc.ApplyDeleteZonePrepared(ctx, target, target.ID())
+	})
+	return emittedExit(code)
+}
+
 func runFirewallCreate(in domain.FirewallInput) error {
 	rt, err := loadRuntime(true)
 	if err != nil {
@@ -384,6 +521,53 @@ func runFirewallDelete(query string) error {
 		func(target plan.Target) (any, error) { return svc.ApplyDeletePrepared(ctx, target, target.ID()) },
 	)
 	return emittedExit(code)
+}
+
+func runFirewallMove(in domain.FirewallMove) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("firewall", "move", err)
+	}
+	svc, ctx := domain.NewFirewallService(rt.Client), context.Background()
+	code := RunPreparedMutation(rt, "firewall", "move",
+		func() (plan.PreparedMutation, error) {
+			p, binding, err := svc.PrepareMove(ctx, in)
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			encoded, err := json.Marshal(binding)
+			if err != nil {
+				return plan.PreparedMutation{}, err
+			}
+			return plan.Targeted(p, string(encoded), p.Changes, firewallMutationRisk["move"], true)
+		},
+		func(target plan.Target) (any, error) {
+			binding, err := decodeFirewallMoveBinding(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			return svc.ObserveMoveBinding(ctx, binding)
+		},
+		func(target plan.Target) (any, error) {
+			binding, err := decodeFirewallMoveBinding(target.ID())
+			if err != nil {
+				return nil, err
+			}
+			return svc.ApplyMovePrepared(ctx, target, binding)
+		},
+	)
+	return emittedExit(code)
+}
+
+func decodeFirewallMoveBinding(value string) (domain.FirewallMoveBinding, error) {
+	var binding domain.FirewallMoveBinding
+	if err := json.Unmarshal([]byte(value), &binding); err != nil {
+		return domain.FirewallMoveBinding{}, fmt.Errorf("decode firewall move binding: %w", err)
+	}
+	if binding.PolicyID == "" || binding.ReferencePolicyID == "" {
+		return domain.FirewallMoveBinding{}, fmt.Errorf("firewall move binding is incomplete")
+	}
+	return binding, nil
 }
 
 type firewallReorderTarget struct {

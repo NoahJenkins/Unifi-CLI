@@ -19,6 +19,8 @@ const (
 	firewallSiteID      = "11111111-1111-4111-8111-111111111111"
 	internalZoneID      = "ffffffff-ffff-4fff-8fff-fffffffffff1"
 	externalZoneID      = "ffffffff-ffff-4fff-8fff-fffffffffff2"
+	labZoneID           = "ffffffff-ffff-4fff-8fff-fffffffffff3"
+	createdZoneID       = "ffffffff-ffff-4fff-8fff-fffffffffff9"
 	allowDNSPolicyID    = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1"
 	blockWebPolicyID    = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2"
 	systemGuardPolicyID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3"
@@ -121,7 +123,20 @@ func (f *modernFirewallAPI) DoOfficial(_ context.Context, method, path string, i
 		return decodeFirewallInto(item, out)
 	}
 	policiesPath := client.OfficialPath("sites", firewallSiteID, "firewall", "policies")
+	zonesPath := client.OfficialPath("sites", firewallSiteID, "firewall", "zones")
 	switch {
+	case method == http.MethodPost && parsed.Path == zonesPath:
+		return decodeFirewallInto(f.postResponse, out)
+	case method == http.MethodPut && strings.HasPrefix(parsed.Path, zonesPath+"/"):
+		if f.putResponse != nil {
+			f.details[parsed.Path] = deepCloneTestFirewallMap(f.putResponse)
+		}
+		return decodeFirewallInto(f.putResponse, out)
+	case method == http.MethodDelete && strings.HasPrefix(parsed.Path, zonesPath+"/"):
+		if !f.retainDeletedDetail {
+			delete(f.details, parsed.Path)
+		}
+		return nil
 	case method == http.MethodPost && parsed.Path == policiesPath:
 		return decodeFirewallInto(f.postResponse, out)
 	case method == http.MethodPut && strings.HasPrefix(parsed.Path, policiesPath+"/"):
@@ -134,6 +149,13 @@ func (f *modernFirewallAPI) DoOfficial(_ context.Context, method, path string, i
 	default:
 		return errors.New("unexpected official request: " + method + " " + path)
 	}
+}
+
+func deepCloneTestFirewallMap(in map[string]any) map[string]any {
+	var out map[string]any
+	data, _ := json.Marshal(in)
+	_ = json.Unmarshal(data, &out)
+	return out
 }
 
 // The fake never uses this fallback; it exists only to prove that firewall

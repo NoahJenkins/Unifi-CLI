@@ -26,7 +26,7 @@ func TestFirewallZoneCommandsExposeStableOfficialReadSurface(t *testing.T) {
 	if err != nil || zone == nil {
 		t.Fatalf("firewall zone command missing: command=%v err=%v", zone, err)
 	}
-	for _, child := range []string{"list", "get"} {
+	for _, child := range []string{"list", "get", "create", "update", "delete"} {
 		if command, _, err := zone.Find([]string{child}); err != nil || command == nil {
 			t.Fatalf("firewall zone %s missing: command=%v err=%v", child, command, err)
 		}
@@ -79,6 +79,34 @@ func TestFirewallZoneCommandsExposeStableOfficialReadSurface(t *testing.T) {
 		want := `{"schema_version":"1","ok":true,"resource":"firewall","action":"zone get","data":{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","network_ids":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"origin":"SYSTEM_DEFINED","configurable":true},"meta":{"site":"default","dry_run":false}}`
 		assertDecodedJSONEqual(t, stdout, want)
 	})
+}
+
+func TestFirewallZoneWriteFlagsAndRiskClasses(t *testing.T) {
+	create := newFirewallZoneCreateCmd()
+	update := newFirewallZoneUpdateCmd()
+	for _, flag := range []string{"name", "network"} {
+		if create.Flags().Lookup(flag) == nil {
+			t.Errorf("zone create is missing --%s", flag)
+		}
+	}
+	for _, flag := range []string{"name", "network", "clear-networks"} {
+		if update.Flags().Lookup(flag) == nil {
+			t.Errorf("zone update is missing --%s", flag)
+		}
+	}
+	want := map[string]plan.RiskClass{
+		"create": plan.HighImpact,
+		"update": plan.HighImpact,
+		"delete": plan.Destructive,
+	}
+	if len(firewallZoneMutationRisk) != len(want) {
+		t.Fatalf("firewall zone risk table has %d entries, want %d", len(firewallZoneMutationRisk), len(want))
+	}
+	for action, risk := range want {
+		if got := firewallZoneMutationRisk[action]; got != risk {
+			t.Errorf("firewall zone %s risk = %q, want %q", action, got, risk)
+		}
+	}
 }
 
 func TestFirewallZoneCommandsExactEmptyAmbiguityAndPermissionOutput(t *testing.T) {
@@ -138,6 +166,7 @@ func TestModernFirewallCLIFlagsRemoveLegacyRulesetContract(t *testing.T) {
 	create := newFirewallCreateCmd()
 	update := newFirewallUpdateCmd()
 	reorder := newFirewallReorderCmd()
+	move := newFirewallMoveCmd()
 	for _, flag := range []string{"source-zone", "destination-zone", "ip-version", "protocol", "logging-enabled", "allow-return-traffic"} {
 		if create.Flags().Lookup(flag) == nil {
 			t.Errorf("create is missing --%s", flag)
@@ -158,6 +187,16 @@ func TestModernFirewallCLIFlagsRemoveLegacyRulesetContract(t *testing.T) {
 			t.Errorf("atomic reorder still exposes legacy --%s", obsolete)
 		}
 	}
+	for _, flag := range []string{"before", "after"} {
+		if move.Flags().Lookup(flag) == nil {
+			t.Errorf("move is missing --%s", flag)
+		}
+	}
+	for _, obsolete := range []string{"source-zone", "destination-zone", "index"} {
+		if move.Flags().Lookup(obsolete) != nil {
+			t.Errorf("relative move unexpectedly exposes --%s", obsolete)
+		}
+	}
 }
 
 func TestFirewallWriteRiskClassesMatchApprovedTable(t *testing.T) {
@@ -166,6 +205,7 @@ func TestFirewallWriteRiskClassesMatchApprovedTable(t *testing.T) {
 		"update":  plan.HighImpact,
 		"delete":  plan.Destructive,
 		"reorder": plan.HighImpact,
+		"move":    plan.HighImpact,
 	}
 	if len(firewallMutationRisk) != len(want) {
 		t.Fatalf("firewall mutation risk table has %d entries, want %d", len(firewallMutationRisk), len(want))

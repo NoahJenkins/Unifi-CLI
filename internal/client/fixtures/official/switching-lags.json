@@ -1,0 +1,19 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "count": 1,
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "type": "LOCAL",
+      "members": [
+        {
+          "deviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+          "portIdxs": [1, 2]
+        }
+      ],
+      "metadata": {"origin": "USER"}
+    }
+  ]
+}

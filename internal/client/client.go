@@ -209,29 +209,20 @@ func (c *Client) doWithAuth(ctx context.Context, request func(string) error) err
 		return err
 	}
 
-	var cleanupErr error
 	c.authMu.Lock()
-	deleteSavedKey := c.authMethod == authMethod && c.apiKey == apiKey
-	if deleteSavedKey {
+	if c.authMethod == authMethod && c.apiKey == apiKey {
 		c.apiKey = ""
 		c.authMethod = ""
 	}
 	c.authMu.Unlock()
-	if deleteSavedKey && c.store != nil {
-		cleanupErr = c.store.Delete(c.baseURL)
-	}
 	message := "authentication failed"
 	if authErr := apperr.As(err); authErr != nil && authErr.Message != "" {
 		message = authErr.Message
 	}
-	result := apperr.WithHint(
+	return apperr.WithHint(
 		apperr.New(apperr.AuthFailed, message),
 		"run 'unifi login' to save an API key",
 	)
-	if cleanupErr != nil {
-		return apperr.WithCause(result, cleanupErr)
-	}
-	return result
 }
 
 func (c *Client) doJSON(ctx context.Context, apiKey, method, path string, in, out any) error {

@@ -248,7 +248,11 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		"version: v2.17.1",
-		"args: release --clean --skip=publish --release-notes docs/releases/v1.0.0-rc.1.md",
+		"syft-version: v1.51.0",
+		"args: release --clean --skip=publish --release-notes ${{ steps.metadata.outputs.notes }}",
+		"bash ./scripts/release-metadata.sh \"$RELEASE_TAG\"",
+		"git fetch origin main",
+		"bash ./scripts/release-ancestry.sh \"$RELEASE_COMMIT\" origin/main",
 		"fetch-depth: 0",
 		"persist-credentials: false",
 		"subject-path: |",
@@ -277,6 +281,9 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 			t.Errorf("release workflow missing %q", want)
 		}
 	}
+	if strings.Contains(text, "docs/releases/v1.0.0-rc.1.md") {
+		t.Error("release workflow hard-codes RC.1 release notes")
+	}
 
 	jobs := mapValue(t, workflow, "jobs")
 	preflightJob := mapValue(t, jobs, "preflight")
@@ -302,6 +309,17 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	assertPermissions("attest", attestJob, map[string]any{"actions": "read", "attestations": "write", "contents": "read", "id-token": "write"})
 	assertPermissions("prepare", prepareJob, map[string]any{"actions": "read", "contents": "read"})
 	assertPermissions("publish", publishJob, map[string]any{"actions": "read", "contents": "write"})
+	for name, value := range jobs {
+		job := value.(map[string]any)
+		environment, hasEnvironment := job["environment"]
+		if name == "publish" {
+			if !hasEnvironment || fmt.Sprint(environment) != "release" {
+				t.Errorf("publish environment = %v, want release", environment)
+			}
+		} else if hasEnvironment {
+			t.Errorf("non-publish job %s uses protected environment %v", name, environment)
+		}
+	}
 	if got := stringSliceValue(t, trustedJob, "needs"); !slices.Equal(got, []string{"preflight"}) {
 		t.Errorf("trusted needs = %v, want [preflight]", got)
 	}
@@ -439,6 +457,33 @@ func TestRequiredCIIncludesLinuxRaceAndArtifactSmoke(t *testing.T) {
 	}
 	if strings.Contains(text, "run: go test -race") {
 		t.Error("CI runs a second Linux test suite instead of selecting race mode for the shared smoke gate")
+	}
+}
+
+func TestLinuxNativeKeyringCIInitializesUnlockedLoginCollection(t *testing.T) {
+	workflow := readYAMLMap(t, ".github/workflows/ci.yml")
+	jobs := mapValue(t, workflow, "jobs")
+	keyringJob := mapValue(t, jobs, "native-keyring")
+	steps := jobSteps(t, keyringJob)
+	step := steps[stepIndex(t, steps, "test Linux Secret Service")].(map[string]any)
+
+	wantShell := "dbus-run-session -- bash --noprofile --norc -eo pipefail {0}"
+	if got := fmt.Sprint(step["shell"]); got != wantShell {
+		t.Errorf("Linux keyring shell = %q, want %q", got, wantShell)
+	}
+	run := fmt.Sprint(step["run"])
+	for _, want := range []string{
+		`mkdir -p "$HOME/.cache" "$HOME/.local/share/keyrings"`,
+		`chmod 700 "$HOME/.local" "$HOME/.local/share/keyrings"`,
+		`printf '%s\n' 'unifi-cli-ci' | gnome-keyring-daemon --unlock`,
+		`UNIFI_NATIVE_KEYRING_IT=1 go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1`,
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("Linux keyring setup missing %q", want)
+		}
+	}
+	if strings.Contains(run, "gnome-keyring-daemon --start") {
+		t.Error("Linux keyring setup starts a locked daemon instead of initializing the login collection")
 	}
 }
 

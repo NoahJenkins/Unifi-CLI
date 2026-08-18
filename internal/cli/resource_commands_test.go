@@ -5,12 +5,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 const commandTestAPIKey = "command-test-api-key-not-for-output"
@@ -23,6 +28,11 @@ const (
 	commandWlanID     = "dddddddd-dddd-4ddd-8ddd-ddddddddddd1"
 	commandFirewallID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1"
 	commandDNSID      = "10000000-0000-4000-8000-000000000001"
+	commandLAGID      = "20000000-0000-4000-8000-000000000001"
+	commandMCLAGID    = "20000000-0000-4000-8000-000000000002"
+	commandStackID    = "20000000-0000-4000-8000-000000000003"
+	commandRadiusID   = "20000000-0000-4000-8000-000000000004"
+	commandTrafficID  = "20000000-0000-4000-8000-000000000005"
 )
 
 type commandServerOptions struct {
@@ -61,20 +71,29 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 			"ipAddress":"192.0.2.99","macAddress":"aa:bb:cc:dd:ee:99","model":"U7",
 			"state":"PENDING_ADOPTION","supported":true
 		}]`,
-		"/proxy/network/integration/v1/sites":                                                        `[{"id":"11111111-1111-4111-8111-111111111111","internalReference":"default","name":"Default"}]`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices":           `[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":["gateway","switching"],"interfaces":["ports"],"firmwareUpdatable":false,"supported":true}]`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/clients":           `[{"type":"WIRELESS","id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1","macAddress":"aa:bb:cc:dd:ee:02","name":"Laptop","ipAddress":"192.0.2.2","connectedAt":"2026-08-07T12:00:00Z","access":{"type":"DEFAULT"},"uplinkDeviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"}]`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks":          `[{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"}}]`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts":   `[{"type":"STANDARD","id":"dddddddd-dddd-4ddd-8ddd-ddddddddddd1","name":"Main","enabled":true,"metadata":{"origin":"USER"},"network":{"type":"SPECIFIC","networkId":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},"securityConfiguration":{"type":"WPA2_PERSONAL"},"broadcastingFrequenciesGHz":[2.4,6]}]`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/policies": `[{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","description":"Permit DNS","enabled":true,"action":{"type":"ALLOW","allowReturnTraffic":false},"source":{"zoneId":"ffffffff-ffff-4fff-8fff-fffffffffff1"},"destination":{"zoneId":"ffffffff-ffff-4fff-8fff-fffffffffff2"},"ipProtocolScope":{"ipVersion":"IPV4","protocolFilter":{"type":"NAMED_PROTOCOL","protocol":{"name":"udp"},"matchOpposite":false}},"loggingEnabled":false,"index":1,"metadata":{"origin":"USER"}}]`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones":    `[{"id":"ffffffff-ffff-4fff-8fff-fffffffffff2","name":"External","networkIds":[],"metadata":{"origin":"SYSTEM_DEFINED","configurable":false}},{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}]`,
+		"/proxy/network/integration/v1/sites":                                                               `[{"id":"11111111-1111-4111-8111-111111111111","internalReference":"default","name":"Default"}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices":                  `[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":["gateway","switching"],"interfaces":["ports"],"firmwareUpdatable":false,"supported":true}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/clients":                  `[{"type":"WIRELESS","id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1","macAddress":"aa:bb:cc:dd:ee:02","name":"Laptop","ipAddress":"192.0.2.2","connectedAt":"2026-08-07T12:00:00Z","access":{"type":"DEFAULT"},"uplinkDeviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks":                 `[{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts":          `[{"type":"STANDARD","id":"dddddddd-dddd-4ddd-8ddd-ddddddddddd1","name":"Main","enabled":true,"metadata":{"origin":"USER"},"network":{"type":"SPECIFIC","networkId":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},"securityConfiguration":{"type":"WPA2_PERSONAL"},"broadcastingFrequenciesGHz":[2.4,6]}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/policies":        `[{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1","name":"Allow DNS","description":"Permit DNS","enabled":true,"action":{"type":"ALLOW","allowReturnTraffic":false},"source":{"zoneId":"ffffffff-ffff-4fff-8fff-fffffffffff1"},"destination":{"zoneId":"ffffffff-ffff-4fff-8fff-fffffffffff2"},"ipProtocolScope":{"ipVersion":"IPV4","protocolFilter":{"type":"NAMED_PROTOCOL","protocol":{"name":"udp"},"matchOpposite":false}},"loggingEnabled":false,"index":1,"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones":           `[{"id":"ffffffff-ffff-4fff-8fff-fffffffffff2","name":"External","networkIds":[],"metadata":{"origin":"SYSTEM_DEFINED","configurable":false}},{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/switching/lags":           `[{"id":"20000000-0000-4000-8000-000000000001","type":"STATIC","members":[{"deviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","portIdxs":[1,2]}],"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/switching/mc-lag-domains": `[{"id":"20000000-0000-4000-8000-000000000002","name":"Core Pair","peers":[{"deviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","linkPortIdxs":[47,48],"role":"PRIMARY"}],"lags":[{"id":"20000000-0000-4000-8000-000000000001"}],"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/switching/switch-stacks":  `[{"id":"20000000-0000-4000-8000-000000000003","name":"Core Stack","members":[{"deviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"}],"lags":[{"id":"20000000-0000-4000-8000-000000000001"}],"metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/radius/profiles":          `[{"id":"20000000-0000-4000-8000-000000000004","name":"Corp RADIUS","metadata":{"origin":"USER"}}]`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/traffic-matching-lists":   `[{"id":"20000000-0000-4000-8000-000000000005","type":"PORTS","name":"Web Ports","items":[{"type":"PORT","value":443}]}]`,
 	}
 	officialDetails := map[string]string{
 		"/proxy/network/integration/v1/info": `{"applicationVersion":"10.4.57"}`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1":         `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","configurationId":"config-1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":{"switching":{"lags":[]}},"interfaces":{"ports":[{"idx":1,"connector":"RJ45","maxSpeedMbps":1000,"speedMbps":1000,"state":"UP","poe":{"enabled":false,"standard":"802.3at","state":"DOWN","type":2}}]},"firmwareUpdatable":false,"supported":true}`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc1":        `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"},"cellularBackupEnabled":false,"internetAccessEnabled":true,"isolationEnabled":false,"mdnsForwardingEnabled":true,"ipv4Configuration":{"hostIpAddress":"192.0.2.1","prefixLength":24,"autoScaleEnabled":false,"dhcpConfiguration":{"mode":"SERVER","domainName":"example.test","dnsServerIpAddressesOverride":["192.0.2.53"],"ipAddressRange":{"start":"192.0.2.10","stop":"192.0.2.200"},"leaseTimeSeconds":86400,"pingConflictDetectionEnabled":true}}}`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts/dddddddd-dddd-4ddd-8ddd-ddddddddddd1": `{"type":"STANDARD","id":"dddddddd-dddd-4ddd-8ddd-ddddddddddd1","name":"Main","enabled":true,"clientIsolationEnabled":false,"hideName":false,"multicastToUnicastConversionEnabled":false,"uapsdEnabled":true,"advertiseDeviceName":true,"arpProxyEnabled":false,"broadcastingFrequenciesGHz":[2.4,6],"bssTransitionEnabled":true,"metadata":{"origin":"USER"},"network":{"type":"SPECIFIC","networkId":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},"securityConfiguration":{"type":"WPA2_PERSONAL"}}`,
-		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones/ffffffff-ffff-4fff-8fff-fffffffffff1":  `{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1":                  `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","configurationId":"config-1","macAddress":"aa:bb:cc:dd:ee:01","name":"Gateway","model":"UDM","state":"ONLINE","ipAddress":"192.0.2.1","firmwareVersion":"1.0","features":{"switching":{"lags":[]}},"interfaces":{"ports":[{"idx":1,"connector":"RJ45","maxSpeedMbps":1000,"speedMbps":1000,"state":"UP","poe":{"enabled":false,"standard":"802.3at","state":"DOWN","type":2}}]},"firmwareUpdatable":false,"supported":true}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc1":                 `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","enabled":true,"default":true,"management":"GATEWAY","vlanId":10,"metadata":{"origin":"USER"},"cellularBackupEnabled":false,"internetAccessEnabled":true,"isolationEnabled":false,"mdnsForwardingEnabled":true,"ipv4Configuration":{"hostIpAddress":"192.0.2.1","prefixLength":24,"autoScaleEnabled":false,"dhcpConfiguration":{"mode":"SERVER","domainName":"example.test","dnsServerIpAddressesOverride":["192.0.2.53"],"ipAddressRange":{"start":"192.0.2.10","stop":"192.0.2.200"},"leaseTimeSeconds":86400,"pingConflictDetectionEnabled":true}}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/wifi/broadcasts/dddddddd-dddd-4ddd-8ddd-ddddddddddd1":          `{"type":"STANDARD","id":"dddddddd-dddd-4ddd-8ddd-ddddddddddd1","name":"Main","enabled":true,"clientIsolationEnabled":false,"hideName":false,"multicastToUnicastConversionEnabled":false,"uapsdEnabled":true,"advertiseDeviceName":true,"arpProxyEnabled":false,"broadcastingFrequenciesGHz":[2.4,6],"bssTransitionEnabled":true,"metadata":{"origin":"USER"},"network":{"type":"SPECIFIC","networkId":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1"},"securityConfiguration":{"type":"WPA2_PERSONAL"}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/firewall/zones/ffffffff-ffff-4fff-8fff-fffffffffff1":           `{"id":"ffffffff-ffff-4fff-8fff-fffffffffff1","name":"Internal","networkIds":["cccccccc-cccc-4ccc-8ccc-ccccccccccc1"],"metadata":{"origin":"SYSTEM_DEFINED","configurable":true}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/switching/lags/20000000-0000-4000-8000-000000000001":           `{"id":"20000000-0000-4000-8000-000000000001","type":"STATIC","members":[{"deviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","portIdxs":[1,2]}],"metadata":{"origin":"USER"}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/switching/mc-lag-domains/20000000-0000-4000-8000-000000000002": `{"id":"20000000-0000-4000-8000-000000000002","name":"Core Pair","peers":[{"deviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1","linkPortIdxs":[47,48],"role":"PRIMARY"}],"lags":[{"id":"20000000-0000-4000-8000-000000000001"}],"metadata":{"origin":"USER"}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/switching/switch-stacks/20000000-0000-4000-8000-000000000003":  `{"id":"20000000-0000-4000-8000-000000000003","name":"Core Stack","members":[{"deviceId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"}],"lags":[{"id":"20000000-0000-4000-8000-000000000001"}],"metadata":{"origin":"USER"}}`,
+		"/proxy/network/integration/v1/sites/11111111-1111-4111-8111-111111111111/traffic-matching-lists/20000000-0000-4000-8000-000000000005":   `{"id":"20000000-0000-4000-8000-000000000005","type":"PORTS","name":"Web Ports","items":[{"type":"PORT","value":443}]}`,
 	}
 	for path, body := range opts.officialCollections {
 		officialCollections[path] = body
@@ -285,6 +304,77 @@ func TestDNSMutationRiskWiring(t *testing.T) {
 	})
 }
 
+func TestDNSCreateAndUpdateExposeTypedPolicyFlags(t *testing.T) {
+	wantCreate := []string{"enabled", "ip", "ipv4", "ipv6", "mail-server-domain", "name", "port", "priority", "protocol", "server-domain", "server-ip", "service", "target-domain", "text", "ttl", "type", "weight"}
+	wantUpdate := []string{"enabled", "ip", "ipv4", "ipv6", "mail-server-domain", "name", "port", "priority", "protocol", "server-domain", "server-ip", "service", "target-domain", "text", "ttl", "weight"}
+
+	for _, tt := range []struct {
+		name string
+		cmd  *cobra.Command
+		want []string
+	}{
+		{name: "create", cmd: newDNSCreateCmd(), want: wantCreate},
+		{name: "update", cmd: newDNSUpdateCmd(), want: wantUpdate},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			tt.cmd.Flags().VisitAll(func(flag *pflag.Flag) { got = append(got, flag.Name) })
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("flags = %#v, want %#v", got, tt.want)
+			}
+			if flag := tt.cmd.Flag("ip"); flag == nil || len(flag.Annotations[cobra.BashCompOneRequiredFlag]) != 0 {
+				t.Fatalf("--ip must remain optional for %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestDNSPolicyFlagsPreserveExplicitZeroValuesAndIPv4Alias(t *testing.T) {
+	t.Run("SRV zero values", func(t *testing.T) {
+		var values dnsPolicyFlagValues
+		cmd := &cobra.Command{Use: "test"}
+		values.bind(cmd, true)
+		if err := cmd.ParseFlags([]string{"--type", "srv", "--name", "example.test", "--server-domain", "sip.example.test", "--service", "_sip", "--protocol", "_tcp", "--priority", "0", "--port", "5060", "--weight", "0"}); err != nil {
+			t.Fatal(err)
+		}
+		in, err := values.input(cmd, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.Type != "srv" || !in.SetPriority || in.Priority != 0 || !in.SetPort || in.Port != 5060 || !in.SetWeight || in.Weight != 0 {
+			t.Fatalf("input = %#v", in)
+		}
+	})
+
+	t.Run("legacy IPv4 alias", func(t *testing.T) {
+		var values dnsPolicyFlagValues
+		cmd := &cobra.Command{Use: "test"}
+		values.bind(cmd, true)
+		if err := cmd.ParseFlags([]string{"--name", "a.example.test", "--ip", "192.0.2.1"}); err != nil {
+			t.Fatal(err)
+		}
+		in, err := values.input(cmd, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.IP != "192.0.2.1" || !in.SetIP {
+			t.Fatalf("input = %#v", in)
+		}
+	})
+
+	t.Run("conflicting IPv4 flags", func(t *testing.T) {
+		var values dnsPolicyFlagValues
+		cmd := &cobra.Command{Use: "test"}
+		values.bind(cmd, true)
+		if err := cmd.ParseFlags([]string{"--ip", "192.0.2.1", "--ipv4", "192.0.2.2"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := values.input(cmd, true); !apperr.Is(err, apperr.ValidationFailed) {
+			t.Fatalf("err = %v, want validation_failed", err)
+		}
+	})
+}
+
 func useCommandTestRuntime(t *testing.T, srv *httptest.Server, jsonOutput bool) {
 	t.Helper()
 	useAuthCommandConfig(t, srv)
@@ -330,6 +420,16 @@ func TestResourceReadCommandsRenderHumanAndJSONOutput(t *testing.T) {
 		{name: "dns get", resource: "dns", action: "get", humanMarker: "id: " + commandDNSID, run: func() error { return runDNSGet(commandDNSID) }},
 		{name: "dns resolvers", resource: "dns", action: "resolvers list", humanMarker: "LAN", run: runDNSResolversList},
 		{name: "system health", resource: "system", action: "health", humanMarker: "application_version: 10.4.57", run: runSystemHealth},
+		{name: "lag list", resource: "switching_lag", action: "list", humanMarker: "STATIC", run: runSwitchingLAGList},
+		{name: "lag get", resource: "switching_lag", action: "get", humanMarker: "id: " + commandLAGID, run: func() error { return runSwitchingLAGGet(commandLAGID) }},
+		{name: "mc-lag list", resource: "switching_mc_lag", action: "list", humanMarker: "Core Pair", run: runSwitchingMCLAGList},
+		{name: "mc-lag get", resource: "switching_mc_lag", action: "get", humanMarker: "id: " + commandMCLAGID, run: func() error { return runSwitchingMCLAGGet(commandMCLAGID) }},
+		{name: "stack list", resource: "switching_stack", action: "list", humanMarker: "Core Stack", run: runSwitchingStackList},
+		{name: "stack get", resource: "switching_stack", action: "get", humanMarker: "id: " + commandStackID, run: func() error { return runSwitchingStackGet(commandStackID) }},
+		{name: "radius list", resource: "radius_profile", action: "list", humanMarker: "Corp RADIUS", run: runRadiusProfileList},
+		{name: "radius get", resource: "radius_profile", action: "get", humanMarker: "id: " + commandRadiusID, run: func() error { return runRadiusProfileGet(commandRadiusID) }},
+		{name: "traffic list", resource: "traffic_list", action: "list", humanMarker: "Web Ports", run: runTrafficListList},
+		{name: "traffic get", resource: "traffic_list", action: "get", humanMarker: "id: " + commandTrafficID, run: func() error { return runTrafficListGet(commandTrafficID) }},
 	}
 
 	for _, tt := range tests {
@@ -361,6 +461,7 @@ func TestResourceReadCommandsRenderHumanAndJSONOutput(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 				t.Fatalf("invalid JSON stdout: %v; stdout=%q", err, stdout)
 			}
+			assertSchemaV1(t, stdout)
 			if !envelope.OK || envelope.Resource != tt.resource || envelope.Action != tt.action {
 				t.Fatalf("envelope = %+v", envelope)
 			}
@@ -452,6 +553,7 @@ func TestOfficialStableReadGoldenOutput(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 				t.Fatalf("decode envelope: %v", err)
 			}
+			assertSchemaV1(t, stdout)
 			var want any
 			if err := json.Unmarshal([]byte(tt.jsonWant), &want); err != nil {
 				t.Fatalf("decode golden JSON: %v", err)
@@ -621,8 +723,41 @@ func assertDecodedJSONEqual(t *testing.T, got, want string) {
 	if err := json.Unmarshal([]byte(want), &wantValue); err != nil {
 		t.Fatalf("decode want JSON: %v; want=%q", err, want)
 	}
+	assertSchemaV1Document(t, gotValue)
 	if !reflect.DeepEqual(gotValue, wantValue) {
 		t.Fatalf("JSON = %#v, want %#v", gotValue, wantValue)
+	}
+}
+
+func assertSchemaV1(t *testing.T, raw string) {
+	t.Helper()
+	var document any
+	if err := json.Unmarshal([]byte(raw), &document); err != nil {
+		t.Fatalf("decode schema-v1 document: %v", err)
+	}
+	assertSchemaV1Document(t, document)
+}
+
+func assertSchemaV1Document(t *testing.T, document any) {
+	t.Helper()
+	data, err := os.ReadFile("../../schemas/schema-v1.json")
+	if err != nil {
+		t.Fatalf("read schema-v1: %v", err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(data, &schemaDocument); err != nil {
+		t.Fatalf("decode schema-v1: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("schema-v1.json", schemaDocument); err != nil {
+		t.Fatalf("add schema-v1 resource: %v", err)
+	}
+	schema, err := compiler.Compile("schema-v1.json")
+	if err != nil {
+		t.Fatalf("compile schema-v1: %v", err)
+	}
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("output violates schema-v1: %v", err)
 	}
 }
 
@@ -689,6 +824,69 @@ func TestResourceMutationCommandsRenderPlansAndApply(t *testing.T) {
 				if protected != "" && strings.Contains(stdout+stderr, protected) {
 					t.Fatalf("apply output leaked protected content: stdout=%q stderr=%q", stdout, stderr)
 				}
+			}
+		})
+	}
+}
+
+func TestExpandedOfficialMutationPlansUseSchemaV1(t *testing.T) {
+	srv := newCommandTestServer(t)
+	defer srv.Close()
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "firewall zone create",
+			run: func() error {
+				return runFirewallZoneCreate(domain.FirewallZoneInput{Name: "IoT", NetworkIDs: []string{commandNetworkID}, SetNetworkIDs: true})
+			},
+		},
+		{
+			name: "traffic list create",
+			run: func() error {
+				return runTrafficListCreate(domain.TrafficListInput{Type: "ports", Name: "Web", SetName: true, Items: []string{"443"}, SetItems: true})
+			},
+		},
+		{
+			name: "traffic list update",
+			run: func() error {
+				return runTrafficListUpdate(commandTrafficID, domain.TrafficListInput{Name: "TLS Ports", SetName: true})
+			},
+		},
+		{name: "traffic list delete", run: func() error { return runTrafficListDelete(commandTrafficID) }},
+		{
+			name: "network update",
+			run: func() error {
+				return runNetworkUpdate(commandNetworkID, domain.NetworkInput{Name: "Trusted", SetName: true})
+			},
+		},
+		{
+			name: "wlan update",
+			run: func() error {
+				return runWlanUpdate(commandWlanID, domain.WlanInput{Name: "Trusted WiFi", SetName: true})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useCommandTestRuntime(t, srv, true)
+			stdout, stderr, err := captureProcessOutput(t, tt.run)
+			if err != nil {
+				t.Fatalf("plan: %v; stdout=%q stderr=%q", err, stdout, stderr)
+			}
+			assertSchemaV1(t, stdout)
+			var envelope struct {
+				Meta struct {
+					DryRun       bool `json:"dry_run"`
+					Experimental bool `json:"experimental"`
+				} `json:"meta"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if !envelope.Meta.DryRun || !envelope.Meta.Experimental {
+				t.Fatalf("plan did not retain dry-run and experimental metadata: %s", stdout)
 			}
 		})
 	}

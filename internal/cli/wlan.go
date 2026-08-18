@@ -59,6 +59,7 @@ func newWlanCreateCmd() *cobra.Command {
 		network       string
 		password      bool
 		passwordStdin bool
+		securityFlags wlanSecurityFlagValues
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -87,6 +88,7 @@ func newWlanCreateCmd() *cobra.Command {
 				Password:    secret,
 				SetPassword: password || passwordStdin,
 			}
+			securityFlags.apply(cmd, &in)
 			return runWlanCreate(in)
 		},
 	}
@@ -95,6 +97,7 @@ func newWlanCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&network, "network", "", "network id")
 	cmd.Flags().BoolVar(&password, "password", false, "prompt for the WLAN password")
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the WLAN password from stdin")
+	securityFlags.add(cmd)
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
@@ -106,6 +109,7 @@ func newWlanUpdateCmd() *cobra.Command {
 		network       string
 		password      bool
 		passwordStdin bool
+		securityFlags wlanSecurityFlagValues
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -126,6 +130,7 @@ func newWlanUpdateCmd() *cobra.Command {
 				Password:    secret,
 				SetPassword: password || passwordStdin,
 			}
+			securityFlags.apply(cmd, &in)
 			return runWlanUpdate(args[0], in)
 		},
 	}
@@ -134,7 +139,48 @@ func newWlanUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&network, "network", "", "network id")
 	cmd.Flags().BoolVar(&password, "password", false, "prompt for the WLAN password")
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the WLAN password from stdin")
+	securityFlags.add(cmd)
 	return cmd
+}
+
+type wlanSecurityFlagValues struct {
+	pmfMode                string
+	saeAnticloggingSeconds int
+	saeSyncSeconds         int
+	fastRoaming            bool
+	wpa3FastRoaming        bool
+	radiusProfile          string
+	radiusNASIDSource      string
+	radiusNASID            string
+	coa                    bool
+	wpa3SecurityMode       string
+}
+
+func (v *wlanSecurityFlagValues) add(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&v.pmfMode, "pmf-mode", "", "protected management frames mode (required|optional)")
+	cmd.Flags().IntVar(&v.saeAnticloggingSeconds, "sae-anticlogging-seconds", 0, "SAE anticlogging threshold in seconds (1-60)")
+	cmd.Flags().IntVar(&v.saeSyncSeconds, "sae-sync-seconds", 0, "SAE synchronization time in seconds (1-60)")
+	cmd.Flags().BoolVar(&v.fastRoaming, "fast-roaming", false, "enable fast roaming")
+	cmd.Flags().BoolVar(&v.wpa3FastRoaming, "wpa3-fast-roaming", false, "enable WPA3 fast roaming for transition security")
+	cmd.Flags().StringVar(&v.radiusProfile, "radius-profile", "", "RADIUS profile UUID for enterprise security")
+	cmd.Flags().StringVar(&v.radiusNASIDSource, "radius-nas-id-source", "", "derived NAS ID source (device-mac-address|device-name|site-name|bssid)")
+	cmd.Flags().StringVar(&v.radiusNASID, "radius-nas-id", "", "user-defined RADIUS NAS ID")
+	cmd.Flags().BoolVar(&v.coa, "coa", false, "enable RADIUS Change of Authorization")
+	cmd.Flags().StringVar(&v.wpa3SecurityMode, "wpa3-security-mode", "", "WPA3 enterprise mode (default|high-security-192-bit)")
+	cmd.MarkFlagsMutuallyExclusive("radius-nas-id-source", "radius-nas-id")
+}
+
+func (v wlanSecurityFlagValues) apply(cmd *cobra.Command, in *domain.WlanInput) {
+	in.PMFMode, in.SetPMFMode = v.pmfMode, cmd.Flags().Changed("pmf-mode")
+	in.SAEAnticloggingThresholdSeconds, in.SetSAEAnticloggingThresholdSeconds = v.saeAnticloggingSeconds, cmd.Flags().Changed("sae-anticlogging-seconds")
+	in.SAESyncTimeSeconds, in.SetSAESyncTimeSeconds = v.saeSyncSeconds, cmd.Flags().Changed("sae-sync-seconds")
+	in.FastRoamingEnabled, in.SetFastRoamingEnabled = v.fastRoaming, cmd.Flags().Changed("fast-roaming")
+	in.WPA3FastRoamingEnabled, in.SetWPA3FastRoamingEnabled = v.wpa3FastRoaming, cmd.Flags().Changed("wpa3-fast-roaming")
+	in.RadiusProfileID, in.SetRadiusProfileID = v.radiusProfile, cmd.Flags().Changed("radius-profile")
+	in.RadiusNASIDSource, in.SetRadiusNASIDSource = v.radiusNASIDSource, cmd.Flags().Changed("radius-nas-id-source")
+	in.RadiusNASID, in.SetRadiusNASID = v.radiusNASID, cmd.Flags().Changed("radius-nas-id")
+	in.COAEnabled, in.SetCOAEnabled = v.coa, cmd.Flags().Changed("coa")
+	in.WPA3SecurityMode, in.SetWPA3SecurityMode = v.wpa3SecurityMode, cmd.Flags().Changed("wpa3-security-mode")
 }
 
 func resolveWlanPassword(cmd *cobra.Command, prompt, stdin bool) (string, error) {
@@ -151,7 +197,9 @@ func resolveWlanPassword(cmd *cobra.Command, prompt, stdin bool) (string, error)
 }
 
 func validateWlanCreatePassword(security, password string) error {
-	if !strings.EqualFold(security, "open") && password == "" {
+	canonical := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(security), "-", "_"))
+	personal := canonical == "wpapsk" || canonical == "wpa2_personal" || canonical == "wpa3_personal" || canonical == "wpa2_wpa3_personal"
+	if personal && password == "" {
 		return apperr.WithHint(
 			apperr.New(apperr.ValidationFailed, "secured WLAN creation requires a password"),
 			"pass --password or --password-stdin",
