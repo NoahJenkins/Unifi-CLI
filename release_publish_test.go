@@ -82,8 +82,12 @@ func TestPublishReleaseCreatesDraftAndCapturesID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(calls, "--method POST repos/owner/repo/releases ") {
+	createCall := callLineContaining(calls, "--method POST repos/owner/repo/releases ")
+	if createCall == "" {
 		t.Fatalf("publisher did not create the draft through the release API; calls:\n%s", calls)
+	}
+	if strings.Contains(createCall, "target_commitish=") {
+		t.Fatalf("publisher supplied target_commitish for a preverified existing tag: %q", createCall)
 	}
 	if strings.Contains(calls, "release create ") {
 		t.Fatalf("publisher created a draft without capturing its numeric ID; calls:\n%s", calls)
