@@ -54,13 +54,16 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       equality is proven, the six native runner jobs extract their matching
       archive and run the same four-command executable contract before release.
 - [ ] Confirm GoReleaser runs with `--skip=publish`, so artifact generation has
-      no contents-write, attestation, or OIDC authority. Every transferred tar
-      must match the producing job's SHA-256 output before extraction. Reverify
-      the sealed bundle before the six native runner smokes, attestation, and
-      publication staging. Pass all cross-job digests through environment
-      variables and validate them before comparison; never interpolate them
-      into shell source. The final contents-write job must contain no
-      third-party actions and must never execute code supplied by an artifact:
+      no contents-write, attestation, or OIDC authority. Bind
+      `GORELEASER_CURRENT_TAG` to the exact `RELEASE_TAG`, including when a
+      release candidate and stable tag point to the same commit. Every
+      transferred tar must match the producing job's SHA-256 output before
+      extraction. Reverify the sealed bundle before the six native runner
+      smokes, attestation, and publication staging. Pass all cross-job digests
+      through environment variables and validate them before comparison; never
+      interpolate them into shell source. The final contents-write job must
+      contain no third-party actions and must never execute code supplied by
+      an artifact:
       it fetches the exact `RELEASE_COMMIT`, safely extracts the data-only
       publication bundle, independently rebuilds all six trusted binaries and
       the source manifest, reruns the complete artifact verifier, then executes
