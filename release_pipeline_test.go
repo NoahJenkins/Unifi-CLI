@@ -439,6 +439,19 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowBindsGoReleaserToRequestedTag(t *testing.T) {
+	workflow := readYAMLMap(t, ".github/workflows/release.yml")
+	jobs := mapValue(t, workflow, "jobs")
+	generateJob := mapValue(t, jobs, "generate")
+	steps := jobSteps(t, generateJob)
+	buildStep := steps[stepIndex(t, steps, "Build release artifacts without publishing")].(map[string]any)
+	env := mapValue(t, buildStep, "env")
+
+	if got := fmt.Sprint(env["GORELEASER_CURRENT_TAG"]); got != "${{ env.RELEASE_TAG }}" {
+		t.Fatalf("GoReleaser current tag = %q, want exact requested release tag", got)
+	}
+}
+
 func TestRequiredCIIncludesLinuxRaceAndArtifactSmoke(t *testing.T) {
 	data, err := os.ReadFile(".github/workflows/ci.yml")
 	if err != nil {

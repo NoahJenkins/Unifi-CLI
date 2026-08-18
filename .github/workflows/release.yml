@@ -178,6 +178,8 @@ jobs:
 
       - name: Build release artifacts without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
+        env:
+          GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
         with:
           distribution: goreleaser
           version: v2.17.1
