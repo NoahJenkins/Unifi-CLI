@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0-rc.3] - 2026-08-17
+
+### Fixed
+
+- Tagged source installs now use the recovered main-module version for both
+  `unifi --version` and `unifi version --json`. RC.2 reported `dev` only from
+  the short root flag even though its JSON build information was correct.
+
+Apart from this build-information output fix, RC.3 changes no controller API,
+command surface, schema, compatibility, or mutation behavior from RC.2.
+
+See [`v1.0.0-rc.3` release notes](docs/releases/v1.0.0-rc.3.md).
+
 ## [1.0.0-rc.2] - 2026-08-17
 
 ### Added
