@@ -1,6 +1,6 @@
 # Maintainer release checklist
 
-This checklist covers `v1.0.0-rc.3` qualification and unchanged-source
+This checklist covers `v1.0.0-rc.4` qualification and unchanged-source
 promotion to `v1.0.0`. Documentation work must
 not mutate GitHub, tag a commit, publish a release, or contact a controller.
 
@@ -15,7 +15,7 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       Markdown link/command, help, version, and schema checks.
 - [ ] Run every fuzz target for 30 seconds and run
       `UNIFI_RELEASE_HOST=1 ./scripts/check-performance.sh` on the designated
-      darwin/arm64 host. Record the three-sample medians in the RC.3 notes.
+      darwin/arm64 host. Record the three-sample medians in the RC.4 notes.
 - [ ] Run the native keyring round trip on macOS, Windows, and Linux Secret
       Service. Confirm each unique synthetic entry was deleted.
 - [ ] Run `go test . -run Release -count=1` to lint the GoReleaser and release
@@ -27,7 +27,7 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       claim.
 - [ ] Review [Compatibility](../compatibility.md),
       [SECURITY.md](../../SECURITY.md), and the [RC release
-      notes](../releases/v1.0.0-rc.3.md).
+      notes](../releases/v1.0.0-rc.4.md).
 
 ## Release gates
 
@@ -114,15 +114,15 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       account.
 - [ ] Verify the protected `release` environment requires the configured
       manual approval and that only the publisher job has write authority.
-- [ ] Create and verify the account-controlled `v1.0.0-rc.3` tag on the unchanged protected
+- [ ] Create and verify the account-controlled `v1.0.0-rc.4` tag on the unchanged protected
       main commit. Confirm the workflow publishes that exact verified draft.
 - [ ] Verify downloaded release artifacts and
-      `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.3`.
-- [ ] Confirm the tagged source install reports `v1.0.0-rc.3` while `commit`
+      `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.4`.
+- [ ] Confirm the tagged source install reports `v1.0.0-rc.4` while `commit`
       and `build_date` remain `unknown`. Confirm verified archives report
       authoritative full metadata and have matching checksums, CycloneDX SBOMs,
       and provenance.
-- [ ] If every RC.3 gate passes, create account-controlled `v1.0.0` on the same unchanged
+- [ ] If every RC.4 gate passes, create account-controlled `v1.0.0` on the same unchanged
       source commit. Verify `prerelease=false`, stable notes, installations,
       checksums, SBOMs, provenance, and final remote tag/rule state.
 - [ ] Update compatibility/release notes only with evidence actually produced.
