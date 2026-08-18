@@ -31,6 +31,10 @@ installs reported `dev` only from the short root `--version` flag. RC.3 fixes
 that build-information path. It does not change controller API behavior or the
 live qualification conclusions above.
 
+RC.4 changes release documentation only. It corrects the stable release notes
+to identify the exact candidate used for unchanged-source promotion. It does
+not change controller or executable behavior.
+
 The schema target is Ubiquiti's [UniFi Network 10.4.57 API
 reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
 also exposes an [OpenAPI document](https://developer.ui.com/network/v10.4.57/openapi.json)

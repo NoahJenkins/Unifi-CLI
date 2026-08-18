@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0-rc.4] - 2026-08-17
+
+### Fixed
+
+- The checked-in stable release notes now identify RC.4 as the exact qualified
+  source candidate. RC.3 still named the superseded RC.2 candidate.
+
+RC.4 changes documentation only. It changes no executable, controller API,
+command surface, schema, compatibility, or mutation behavior from RC.3.
+
+See [`v1.0.0-rc.4` release notes](docs/releases/v1.0.0-rc.4.md).
+
 ## [1.0.0-rc.3] - 2026-08-17
 
 ### Fixed
