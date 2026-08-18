@@ -114,7 +114,6 @@ if [[ -n "$release_match" ]]; then
 else
   release_id="$(gh api --method POST "$releases_endpoint" \
     -f "tag_name=$release_tag" \
-    -f "target_commitish=${RELEASE_COMMIT:-${GITHUB_SHA:-}}" \
     -f "name=$release_tag" \
 		-F draft=true \
 		-F "prerelease=$release_prerelease" \

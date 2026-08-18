@@ -77,6 +77,10 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       release or an existing draft may proceed; an existing published release,
       malformed response, repository-access failure, authentication failure,
       or unexpected API error must stop the workflow before release mutation.
+      After this exact-tag proof, create the draft without `target_commitish`.
+      The release API then uses the existing immutable tag and does not require
+      the Actions token to modify workflow files when a recovery workflow is
+      newer than the qualified release commit.
       Concurrent runs for the same repository and exact ref are serialized and
       never cancel an in-progress release run.
 - [ ] If a release run fails before publication, fix and merge the workflow;
