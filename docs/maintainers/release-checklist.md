@@ -90,16 +90,16 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       all reported SHA-1/SHA-256 values, and an exact library/version inventory
       derived from each independently built trusted binary. Reject unrelated
       file claims and setuid, setgid, and sticky archive entries.
-- [ ] Run the authenticated read-only live suite with verified TLS, or record
+- [x] Run the authenticated read-only live suite with verified TLS, or record
       the explicit `insecure: true` compatibility exception when the authorized
       local controller has a self-signed certificate.
-- [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
+- [x] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.
-- [ ] After separate explicit approval, run disabled and uniquely named
+- [x] After separate explicit approval, run disabled and uniquely named
       lifecycles for A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain DNS
       policies. Capture every created ID, delete only those IDs, and prove the
       exact baseline is restored.
-- [ ] Do not run non-DNS mutations unless a separate dedicated sacrificial
+- [x] Do not run non-DNS mutations unless a separate dedicated sacrificial
       controller with disposable configuration is available and explicitly
       approved. Never use a production-like controller.
 

@@ -78,8 +78,9 @@ Unit tests and schema-derived fixtures are required; they are not permission to
 mutate a live controller.
 
 - The standard `UNIFI_IT=1 ./scripts/smoke.sh` suite is read-only.
-- The approved isolated DNS A-record lifecycle may run only when its temporary
-  name/IP and cleanup behavior have been reviewed for that authorized lab.
+- Approved isolated DNS lifecycles may run only when every temporary value,
+  disabled state, captured-ID cleanup rule, and final baseline comparison has
+  been reviewed for that authorized lab.
 - **Every non-DNS write requires a dedicated sacrificial controller and
   disposable network configuration.** Never run it on a home, office,
   customer, shared, production, or production-like controller.

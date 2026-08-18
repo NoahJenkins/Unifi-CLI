@@ -10,18 +10,21 @@ UniFi cloud or Site Manager.
 | UniFi Network version | RC status |
 |---|---|
 | Earlier than 10.4.57 | Unsupported; required official schemas, discriminators, or endpoints can be absent or incompatible |
-| 10.4.57 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates. An earlier candidate passed read-only live checks and one A-record lifecycle; final v1 qualification remains a release gate |
-| Later than 10.4.57 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
+| 10.4.57 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates. An earlier candidate passed read-only live checks and one A-record lifecycle |
+| 10.5.67 | Final v1 candidate passed all 19 configured read-only checks, with the empty DNS collection as one allowed `not_configured` result, and completed all seven disabled DNS policy lifecycles with exact baseline restoration |
+| Later than 10.5.67 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
 
-Live verification used the release-candidate executable from commit
-`434492b613e730916b8b06adeea9dc49f3fd1518`. Every configured read-only check
-passed; the DNS collection was the only successfully queried empty optional
-resource. The single write test created a uniquely named disabled A record,
-changed only its documentation-range address, deleted only its captured ID,
-and confirmed exact-name absence and baseline restoration. No device, client,
-port, WiFi, network, resolver, or firewall mutation was run. The controller's
-self-signed certificate required the documented explicit `insecure: true`
-compatibility setting for this local test; verified TLS remains the default.
+Final live verification used a release-candidate executable from this branch.
+Every configured read-only check passed or returned the allowed
+`not_configured` result. The write gate sequentially created, verified,
+updated, reverified, and deleted uniquely named disabled A, AAAA, CNAME, MX,
+TXT, SRV, and forwarded-domain policies. It deleted only captured IDs and
+restored the exact empty baseline. Qualification found that SRV requires a base
+`domain` with separate `_service` and `_protocol` fields; the CLI regression
+was fixed and tested before release. No device, client, port, WiFi, network,
+resolver, firewall, or fixed-IP mutation was run. The controller's self-signed
+certificate required the documented explicit `insecure: true` compatibility
+setting for this local test; verified TLS remains the default.
 
 The schema target is Ubiquiti's [UniFi Network 10.4.57 API
 reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
@@ -50,6 +53,8 @@ fails the entire command when any required detail fails.
   and controller defaults are never inferred.
 - Personal WiFi secrets are accepted only by hidden prompt or bounded stdin.
 - DNS type changes are unsupported; update preserves the existing policy type.
+- SRV `--name` is the base domain; `--service` and `--protocol` provide the
+  underscore-prefixed SRV labels separately.
 - Firewall uses modern zones/policies and complete atomic ordering; classic
   rulesets and partial order replacement are unsupported.
 - Switching and RADIUS profiles are read-only.

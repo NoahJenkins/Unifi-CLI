@@ -334,7 +334,7 @@ func TestDNSPolicyFlagsPreserveExplicitZeroValuesAndIPv4Alias(t *testing.T) {
 		var values dnsPolicyFlagValues
 		cmd := &cobra.Command{Use: "test"}
 		values.bind(cmd, true)
-		if err := cmd.ParseFlags([]string{"--type", "srv", "--name", "_sip._tcp.example.test", "--server-domain", "sip.example.test", "--service", "_sip", "--protocol", "_tcp", "--priority", "0", "--port", "5060", "--weight", "0"}); err != nil {
+		if err := cmd.ParseFlags([]string{"--type", "srv", "--name", "example.test", "--server-domain", "sip.example.test", "--service", "_sip", "--protocol", "_tcp", "--priority", "0", "--port", "5060", "--weight", "0"}); err != nil {
 			t.Fatal(err)
 		}
 		in, err := values.input(cmd, true)

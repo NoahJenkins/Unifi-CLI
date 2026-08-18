@@ -4,8 +4,8 @@
 
 Neither the author nor users of this project own the UniFi brand; Ubiquiti Inc. owns it.
 
-Manage a **local** UniFi Network controller from the terminal. The
-The v1 release uses the official local Network integration API
+Manage a **local** UniFi Network controller from the terminal. The v1 release
+uses the official local Network integration API
 for its stable surface, emits a versioned JSON contract for automation, and
 plans every mutation before it can apply.
 
@@ -16,10 +16,10 @@ plans every mutation before it can apply.
 
 The compatibility target is UniFi Network **10.4.57 and newer**. The current
 implementation is schema- and fixture-validated against the official 10.4.57
-API. An earlier candidate completed the guarded read-only suite and an isolated
-DNS A-record lifecycle on 10.4.57. The expanded v1 surface still requires final
-read-only and seven-type DNS qualification before publication. See
-[Compatibility](docs/compatibility.md) for the exact status and limits.
+API. The final candidate completed the guarded read-only suite and disabled,
+exactly cleaned-up lifecycles for all seven DNS policy types on 10.5.67. See
+[Compatibility](docs/compatibility.md) for the exact status, TLS exception,
+and limits.
 
 ## Install v1
 
@@ -209,6 +209,10 @@ and preserves the existing type and rejects type changes. Create and update
 re-read the captured ID and compare the complete expected policy. Delete
 verifies the captured ID is absent and does not accept a different same-name
 policy as proof of deletion.
+
+For SRV policies, `--name` is the base domain, such as `example.test`.
+`--service _sip` and `--protocol _tcp` supply the SRV owner prefixes
+separately. Repeating `_sip._tcp` in `--name` is rejected before any request.
 
 ### Networks
 

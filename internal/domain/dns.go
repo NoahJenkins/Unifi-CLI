@@ -897,6 +897,9 @@ func validateDNSUpdateInput(in DNSInput) error {
 	if !inputSetsAnyDNSField(in) {
 		return apperr.New(apperr.ValidationFailed, "DNS update requires at least one changed field")
 	}
+	if inputSetsName(in) {
+		return validateDNSName(in.Name)
+	}
 	return nil
 }
 
@@ -1040,11 +1043,7 @@ func validateDNSRecord(record DNSRecord) error {
 	if !isSupportedDNSType(record.Type) {
 		return apperr.Newf(apperr.ValidationFailed, "unsupported DNS policy type %q", record.Type)
 	}
-	if record.Type == "SRV_RECORD" {
-		if err := validateDNSSRVName(record.Domain); err != nil {
-			return err
-		}
-	} else if err := validateDNSName(record.Domain); err != nil {
+	if err := validateDNSName(record.Domain); err != nil {
 		return err
 	}
 	switch record.Type {
@@ -1116,24 +1115,6 @@ func validateDNSUnderscoreToken(label, value string) error {
 			continue
 		}
 		return apperr.Newf(apperr.ValidationFailed, "SRV %s contains an invalid character", label)
-	}
-	return nil
-}
-
-func validateDNSSRVName(name string) error {
-	if len(name) == 0 || len(name) > 127 {
-		return apperr.New(apperr.ValidationFailed, "DNS name must contain 1 to 127 characters")
-	}
-	for _, label := range strings.Split(name, ".") {
-		if strings.HasPrefix(label, "_") {
-			if err := validateDNSUnderscoreToken("name label", label); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := validateDNSName(label); err != nil {
-			return err
-		}
 	}
 	return nil
 }

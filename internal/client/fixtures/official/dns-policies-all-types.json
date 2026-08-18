@@ -53,7 +53,7 @@
     {
       "id": "10000000-0000-4000-8000-000000000006",
       "type": "SRV_RECORD",
-      "domain": "_sip._tcp.example.test",
+      "domain": "example.test",
       "enabled": true,
       "serverDomain": "sip.example.test",
       "ttlSeconds": 2400,

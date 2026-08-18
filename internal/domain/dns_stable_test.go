@@ -120,7 +120,7 @@ func TestDNSListUsesOfficialCollectionFetcherAndPreservesAllPolicyFields(t *test
 		{ID: "10000000-0000-4000-8000-000000000003", Type: "CNAME_RECORD", Domain: "alias.example.test", Enabled: true, TargetDomain: "target.example.test", TTLSeconds: 900, Name: "alias.example.test"},
 		{ID: "10000000-0000-4000-8000-000000000004", Type: "MX_RECORD", Domain: "example.test", Enabled: true, MailServerDomain: "mail.example.test", TTLSeconds: 1200, Priority: 10, Name: "example.test"},
 		{ID: "10000000-0000-4000-8000-000000000005", Type: "TXT_RECORD", Domain: "txt.example.test", Enabled: false, Text: "verification=value", TTLSeconds: 1800, Name: "txt.example.test"},
-		{ID: "10000000-0000-4000-8000-000000000006", Type: "SRV_RECORD", Domain: "_sip._tcp.example.test", Enabled: true, ServerDomain: "sip.example.test", TTLSeconds: 2400, Priority: 20, Service: "_sip", Protocol: "_tcp", Port: 5060, Weight: 5, Name: "_sip._tcp.example.test"},
+		{ID: "10000000-0000-4000-8000-000000000006", Type: "SRV_RECORD", Domain: "example.test", Enabled: true, ServerDomain: "sip.example.test", TTLSeconds: 2400, Priority: 20, Service: "_sip", Protocol: "_tcp", Port: 5060, Weight: 5, Name: "example.test"},
 		{ID: "10000000-0000-4000-8000-000000000007", Type: "FORWARD_DOMAIN", Domain: "forward.example.test", Enabled: true, ServerDomain: "resolver.example.test", IPAddress: "198.51.100.53", Name: "forward.example.test"},
 	}
 	if !reflect.DeepEqual(records, want) {
@@ -139,7 +139,7 @@ func TestDNSListUsesOfficialCollectionFetcherAndPreservesAllPolicyFields(t *test
 
 func TestDNSSRVJSONRetainsApplicableZeroNumericFields(t *testing.T) {
 	record := domain.NormalizeDNSRecord(map[string]any{
-		"id": "dns-srv-zero", "type": "SRV_RECORD", "domain": "_sip._tcp.example.test", "enabled": true,
+		"id": "dns-srv-zero", "type": "SRV_RECORD", "domain": "example.test", "enabled": true,
 		"serverDomain": "sip.example.test", "ttlSeconds": float64(300), "priority": float64(0),
 		"service": "_sip", "protocol": "_tcp", "port": float64(5060), "weight": float64(0),
 	})
@@ -277,9 +277,9 @@ func TestDNSCreateSupportsEveryOfficialPolicyType(t *testing.T) {
 			wantBody: map[string]any{"type": "TXT_RECORD", "domain": "txt.example.test", "text": "verification=value", "enabled": true},
 		},
 		{
-			name: "SRV", in: domain.DNSInput{Type: "srv", Name: "_sip._tcp.example.test", ServerDomain: "sip.example.test", SetServerDomain: true, Priority: 0, SetPriority: true, Service: "_sip", SetService: true, Protocol: "_tcp", SetProtocol: true, Port: 5060, SetPort: true, Weight: 0, SetWeight: true},
-			observed: map[string]any{"id": "dns-new", "type": "SRV_RECORD", "domain": "_sip._tcp.example.test", "serverDomain": "sip.example.test", "enabled": true, "priority": 0, "service": "_sip", "protocol": "_tcp", "port": 5060, "weight": 0},
-			wantBody: map[string]any{"type": "SRV_RECORD", "domain": "_sip._tcp.example.test", "serverDomain": "sip.example.test", "enabled": true, "priority": 0, "service": "_sip", "protocol": "_tcp", "port": 5060, "weight": 0},
+			name: "SRV", in: domain.DNSInput{Type: "srv", Name: "example.test", ServerDomain: "sip.example.test", SetServerDomain: true, Priority: 0, SetPriority: true, Service: "_sip", SetService: true, Protocol: "_tcp", SetProtocol: true, Port: 5060, SetPort: true, Weight: 0, SetWeight: true},
+			observed: map[string]any{"id": "dns-new", "type": "SRV_RECORD", "domain": "example.test", "serverDomain": "sip.example.test", "enabled": true, "priority": 0, "service": "_sip", "protocol": "_tcp", "port": 5060, "weight": 0},
+			wantBody: map[string]any{"type": "SRV_RECORD", "domain": "example.test", "serverDomain": "sip.example.test", "enabled": true, "priority": 0, "service": "_sip", "protocol": "_tcp", "port": 5060, "weight": 0},
 		},
 		{
 			name: "forward domain", in: domain.DNSInput{Type: "forward-domain", Name: "forward.example.test", ServerIP: "2001:db8::53", SetServerIP: true},
@@ -345,7 +345,8 @@ func TestDNSCreateRejectsInvalidTypeSpecificInputBeforeMutation(t *testing.T) {
 		{name: "CNAME TTL too large", in: domain.DNSInput{Type: "cname", Name: "alias.example.test", TargetDomain: "target.example.test", TTLSeconds: 604801, SetTTL: true}},
 		{name: "MX missing explicit zero priority", in: domain.DNSInput{Type: "mx", Name: "example.test", MailServerDomain: "mail.example.test"}},
 		{name: "TXT empty", in: domain.DNSInput{Type: "txt", Name: "txt.example.test", Text: "", SetText: true}},
-		{name: "SRV missing port", in: domain.DNSInput{Type: "srv", Name: "_sip._tcp.example.test", ServerDomain: "sip.example.test", Priority: 0, SetPriority: true, Service: "_sip", Protocol: "_tcp", Weight: 0, SetWeight: true}},
+		{name: "SRV domain repeats service and protocol", in: domain.DNSInput{Type: "srv", Name: "_sip._tcp.example.test", ServerDomain: "sip.example.test", SetServerDomain: true, Priority: 0, SetPriority: true, Service: "_sip", SetService: true, Protocol: "_tcp", SetProtocol: true, Port: 5060, SetPort: true, Weight: 0, SetWeight: true}},
+		{name: "SRV missing port", in: domain.DNSInput{Type: "srv", Name: "example.test", ServerDomain: "sip.example.test", Priority: 0, SetPriority: true, Service: "_sip", Protocol: "_tcp", Weight: 0, SetWeight: true}},
 		{name: "forward domain invalid server IP", in: domain.DNSInput{Type: "forward-domain", Name: "forward.example.test", ServerIP: "not-an-ip"}},
 	}
 
@@ -373,6 +374,21 @@ func TestDNSUpdateRejectsTypeChangeBeforePUT(t *testing.T) {
 	}
 	if countMethod(api.calls, http.MethodPut) != 0 {
 		t.Fatalf("type change reached PUT: %#v", api.calls)
+	}
+}
+
+func TestDNSUpdateRejectsInvalidNameBeforeControllerRead(t *testing.T) {
+	api := &stableDNSAPI{}
+
+	_, err := domain.NewDNSService(api).ApplyUpdate(context.Background(), "dns-srv", domain.DNSInput{
+		Name:    "_sip._tcp.example.test",
+		SetName: true,
+	})
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("err = %v, want validation_failed", err)
+	}
+	if len(api.calls) != 0 {
+		t.Fatalf("invalid input reached controller: %#v", api.calls)
 	}
 }
 

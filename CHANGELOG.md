@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.0-rc.2] - 2026-08-16
+## [1.0.0-rc.2] - 2026-08-17
 
 ### Added
 
@@ -39,6 +39,13 @@ All notable changes to this project are documented here. The format follows
   validator to jsonschema/v6 6.0.3.
 - Non-DNS writes remain experimental because no disposable sacrificial
   controller has qualified them.
+
+### Fixed
+
+- SRV policy names now use the official base-domain form and reject duplicated
+  `_service._protocol` prefixes before contacting the controller.
+- The final candidate passed the guarded read-only suite and all seven disabled
+  DNS policy lifecycles on UniFi Network 10.5.67 with exact cleanup.
 
 See [`v1.0.0-rc.2` release notes](docs/releases/v1.0.0-rc.2.md).
 
