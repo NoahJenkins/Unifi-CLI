@@ -313,6 +313,11 @@ permissions. Use the separate online check:
 unifi auth status --json
 ```
 
+When local configuration is valid but credentials or build metadata are not
+ready, doctor returns a nonzero schema-v1 error and keeps the diagnostic fields
+in `data` with `ready: false`. Failures that prevent configuration loading keep
+`data` null.
+
 ### WiFi
 
 Official create and update support OPEN, WPA2 Personal, WPA3 Personal, mixed
@@ -380,12 +385,13 @@ and `port get` resolve one device and make one detail request.
 ```
 
 Top-level `schema_version`, `ok`, `resource`, `action`, `data`, and `meta` are
-always present. `data` remains present on failures (as `null`). `error` is
-present only for failures and `plan` only for plan output. List responses may
-include optional `meta.count`, but current typed resource-list commands omit
-it. `meta.experimental` is present and true for every successful experimental
-read and for every experimental mutation plan, gate error, and successful
-apply; stable commands omit it. The v1
+always present. `data` is null on failures except for `doctor` failures after
+configuration loads; those include diagnostic data with `ready: false`.
+`error` is present only for failures and `plan` only for plan output. List
+responses may include optional `meta.count`, but current typed resource-list
+commands omit it. `meta.experimental` is present and true for every successful
+experimental read and for every experimental mutation plan, gate error, and
+successful apply; stable commands omit it. The v1
 surface has no `--raw` flag and never embeds upstream controller payloads.
 The executable JSON Schema 2020-12 contract is checked in at
 [`schemas/schema-v1.json`](schemas/schema-v1.json). Stable golden output,

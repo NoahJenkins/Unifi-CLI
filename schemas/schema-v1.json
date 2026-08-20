@@ -77,11 +77,14 @@
     "failureEnvelope": {
       "properties": {
         "ok": {"const": false},
-        "data": {"type": "null"},
         "meta": {"properties": {"dry_run": {"const": false}}}
       },
       "required": ["error"],
-      "not": {"required": ["plan"]}
+      "not": {"required": ["plan"]},
+      "oneOf": [
+        {"properties": {"data": {"type": "null"}}},
+        {"properties": {"resource": {"const": "doctor"}, "action": {"const": "doctor"}, "data": {"$ref": "#/$defs/doctorFailure"}}}
+      ]
     },
     "planEnvelope": {
       "properties": {
@@ -164,7 +167,7 @@
     "configProfileListSuccess": {"properties": {"resource": {"const": "config"}, "action": {"const": "profile list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/profileInfo"}}}},
     "configProfileShowSuccess": {"properties": {"resource": {"const": "config"}, "action": {"const": "profile show"}, "data": {"$ref": "#/$defs/profileConfig"}}},
     "configProfileSelectSuccess": {"properties": {"resource": {"const": "config"}, "action": {"const": "profile select"}, "data": {"$ref": "#/$defs/profileSelection"}}},
-    "doctorSuccess": {"properties": {"resource": {"const": "doctor"}, "action": {"const": "check"}, "data": {"$ref": "#/$defs/doctor"}}},
+    "doctorSuccess": {"properties": {"resource": {"const": "doctor"}, "action": {"const": "doctor"}, "data": {"$ref": "#/$defs/doctor"}}},
     "authSuccess": {"properties": {"resource": {"const": "auth"}, "action": {"enum": ["status", "login", "logout"]}, "data": {"$ref": "#/$defs/auth"}}},
     "siteListSuccess": {"properties": {"resource": {"const": "site"}, "action": {"const": "list"}, "data": {"type": "array", "items": {"$ref": "#/$defs/site"}}}},
     "siteGetSuccess": {"properties": {"resource": {"const": "site"}, "action": {"const": "get"}, "data": {"$ref": "#/$defs/site"}}},
@@ -204,6 +207,7 @@
     "profileConfig": {"type": "object", "additionalProperties": false, "required": ["profile", "path", "host", "port", "insecure", "ca_cert", "site", "safe_mode", "timeout", "selected", "valid"], "properties": {"profile": {"type": "string"}, "path": {"type": "string"}, "host": {"type": "string"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "insecure": {"type": "boolean"}, "ca_cert": {"type": "string"}, "site": {"type": "string"}, "safe_mode": {"type": "boolean"}, "timeout": {"type": "string"}, "selected": {"type": "boolean"}, "valid": {"const": true}}},
     "profileSelection": {"type": "object", "additionalProperties": false, "required": ["profile", "path"], "properties": {"profile": {"type": "string"}, "path": {"type": "string"}}},
     "doctor": {"type": "object", "additionalProperties": false, "required": ["version", "commit", "config_path", "profile", "host", "site", "tls_mode", "credential_source", "ready"], "properties": {"version": {"type": "string"}, "commit": {"type": "string"}, "config_path": {"type": "string"}, "profile": {"type": "string"}, "host": {"type": "string"}, "site": {"type": "string"}, "tls_mode": {"enum": ["system_roots", "custom_ca", "insecure"]}, "credential_source": {"enum": ["environment_api_key", "saved_api_key", "missing", "keyring_unavailable"]}, "ready": {"type": "boolean"}}},
+    "doctorFailure": {"allOf": [{"$ref": "#/$defs/doctor"}, {"properties": {"ready": {"const": false}}}]},
     "auth": {"type": "object", "additionalProperties": false, "required": ["host", "site", "auth_method"], "properties": {"host": {"type": "string"}, "site": {"type": "string"}, "auth_method": {"type": "string"}}},
     "site": {"type": "object", "additionalProperties": false, "required": ["id", "name", "desc", "role"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "desc": {"type": "string"}, "role": {"type": "string"}}},
     "device": {"type": "object", "additionalProperties": false, "required": ["id", "mac", "name", "model", "type", "state", "ip", "version", "uplink", "adopted"], "properties": {"id": {"type": "string"}, "mac": {"type": "string"}, "name": {"type": "string"}, "model": {"type": "string"}, "type": {"type": "string"}, "state": {"type": "string"}, "ip": {"type": "string"}, "version": {"type": "string"}, "uplink": {"type": "string"}, "adopted": {"type": "boolean"}}},

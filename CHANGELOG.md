@@ -21,7 +21,8 @@ All notable changes to this project are documented here. The format follows
   stored user record provides the immutable ID, valid MAC, and network ID.
   Writes keep the existing plan, drift, validation, one-attempt, verification,
   and no-reconnect contracts.
-- Schema-v1 now defines profile, effective-config, and doctor success data.
+- Schema-v1 now defines profile, effective-config, and doctor diagnostic data,
+  including partial doctor data on local readiness failures.
 
 ## [1.0.0-rc.4] - 2026-08-17
 

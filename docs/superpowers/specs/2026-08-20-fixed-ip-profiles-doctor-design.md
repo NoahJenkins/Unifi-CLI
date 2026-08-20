@@ -235,7 +235,9 @@ logs, tests, or JSON.
 `ready` is true only when the version metadata is available, configuration is
 valid, a host is selected, TLS configuration is valid, and a credential source
 is available. Missing configuration or credentials produces a schema-v1 error
-and nonzero exit status with a specific next action. Network reachability and
+and nonzero exit status with a specific next action. If configuration loaded,
+the failure envelope keeps the diagnostic fields in `data` with `ready` false;
+if configuration did not load, `data` is null. Network reachability and
 credential validity remain the responsibility of `unifi auth status`.
 
 ## Home Lab Profile Setup

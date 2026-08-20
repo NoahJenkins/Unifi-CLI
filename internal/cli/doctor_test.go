@@ -68,14 +68,15 @@ func TestDoctorReportsLocalReadinessWithoutConstructingClient(t *testing.T) {
 				t.Fatalf("doctor: %v\n%s", execErr, out)
 			}
 			var envelope struct {
-				OK   bool         `json:"ok"`
-				Data DoctorResult `json:"data"`
+				OK     bool         `json:"ok"`
+				Action string       `json:"action"`
+				Data   DoctorResult `json:"data"`
 			}
 			if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 				t.Fatalf("decode doctor output: %v\n%s", err, out)
 			}
 			got := envelope.Data
-			if !envelope.OK || !got.Ready || got.Version != "v1.1.0" || got.Commit != "abc123" || got.ConfigPath != path || got.Profile != "" || got.Host != "192.0.2.10" || got.TLSMode != tt.wantTLS || got.CredentialSource != tt.wantCredential {
+			if !envelope.OK || envelope.Action != "doctor" || !got.Ready || got.Version != "v1.1.0" || got.Commit != "abc123" || got.ConfigPath != path || got.Profile != "" || got.Host != "192.0.2.10" || got.TLSMode != tt.wantTLS || got.CredentialSource != tt.wantCredential {
 				t.Fatalf("unexpected doctor result: %+v", got)
 			}
 			if store.loads != tt.wantCredentialUse {
@@ -118,6 +119,18 @@ func TestDoctorReportsCredentialReadinessFailuresSafely(t *testing.T) {
 			}
 			if !strings.Contains(out, `"code": "`+tt.wantCode+`"`) || !strings.Contains(out, tt.wantHint) {
 				t.Fatalf("unexpected doctor failure:\n%s", out)
+			}
+			var envelope struct {
+				OK     bool         `json:"ok"`
+				Action string       `json:"action"`
+				Data   DoctorResult `json:"data"`
+			}
+			if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+				t.Fatalf("decode doctor failure: %v\n%s", err, out)
+			}
+			got := envelope.Data
+			if envelope.OK || envelope.Action != "doctor" || got.Ready || got.Version != "v1.1.0" || got.Commit != "abc123" || got.ConfigPath != path || got.Host != "192.0.2.10" || got.TLSMode != "system_roots" || got.CredentialSource != tt.wantSource {
+				t.Fatalf("unexpected doctor diagnostic failure: %+v", got)
 			}
 			if strings.Contains(out, "saved-secret") {
 				t.Fatal("doctor failure leaked a credential")
