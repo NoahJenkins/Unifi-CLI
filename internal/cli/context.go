@@ -13,6 +13,8 @@ import (
 
 type Runtime struct {
 	Cfg          config.Config
+	ConfigPath   string
+	Profile      string
 	Client       *client.Client
 	JSON         bool
 	Yes          bool
@@ -79,13 +81,23 @@ func printData(w io.Writer, data any) {
 		fmt.Fprintf(w, "network_id: %s\n", render.SafeText(v.NetworkID))
 		fmt.Fprintf(w, "fixed_ip_enabled: %t\n", v.FixedIPEnabled)
 		fmt.Fprintf(w, "fixed_ip: %s\n", render.SafeText(v.FixedIP))
+	case DoctorResult:
+		fmt.Fprintf(w, "version: %s\n", render.SafeText(v.Version))
+		fmt.Fprintf(w, "commit: %s\n", render.SafeText(v.Commit))
+		fmt.Fprintf(w, "config_path: %s\n", render.SafeText(v.ConfigPath))
+		fmt.Fprintf(w, "profile: %s\n", render.SafeText(v.Profile))
+		fmt.Fprintf(w, "host: %s\n", render.SafeText(v.Host))
+		fmt.Fprintf(w, "site: %s\n", render.SafeText(v.Site))
+		fmt.Fprintf(w, "tls_mode: %s\n", render.SafeText(v.TLSMode))
+		fmt.Fprintf(w, "credential_source: %s\n", render.SafeText(v.CredentialSource))
+		fmt.Fprintf(w, "ready: %t\n", v.Ready)
 	case map[string]any:
 		keys := make([]string, 0, len(v))
 		for k := range v {
 			keys = append(keys, k)
 		}
 		// stable-ish order for common fields first
-		order := []string{"host", "site", "auth_method", "path", "port", "insecure", "safe_mode", "timeout"}
+		order := []string{"profile", "path", "host", "site", "auth_method", "port", "insecure", "ca_cert", "safe_mode", "timeout", "selected", "valid"}
 		seen := map[string]bool{}
 		for _, k := range order {
 			if val, ok := v[k]; ok {

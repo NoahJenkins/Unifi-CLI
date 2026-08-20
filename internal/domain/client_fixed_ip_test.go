@@ -92,6 +92,89 @@ func putCount(calls []mutateCall) int {
 	return count
 }
 
+func TestClientFixedIPListReturnsOnlyEnabledReservationsInDeterministicOrder(t *testing.T) {
+	api := newFixedIPAPI()
+	api.users[0]["fixed_ip"] = "192.168.1.50"
+	api.users = append(api.users, map[string]any{
+		"_id": "client-3", "mac": "00:11:22:33:44:77", "name": "Camera",
+		"network_id": "network-1", "use_fixedip": true, "fixed_ip": "192.168.1.70",
+	})
+
+	got, err := domain.NewClientFixedIPService(api).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.ClientFixedIPReservation{
+		{ClientID: "client-3", MAC: "001122334477", Name: "Camera", NetworkID: "network-1", FixedIPEnabled: true, FixedIP: "192.168.1.70"},
+		{ClientID: "client-2", MAC: "001122334466", Name: "Printer", NetworkID: "network-1", FixedIPEnabled: true, FixedIP: "192.168.1.60"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reservations = %#v, want %#v", got, want)
+	}
+}
+
+func TestClientFixedIPGetResolvesKnownUsersAndHidesInactiveStoredAddress(t *testing.T) {
+	api := newFixedIPAPI()
+	api.users[0]["fixed_ip"] = "192.168.1.50"
+	svc := domain.NewClientFixedIPService(api)
+
+	for _, query := range []string{"client-1", "00-11-22-33-44-55", "Laptop"} {
+		got, err := svc.Get(context.Background(), query)
+		if err != nil {
+			t.Fatalf("get %q: %v", query, err)
+		}
+		want := domain.ClientFixedIPReservation{
+			ClientID: "client-1", MAC: "001122334455", Name: "Laptop", NetworkID: "network-1",
+			FixedIPEnabled: false, FixedIP: "",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("get %q = %#v, want %#v", query, got, want)
+		}
+	}
+
+	if _, err := svc.Get(context.Background(), "Missing"); !apperr.Is(err, apperr.NotFound) {
+		t.Fatalf("missing error = %v, want not_found", err)
+	}
+	api.users = append(api.users, map[string]any{
+		"_id": "client-3", "mac": "00:11:22:33:44:77", "name": "Laptop",
+		"network_id": "network-1", "use_fixedip": false,
+	})
+	if _, err := svc.Get(context.Background(), "Laptop"); !apperr.Is(err, apperr.AmbiguousID) {
+		t.Fatalf("ambiguous error = %v, want ambiguous_id", err)
+	}
+}
+
+func TestClientFixedIPOfflineSetAndClearUseTheLegacyUserRecord(t *testing.T) {
+	t.Run("set", func(t *testing.T) {
+		api := newFixedIPAPI()
+		api.clients = api.clients[1:]
+		p, snapshot, err := domain.NewClientFixedIPService(api).Set(context.Background(), "Laptop", "192.168.1.50")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.ClientID != "client-1" || snapshot.MAC != "001122334455" || snapshot.NetworkID != "network-1" {
+			t.Fatalf("snapshot = %+v", snapshot)
+		}
+		if p.Changes[0].ID != "client-1" {
+			t.Fatalf("plan target = %q, want client-1", p.Changes[0].ID)
+		}
+	})
+
+	t.Run("clear", func(t *testing.T) {
+		api := newFixedIPAPI()
+		api.clients = api.clients[1:]
+		api.users[0]["use_fixedip"] = true
+		api.users[0]["fixed_ip"] = "192.168.1.50"
+		_, snapshot, err := domain.NewClientFixedIPService(api).Clear(context.Background(), "Laptop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.ClientID != "client-1" || !snapshot.FixedIPEnabled {
+			t.Fatalf("snapshot = %+v", snapshot)
+		}
+	})
+}
+
 func TestClientFixedIPSetPlansWritesAndVerifiesReservation(t *testing.T) {
 	api := newFixedIPAPI()
 	svc := domain.NewClientFixedIPService(api)
@@ -244,27 +327,27 @@ func TestClientFixedIPRejectsNoOpsAndMissingIdentityFields(t *testing.T) {
 		}
 	})
 
-	t.Run("missing connected network ID", func(t *testing.T) {
+	t.Run("missing user network ID", func(t *testing.T) {
 		api := newFixedIPAPI()
-		delete(api.clients[0], "network_id")
+		delete(api.users[0], "network_id")
 		_, _, err := domain.NewClientFixedIPService(api).Set(context.Background(), "client-1", "192.168.1.50")
 		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "network ID") {
 			t.Fatalf("error = %v, want missing network conflict", err)
 		}
 	})
 
-	t.Run("user MAC mismatch", func(t *testing.T) {
+	t.Run("invalid user MAC", func(t *testing.T) {
 		api := newFixedIPAPI()
-		api.users[0]["mac"] = "00:11:22:33:44:99"
+		api.users[0]["mac"] = ""
 		_, _, err := domain.NewClientFixedIPService(api).Set(context.Background(), "client-1", "192.168.1.50")
-		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "identity") {
-			t.Fatalf("error = %v, want identity conflict", err)
+		if !apperr.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "MAC address") {
+			t.Fatalf("error = %v, want MAC conflict", err)
 		}
 	})
 
-	t.Run("ambiguous connected name", func(t *testing.T) {
+	t.Run("ambiguous user name", func(t *testing.T) {
 		api := newFixedIPAPI()
-		api.clients[1]["name"] = "Laptop"
+		api.users[1]["name"] = "Laptop"
 		_, _, err := domain.NewClientFixedIPService(api).Set(context.Background(), "Laptop", "192.168.1.50")
 		if !apperr.Is(err, apperr.AmbiguousID) {
 			t.Fatalf("error = %v, want ambiguous_id", err)

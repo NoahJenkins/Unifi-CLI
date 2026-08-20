@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Experimental `client fixed-ip list` and `client fixed-ip get` inventory for
+  enabled reservations and individual known-client state.
+- Named non-secret controller profiles with deterministic list/show/select
+  commands, explicit selection precedence, and atomic marker updates.
+- Local-only `unifi doctor` readiness diagnostics for effective config, TLS
+  mode, and credential-source presence.
+
+### Changed
+
+- Experimental fixed-IP set/clear can target a known offline client when its
+  stored user record provides the immutable ID, valid MAC, and network ID.
+  Writes keep the existing plan, drift, validation, one-attempt, verification,
+  and no-reconnect contracts.
+- Schema-v1 now defines profile, effective-config, and doctor diagnostic data,
+  including partial doctor data on local readiness failures.
+
 ## [1.0.0-rc.4] - 2026-08-17
 
 ### Fixed

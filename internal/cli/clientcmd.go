@@ -30,12 +30,28 @@ func newClientCmd() *cobra.Command {
 func newClientFixedIPCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fixed-ip",
-		Short: "Manage a connected client's fixed-IP reservation",
+		Short: "Manage a known client's fixed-IP reservation",
 	}
 	cmd.AddCommand(
 		&cobra.Command{
+			Use:   "list",
+			Short: "List enabled fixed-IP reservations",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runClientFixedIPList()
+			},
+		},
+		&cobra.Command{
+			Use:   "get <id>",
+			Short: "Get fixed-IP state for a known client",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runClientFixedIPGet(args[0])
+			},
+		},
+		&cobra.Command{
 			Use:   "set <id> <ipv4>",
-			Short: "Set a fixed-IP reservation for a connected client",
+			Short: "Set a fixed-IP reservation for a known client",
 			Args:  cobra.ExactArgs(2),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return runClientFixedIPMutation("set", args[0], args[1])
@@ -43,7 +59,7 @@ func newClientFixedIPCmd() *cobra.Command {
 		},
 		&cobra.Command{
 			Use:   "clear <id>",
-			Short: "Clear a connected client's fixed-IP reservation",
+			Short: "Clear a known client's fixed-IP reservation",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return runClientFixedIPMutation("clear", args[0], "")
@@ -51,6 +67,36 @@ func newClientFixedIPCmd() *cobra.Command {
 		},
 	)
 	return cmd
+}
+
+func runClientFixedIPList() error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("client", "fixed-ip list", err)
+	}
+	rt.CommandExperimental = true
+	items, err := domain.NewClientFixedIPService(rt.Client).List(context.Background())
+	if err != nil {
+		return emittedExit(rt.Emit("client", "fixed-ip list", nil, nil, err))
+	}
+	if rt.JSON {
+		return emittedExit(rt.Emit("client", "fixed-ip list", items, nil, nil))
+	}
+	rows := make([][]string, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, []string{item.Name, item.MAC, item.FixedIP, item.NetworkID})
+	}
+	return render.WriteTable(rt.Out, []string{"NAME", "MAC", "FIXED IP", "NETWORK ID"}, rows)
+}
+
+func runClientFixedIPGet(id string) error {
+	rt, err := loadRuntime(true)
+	if err != nil {
+		return emitErr("client", "fixed-ip get", err)
+	}
+	rt.CommandExperimental = true
+	reservation, err := domain.NewClientFixedIPService(rt.Client).Get(context.Background(), id)
+	return emittedExit(rt.Emit("client", "fixed-ip get", reservation, nil, err))
 }
 
 func newClientListCmd() *cobra.Command {

@@ -81,7 +81,7 @@ func newFixedIPCommandServer(t *testing.T, enabled bool, fixedIP string) *fixedI
 
 func TestClientFixedIPCommandsAreExposed(t *testing.T) {
 	clientCmd := newClientCmd()
-	for _, path := range [][]string{{"fixed-ip", "set"}, {"fixed-ip", "clear"}} {
+	for _, path := range [][]string{{"fixed-ip", "list"}, {"fixed-ip", "get"}, {"fixed-ip", "set"}, {"fixed-ip", "clear"}} {
 		cmd, _, err := clientCmd.Find(path)
 		if err != nil {
 			t.Fatalf("find %v: %v", path, err)
@@ -89,6 +89,55 @@ func TestClientFixedIPCommandsAreExposed(t *testing.T) {
 		if cmd.Name() != path[len(path)-1] {
 			t.Fatalf("find %v returned %q", path, cmd.Name())
 		}
+	}
+}
+
+func TestClientFixedIPListRendersEnabledReservations(t *testing.T) {
+	fixture := newFixedIPCommandServer(t, true, "192.0.2.50")
+	defer fixture.server.Close()
+	useCommandTestRuntime(t, fixture.server, true)
+
+	stdout, stderr, err := captureProcessOutput(t, runClientFixedIPList)
+	if err != nil || stderr != "" {
+		t.Fatalf("list: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	want := `{"schema_version":"1","ok":true,"resource":"client","action":"fixed-ip list","data":[{"client_id":"legacy-client-1","mac":"aabbccddee02","name":"Laptop","network_id":"legacy-network-1","fixed_ip_enabled":true,"fixed_ip":"192.0.2.50"}],"meta":{"site":"default","dry_run":false,"experimental":true}}`
+	assertDecodedJSONEqual(t, stdout, want)
+	if strings.Contains(stdout, commandTestAPIKey) {
+		t.Fatal("list output leaked API key")
+	}
+}
+
+func TestClientFixedIPGetHidesInactiveStoredAddress(t *testing.T) {
+	fixture := newFixedIPCommandServer(t, false, "192.0.2.50")
+	defer fixture.server.Close()
+	useCommandTestRuntime(t, fixture.server, true)
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		return runClientFixedIPGet("Laptop")
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("get: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	want := `{"schema_version":"1","ok":true,"resource":"client","action":"fixed-ip get","data":{"client_id":"legacy-client-1","mac":"aabbccddee02","name":"Laptop","network_id":"legacy-network-1","fixed_ip_enabled":false,"fixed_ip":""},"meta":{"site":"default","dry_run":false,"experimental":true}}`
+	assertDecodedJSONEqual(t, stdout, want)
+	if strings.Contains(stdout, "192.0.2.50") || strings.Contains(stdout, commandTestAPIKey) {
+		t.Fatalf("get output leaked inactive address or API key: %q", stdout)
+	}
+}
+
+func TestClientFixedIPListHumanOutputIsDeterministic(t *testing.T) {
+	fixture := newFixedIPCommandServer(t, true, "192.0.2.50")
+	defer fixture.server.Close()
+	useCommandTestRuntime(t, fixture.server, false)
+
+	stdout, stderr, err := captureProcessOutput(t, runClientFixedIPList)
+	if err != nil || stderr != "" {
+		t.Fatalf("list: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	want := "NAME    MAC           FIXED IP    NETWORK ID\nLaptop  aabbccddee02  192.0.2.50  legacy-network-1\n"
+	if stdout != want {
+		t.Fatalf("human output = %q, want %q", stdout, want)
 	}
 }
 

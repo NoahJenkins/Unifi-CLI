@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"sort"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
@@ -41,8 +42,58 @@ type ClientFixedIPService struct {
 	api ClientAPI
 }
 
+type clientFixedIPUser struct {
+	ID             string
+	MAC            string
+	Name           string
+	NetworkID      string
+	FixedIPEnabled bool
+	FixedIP        string
+}
+
+func (u clientFixedIPUser) GetID() string   { return u.ID }
+func (u clientFixedIPUser) GetMAC() string  { return u.MAC }
+func (u clientFixedIPUser) GetName() string { return u.Name }
+
 func NewClientFixedIPService(api ClientAPI) *ClientFixedIPService {
 	return &ClientFixedIPService{api: api}
+}
+
+func (s *ClientFixedIPService) List(ctx context.Context) ([]ClientFixedIPReservation, error) {
+	users, err := s.listUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reservations := make([]ClientFixedIPReservation, 0, len(users))
+	for _, user := range users {
+		if !user.FixedIPEnabled {
+			continue
+		}
+		if err := validateFixedIPUserIdentity(user); err != nil {
+			return nil, err
+		}
+		reservations = append(reservations, reservationFromUser(user))
+	}
+	sort.Slice(reservations, func(i, j int) bool {
+		left := reservations[i]
+		right := reservations[j]
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		if left.MAC != right.MAC {
+			return left.MAC < right.MAC
+		}
+		return left.ClientID < right.ClientID
+	})
+	return reservations, nil
+}
+
+func (s *ClientFixedIPService) Get(ctx context.Context, query string) (ClientFixedIPReservation, error) {
+	user, err := s.resolveUser(ctx, query)
+	if err != nil {
+		return ClientFixedIPReservation{}, err
+	}
+	return reservationFromUser(user), nil
 }
 
 func (s *ClientFixedIPService) Set(ctx context.Context, query, fixedIP string) (plan.Plan, ClientFixedIPSnapshot, error) {
@@ -54,38 +105,26 @@ func (s *ClientFixedIPService) Clear(ctx context.Context, query string) (plan.Pl
 }
 
 func (s *ClientFixedIPService) prepare(ctx context.Context, query, fixedIP string, enable bool) (plan.Plan, ClientFixedIPSnapshot, error) {
-	connected, err := NewClientService(s.api).getLegacy(ctx, query)
+	user, err := s.resolveUser(ctx, query)
 	if err != nil {
 		return plan.Plan{}, ClientFixedIPSnapshot{}, err
 	}
-	mac := resolve.NormalizeMAC(connected.MAC)
-	if mac == "" {
-		return plan.Plan{}, ClientFixedIPSnapshot{}, apperr.New(apperr.Conflict, "connected client has no valid MAC address")
-	}
-	if connected.networkID == "" {
-		return plan.Plan{}, ClientFixedIPSnapshot{}, apperr.New(apperr.Conflict, "connected client has no network ID")
-	}
-
-	user, err := s.getUser(ctx, connected.ID)
-	if err != nil {
+	if err := validateFixedIPUserIdentity(user); err != nil {
 		return plan.Plan{}, ClientFixedIPSnapshot{}, err
 	}
-	if strField(user, "_id", "id") != connected.ID || resolve.NormalizeMAC(strField(user, "mac", "macAddress")) != mac {
-		return plan.Plan{}, ClientFixedIPSnapshot{}, apperr.New(apperr.Conflict, "client fixed-IP target identity does not match the connected client")
+	if user.NetworkID == "" {
+		return plan.Plan{}, ClientFixedIPSnapshot{}, apperr.New(apperr.Conflict, "client fixed-IP user record has no network ID")
 	}
-	network, err := s.getNetwork(ctx, connected.networkID)
+	network, err := s.getNetwork(ctx, user.NetworkID)
 	if err != nil {
 		return plan.Plan{}, ClientFixedIPSnapshot{}, err
 	}
 
 	snapshot := ClientFixedIPSnapshot{
-		ClientID: connected.ID, MAC: mac, Name: connected.GetName(), NetworkID: connected.networkID,
-		ReservationNetworkID: strField(user, "network_id", "networkconf_id"),
-		FixedIPEnabled:       boolField(user, "use_fixedip"), FixedIP: strField(user, "fixed_ip"),
+		ClientID: user.ID, MAC: user.MAC, Name: user.Name, NetworkID: user.NetworkID,
+		ReservationNetworkID: user.NetworkID,
+		FixedIPEnabled:       user.FixedIPEnabled, FixedIP: user.FixedIP,
 		Subnet: network.Subnet, DHCPEnabled: network.DHCPEnabled,
-	}
-	if snapshot.Name == "" {
-		snapshot.Name = strField(user, "name", "hostname")
 	}
 
 	before := reservationFromSnapshot(snapshot)
@@ -118,6 +157,78 @@ func (s *ClientFixedIPService) prepare(ctx context.Context, query, fixedIP strin
 	p := plan.Update("client", snapshot.ClientID, snapshot.Name,
 		fmt.Sprintf("%s fixed IP for client %s", action, snapshot.Name), before, after)
 	return p, snapshot, nil
+}
+
+func (s *ClientFixedIPService) listUsers(ctx context.Context) ([]clientFixedIPUser, error) {
+	var raw []map[string]any
+	if err := s.api.Do(ctx, http.MethodGet, s.api.SitePath(client.PathRestUser), nil, &raw); err != nil {
+		return nil, err
+	}
+	users := make([]clientFixedIPUser, 0, len(raw))
+	for _, item := range raw {
+		users = append(users, normalizeFixedIPUser(item))
+	}
+	return users, nil
+}
+
+func (s *ClientFixedIPService) resolveUser(ctx context.Context, query string) (clientFixedIPUser, error) {
+	users, err := s.listUsers(ctx)
+	if err != nil {
+		return clientFixedIPUser{}, err
+	}
+	user, err := resolve.One(users, query)
+	if err == nil || !apperr.Is(err, apperr.NotFound) || !looksLikeUUID(query) {
+		return user, err
+	}
+
+	raw, official, fetchErr := fetchOfficialSite(s.api, ctx, "clients")
+	if fetchErr != nil {
+		return clientFixedIPUser{}, fetchErr
+	}
+	if !official {
+		return clientFixedIPUser{}, err
+	}
+	officialClients := make([]Client, 0, len(raw))
+	for _, item := range raw {
+		officialClients = append(officialClients, NormalizeClient(item))
+	}
+	officialClient, resolveErr := resolve.One(officialClients, query)
+	if resolveErr != nil {
+		return clientFixedIPUser{}, resolveErr
+	}
+	return resolve.One(users, officialClient.MAC)
+}
+
+func normalizeFixedIPUser(user map[string]any) clientFixedIPUser {
+	return clientFixedIPUser{
+		ID:             strField(user, "_id", "id"),
+		MAC:            resolve.NormalizeMAC(strField(user, "mac", "macAddress")),
+		Name:           strField(user, "name", "hostname"),
+		NetworkID:      strField(user, "network_id", "networkconf_id"),
+		FixedIPEnabled: boolField(user, "use_fixedip"),
+		FixedIP:        strField(user, "fixed_ip"),
+	}
+}
+
+func validateFixedIPUserIdentity(user clientFixedIPUser) error {
+	if user.ID == "" {
+		return apperr.New(apperr.Conflict, "client fixed-IP user record has no immutable ID")
+	}
+	if user.MAC == "" {
+		return apperr.New(apperr.Conflict, "client fixed-IP user record has no valid MAC address")
+	}
+	return nil
+}
+
+func reservationFromUser(user clientFixedIPUser) ClientFixedIPReservation {
+	fixedIP := ""
+	if user.FixedIPEnabled {
+		fixedIP = user.FixedIP
+	}
+	return ClientFixedIPReservation{
+		ClientID: user.ID, MAC: user.MAC, Name: user.Name, NetworkID: user.NetworkID,
+		FixedIPEnabled: user.FixedIPEnabled, FixedIP: fixedIP,
+	}
 }
 
 func (s *ClientFixedIPService) ApplySetPrepared(ctx context.Context, target plan.Target, id, fixedIP string) (ClientFixedIPReservation, error) {

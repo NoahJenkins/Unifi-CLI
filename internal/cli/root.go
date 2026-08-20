@@ -12,6 +12,7 @@ const unofficialProjectDisclaimer = "**Unofficial project.** unifi-cli is an ind
 
 var (
 	flagConfig       string
+	flagProfile      string
 	flagJSON         bool
 	flagYes          bool
 	flagDryRun       bool
@@ -37,6 +38,7 @@ func newRoot(info buildinfo.Info) *cobra.Command {
 	}
 	root.SetVersionTemplate("unifi version {{.Version}}\n")
 	root.PersistentFlags().StringVar(&flagConfig, "config", "", "config file path")
+	root.PersistentFlags().StringVar(&flagProfile, "profile", "", "named controller profile")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "JSON output")
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "apply mutations")
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "plan only; never apply")
@@ -50,6 +52,7 @@ func newRoot(info buildinfo.Info) *cobra.Command {
 		newLoginCmd(),
 		newLogoutCmd(),
 		newConfigCmd(),
+		newDoctorCmd(info),
 		newDeviceCmd(),
 		newClientCmd(),
 		newSiteCmd(),

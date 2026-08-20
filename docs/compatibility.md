@@ -48,7 +48,8 @@ used to derive synthetic fixtures and validation bounds.
 | LAG, MC-LAG, switch-stack, RADIUS-profile, and traffic-list reads | Stable official local integration API |
 | All seven official DNS policy create/update/delete variants | Stable official local integration API |
 | Network/WiFi CRUD, restart/adopt/forget, firewall policy/zone/traffic-list writes | Experimental official local integration API; no sacrificial-controller live proof |
-| Rename/locate/upgrade, client actions and connected-client fixed-IP set/clear, port update, resolver set | Experimental legacy local compatibility paths; no sacrificial-controller live proof |
+| Rename/locate/upgrade, client actions, known-client fixed-IP list/get/set/clear, port update, resolver set | Experimental legacy local compatibility paths; fixed-IP inventory has read-only Home Lab proof, but no sacrificial-controller write proof |
+| Named profiles and `doctor` | Local-only configuration and readiness surface; no controller request from `doctor` |
 | Classic firewall and switching/RADIUS writes | Unsupported |
 
 Reads preserve the schema-v1 CLI contract rather than exposing raw upstream
@@ -68,10 +69,18 @@ fails the entire command when any required detail fails.
   rulesets and partial order replacement are unsupported.
 - Switching and RADIUS profiles are read-only.
 - Accepted action output does not claim asynchronous completion.
-- Fixed-IP set/clear supports currently connected clients only, infers the
-  current network, and verifies stored reservation state. It does not create
-  never-seen clients, select another network, renew DHCP leases, or reconnect a
-  client.
+- Fixed-IP list returns enabled reservations only. Get can report disabled
+  known-client state but hides an inactive historical address.
+- Fixed-IP set/clear supports known offline clients only when the legacy user
+  record supplies an immutable ID, valid MAC, and stored network ID. It does
+  not create never-seen clients, select another network, renew DHCP leases, or
+  reconnect a client.
+- Fixed-IP conflict checks cover enabled reservations and current connected
+  addresses. They cannot detect an offline device that uses an unrecorded
+  static address.
+- Named profiles contain non-secret connection settings only. `doctor` proves
+  local config and credential-source readiness; `auth status` remains the
+  online reachability and credential-validity check.
 
 ## Reporting a compatibility issue
 
