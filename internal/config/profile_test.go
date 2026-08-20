@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/config"
+	"github.com/noahjenkins/unifi-cli/internal/privatefile/privatefiletest"
 )
 
 func TestValidateProfileName(t *testing.T) {
@@ -83,13 +84,7 @@ func TestProfileStoreListsShowsAndSelectsSafely(t *testing.T) {
 	if err := store.Select("home"); err != nil {
 		t.Fatalf("Select(home): %v", err)
 	}
-	markerInfo, err := os.Stat(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if markerInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("marker mode = %o, want 600", markerInfo.Mode().Perm())
-	}
+	privatefiletest.AssertFile(t, marker)
 }
 
 func TestProfileStoreSelectRepairsMalformedMarker(t *testing.T) {
@@ -118,13 +113,7 @@ func TestProfileStoreSelectRepairsMalformedMarker(t *testing.T) {
 	if err != nil || !ok || selected != "home" {
 		t.Fatalf("Selected = %q, %t, %v", selected, ok, err)
 	}
-	info, err := os.Stat(profilesDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf("profiles directory mode = %o, want 700", info.Mode().Perm())
-	}
+	privatefiletest.AssertDir(t, profilesDir)
 }
 
 func TestProfileStoreRejectsMarkerWhitespaceAndExtraLines(t *testing.T) {

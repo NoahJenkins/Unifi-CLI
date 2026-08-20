@@ -122,6 +122,7 @@ func prepareProfileHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("UNIFI_CONFIG", "")
 	t.Setenv("UNIFI_PROFILE", "")
 	t.Setenv("UNIFI_HOST", "")
