@@ -12,11 +12,35 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/render"
 )
 
-var newRuntimeClient = client.New
+var (
+	newRuntimeClient = client.New
+	newProfileStore  = func() *config.ProfileStore {
+		return config.NewProfileStore(config.ProfileOptions{})
+	}
+)
 
 func loadRuntime(needClient bool) (*Runtime, error) {
-	cfg, err := config.Load(flagConfig)
+	store := newProfileStore()
+	selection, err := config.ResolveSelection(flagConfig, flagProfile, store)
 	if err != nil {
+		return baseRuntime(), apperr.Newf(apperr.ValidationFailed, "%v", err)
+	}
+	var cfg config.Config
+	if selection.Profile != "" {
+		_, cfg, err = store.Show(selection.Profile)
+	} else {
+		cfg, err = config.Load(selection.Path)
+	}
+	if err != nil {
+		if selection.Profile != "" {
+			return baseRuntime(), apperr.WithCause(
+				apperr.WithHint(
+					apperr.Newf(apperr.ValidationFailed, "profile %q is invalid at %s", selection.Profile, selection.Path),
+					"run 'unifi config profile list' and fix or select a valid profile",
+				),
+				err,
+			)
+		}
 		return baseRuntime(), err
 	}
 	if flagSite != "" {
@@ -32,6 +56,8 @@ func loadRuntime(needClient bool) (*Runtime, error) {
 
 	rt := baseRuntime()
 	rt.Cfg = cfg
+	rt.ConfigPath = selection.Path
+	rt.Profile = selection.Profile
 	rt.Site = cfg.Site
 
 	if needClient {

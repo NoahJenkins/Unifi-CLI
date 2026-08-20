@@ -76,6 +76,16 @@ unifi site list
 unifi system health --json
 ```
 
+For more than one controller, put the same non-secret fields in
+`~/.config/unifi-cli/profiles/<name>.yaml`, then select a profile:
+
+```bash
+unifi config profile list
+unifi config profile show home-lab
+unifi config profile select home-lab
+unifi doctor --json
+```
+
 `unifi login` reads the key from a hidden prompt, validates it with the
 controller, and saves it in the native credential store:
 
@@ -94,8 +104,21 @@ attachments.
 
 ## Controller configuration
 
-The default path is `~/.config/unifi-cli/config.yaml`; override it with
-`--config` or `UNIFI_CONFIG`.
+The default path is `~/.config/unifi-cli/config.yaml`. Named profiles are
+regular, non-symlink YAML files in `~/.config/unifi-cli/profiles/`. The selected
+profile name is in `~/.config/unifi-cli/current-profile`. Profile names contain
+1–64 ASCII letters, digits, `.`, `_`, or `-`, and start with a letter or digit.
+Protect the config and profile directories with mode `0700` and profile files
+with mode `0600`; the CLI protects an updated selection marker with mode
+`0600`.
+
+Configuration selection uses this order: `--config`, `UNIFI_CONFIG`,
+`--profile`, `UNIFI_PROFILE`, the selected-profile marker, then the default
+config file. A config selector and a profile selector cannot be used together.
+`config profile select` validates the complete profile before it atomically
+updates the marker. `config profile list` reports malformed profiles without
+hiding valid profiles. `config path` and `config show` report the effective
+selection; all profile and config output remains non-secret.
 
 | YAML | Environment | Contract |
 |---|---|---|
@@ -132,20 +155,22 @@ remainder of that CLI invocation and is used in official API paths.
 
 ## Commands and support status
 
-All controller inventory and health reads below use the official local
-`/proxy/network/integration/v1` API.
+Stable controller inventory and health reads below use the official local
+`/proxy/network/integration/v1` API. Fixed-IP inventory is explicitly isolated
+as an experimental legacy compatibility path.
 “Experimental” means a plan can be inspected normally, but applying it also
 requires `--experimental`.
 
 | Surface | Status | Commands |
 |---|---|---|
 | Local auth/config/version | Local | `login`, `logout`, `auth status`, `config path`, `config show`, `version` |
+| Local profiles/readiness | Local | `config profile list`, `config profile show`, `config profile select`, `doctor` |
 | Inventory and health reads | Stable official | `site`, `device`, `client`, `network`, `wlan`, `port`, `firewall`, `firewall zone`, `firewall traffic-list`, `dns`, `dns resolvers`, `switching lag`, `switching mc-lag`, `switching stack`, `radius profile`, and `system health` list/get operations as exposed by help |
 | Local DNS policy writes | Stable official | `dns create`, `dns update`, `dns delete` for A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain policies |
 | Network and WiFi writes | Experimental official | Network CRUD; WLAN CRUD, enable, and disable |
 | Device lifecycle writes | Experimental official | `device restart`, `device adopt`, `device forget` |
 | Firewall writes | Experimental official | Policy create/update/delete/reorder, relative policy move, custom-zone CRUD, and traffic-list CRUD |
-| Legacy device/client/port/resolver writes | Experimental legacy | Device rename/locate/upgrade; client reconnect/block/unblock and fixed-IP set/clear; port update; resolver set |
+| Legacy device/client/port/resolver operations | Experimental legacy | Device rename/locate/upgrade; client reconnect/block/unblock and fixed-IP list/get/set/clear; port update; resolver set |
 | Unsupported | None | Classic firewall rulesets; switching LAG, MC-LAG, and stack writes; RADIUS profile writes |
 
 The legacy-experimental rows are deliberately isolated compatibility paths;
@@ -232,10 +257,17 @@ writable official document.
 ### Client fixed-IP reservations
 
 Fixed-IP reservations use the legacy local client configuration endpoint
-because the official integration API does not expose this write. The commands
-operate only on currently connected clients:
+because the official integration API does not expose this resource. Inventory
+and mutations are experimental compatibility operations. Read commands do not
+require the apply opt-in:
 
 ```bash
+# List enabled reservations, including known offline clients
+unifi client fixed-ip list
+
+# Show enabled or disabled state for one known client
+unifi client fixed-ip get Laptop
+
 # Plan only
 unifi client fixed-ip set Laptop 192.168.1.50
 
@@ -246,16 +278,40 @@ unifi client fixed-ip set Laptop 192.168.1.50 --experimental --force --yes
 unifi client fixed-ip clear Laptop --experimental --force --yes
 ```
 
-The CLI infers the client's current network. Set requires DHCP to be enabled
-and a usable IPv4 address inside that network's subnet. It rejects the network,
-broadcast, and gateway addresses, another enabled reservation, and an address
-currently used by another connected client. It does not require the address to
-be inside the dynamic DHCP pool.
+`list` returns enabled reservations only. `get` also returns disabled known
+client records and does not expose an inactive historical address. Set and
+clear can target a known offline client when its legacy user record has an
+immutable ID, a valid MAC address, and a stored network ID. An official client
+UUID is translated to that legacy identity through its MAC address.
+
+Set requires DHCP to be enabled and a usable IPv4 address inside the stored
+network's subnet. It rejects the network, broadcast, and gateway addresses,
+another enabled reservation, and an address currently used by another
+connected client. It does not require the address to be inside the dynamic
+DHCP pool. The CLI cannot detect an offline device that uses an unrecorded
+static address; that conflict remains a manual proof gap.
 
 Set and clear verify the stored controller configuration after one write and
 do not retry ambiguous writes. Success does not mean the client renewed its
 DHCP lease or changed its active address. Use the separate experimental
 `client reconnect` action when an explicit reconnect is appropriate.
+
+### Local readiness diagnostics
+
+`unifi doctor` reads local state only. It does not construct a controller
+client or send an HTTP request. It reports version and commit fields, effective
+config path and profile, host and site, TLS mode, credential source, and a
+readiness boolean. Credential sources are reported only as
+`environment_api_key`, `saved_api_key`, `missing`, or `keyring_unavailable`;
+the key value is never emitted.
+
+Doctor proves that local configuration is valid and that a credential source
+is available. It does not prove controller reachability, API-key validity, or
+permissions. Use the separate online check:
+
+```bash
+unifi auth status --json
+```
 
 ### WiFi
 
@@ -327,8 +383,9 @@ Top-level `schema_version`, `ok`, `resource`, `action`, `data`, and `meta` are
 always present. `data` remains present on failures (as `null`). `error` is
 present only for failures and `plan` only for plan output. List responses may
 include optional `meta.count`, but current typed resource-list commands omit
-it. `meta.experimental` is present and true for every experimental mutation
-plan, gate error, and successful apply; stable commands omit it. The v1
+it. `meta.experimental` is present and true for every successful experimental
+read and for every experimental mutation plan, gate error, and successful
+apply; stable commands omit it. The v1
 surface has no `--raw` flag and never embeds upstream controller payloads.
 The executable JSON Schema 2020-12 contract is checked in at
 [`schemas/schema-v1.json`](schemas/schema-v1.json). Stable golden output,
