@@ -88,3 +88,25 @@ func TestSchemaV1RejectsContractViolations(t *testing.T) {
 		})
 	}
 }
+
+func TestSchemaV1AcceptsExactFirewallFiltersAndRejectsBroadenedShapes(t *testing.T) {
+	schema := loadSchemaV1(t)
+	valid := `{"schema_version":"1","ok":true,"resource":"firewall","action":"get","data":{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee9","name":"Allow one TCP service","description":"","enabled":true,"action":"allow","allow_return_traffic":true,"source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:tcp","logging_enabled":false,"index":120,"origin":"USER_DEFINED","source_filter":{"type":"ip_address","ip_address_filter":{"type":"ip_addresses","match_opposite":false,"items":[{"type":"ip_address","value":"192.0.2.10"}]}},"destination_filter":{"type":"ip_address","ip_address_filter":{"type":"ip_addresses","match_opposite":false,"items":[{"type":"ip_address","value":"198.51.100.20"}]},"port_filter":{"type":"ports","match_opposite":false,"items":[{"type":"port_number","value":1514}]}}},"meta":{"site":"default","dry_run":false}}`
+	if err := schema.Validate(decodeJSONDocument(t, valid)); err != nil {
+		t.Fatalf("valid exact firewall filter rejected: %v", err)
+	}
+
+	invalid := map[string]string{
+		"unknown filter property":  `{"schema_version":"1","ok":true,"resource":"firewall","action":"get","data":{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee9","name":"x","description":"","enabled":true,"action":"allow","allow_return_traffic":true,"source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:tcp","logging_enabled":false,"index":1,"origin":"USER_DEFINED","source_filter":{"type":"ip_address","unexpected":true}},"meta":{"site":"default","dry_run":false}}`,
+		"missing IP discriminator": `{"schema_version":"1","ok":true,"resource":"firewall","action":"get","data":{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee9","name":"x","description":"","enabled":true,"action":"allow","allow_return_traffic":true,"source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:tcp","logging_enabled":false,"index":1,"origin":"USER_DEFINED","source_filter":{"type":"ip_address","ip_address_filter":{"match_opposite":false,"items":[{"type":"ip_address","value":"192.0.2.10"}]}}},"meta":{"site":"default","dry_run":false}}`,
+		"invalid port":             `{"schema_version":"1","ok":true,"resource":"firewall","action":"get","data":{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee9","name":"x","description":"","enabled":true,"action":"allow","allow_return_traffic":true,"source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:tcp","logging_enabled":false,"index":1,"origin":"USER_DEFINED","destination_filter":{"type":"ip_address","ip_address_filter":{"type":"ip_addresses","match_opposite":false,"items":[{"type":"ip_address","value":"198.51.100.20"}]},"port_filter":{"type":"ports","match_opposite":false,"items":[{"type":"port_number","value":65536}]}}},"meta":{"site":"default","dry_run":false}}`,
+		"unknown IP item":          `{"schema_version":"1","ok":true,"resource":"firewall","action":"get","data":{"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee9","name":"x","description":"","enabled":true,"action":"allow","allow_return_traffic":true,"source_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff1","destination_zone_id":"ffffffff-ffff-4fff-8fff-fffffffffff2","protocol":"ipv4:tcp","logging_enabled":false,"index":1,"origin":"USER_DEFINED","source_filter":{"type":"ip_address","ip_address_filter":{"type":"ip_addresses","match_opposite":false,"items":[{"type":"hostname","value":"source.example.test"}]}}},"meta":{"site":"default","dry_run":false}}`,
+	}
+	for name, raw := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if err := schema.Validate(decodeJSONDocument(t, raw)); err == nil {
+				t.Fatal("invalid firewall filter was accepted")
+			}
+		})
+	}
+}

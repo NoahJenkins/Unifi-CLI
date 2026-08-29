@@ -335,6 +335,38 @@ Firewall reads and writes use modern official zones and policies; classic
 rulesets are not supported. Resolve zones with `firewall zone list/get`, then
 use `--source-zone` and `--destination-zone` for policies.
 
+Policy create also supports one bounded exact TCP/IPv4 filter bundle:
+
+```bash
+unifi firewall create \
+  --name "Allow one TCP service" \
+  --action allow \
+  --allow-return-traffic \
+  --source-zone "$SOURCE_ZONE" \
+  --destination-zone "$DESTINATION_ZONE" \
+  --ip-version ipv4 \
+  --protocol tcp \
+  --source-ip 192.0.2.10 \
+  --destination-ip 198.51.100.20 \
+  --destination-port 1514
+```
+
+`--source-ip`, `--destination-ip`, and `--destination-port` are create-only
+and must be present together. The addresses must be canonical literal IPv4
+addresses. CIDR subnets, ranges, hostnames, matching lists, `any`, multiple
+addresses, IPv6, whitespace, and non-canonical forms are rejected. The port
+must be from 1 through 65535. Exact-filter create requires `allow`, return
+traffic, IPv4, and TCP. It does not add update support for traffic filters.
+
+The first invocation emits a plan. Apply the reviewed command with
+`--experimental --force --yes` when default safe mode is active. `--dry-run`
+always prevents the write. Apply makes one non-retried POST, requires the
+returned immutable policy ID, reads that exact ID, and verifies the complete
+security scope. A missing, changed, broadened, opposite, extra, or malformed
+filter fails closed. The controller ID in a verified result can be used for an
+exact manual rollback with `unifi firewall delete <policy-id>` and the normal
+destructive apply gates. Create does not delete automatically.
+
 `firewall reorder` requires one source/destination zone pair plus the **complete**
 user-defined order split between `--before-system-ids` and
 `--after-system-ids`. It rejects duplicates, omissions, no-ops, and system
@@ -393,6 +425,11 @@ commands omit it. `meta.experimental` is present and true for every successful
 experimental read and for every experimental mutation plan, gate error, and
 successful apply; stable commands omit it. The v1
 surface has no `--raw` flag and never embeds upstream controller payloads.
+Normalized firewall policies can include optional `source_filter` and
+`destination_filter` objects. These objects expose the official filter type,
+opposite-match state, all typed IP and port items, and matching-list IDs. This
+keeps observed subnets, ranges, extra items, and list references inspectable;
+it does not make them writable. Zone-only policies omit both fields.
 The executable JSON Schema 2020-12 contract is checked in at
 [`schemas/schema-v1.json`](schemas/schema-v1.json). Stable golden output,
 failures, plans, and experimental common envelopes validate against it in the

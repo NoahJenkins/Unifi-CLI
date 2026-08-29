@@ -227,6 +227,16 @@ func TestFirewallPoliciesNormalizeOfficialZonesActionsAndProtocols(t *testing.T)
 		ID: allowDNSPolicyID, Name: "Allow DNS", Description: "Permit DNS from internal clients",
 		Enabled: true, Action: "allow", SourceZoneID: internalZoneID, DestinationZoneID: externalZoneID,
 		Protocol: "ipv4:udp", LoggingEnabled: true, Index: 100, Origin: "USER_DEFINED",
+		SourceFilter: &domain.FirewallTrafficFilter{
+			Type: "ip_address",
+			IPAddressFilter: &domain.FirewallIPAddressFilter{
+				Type: "ip_addresses", Items: []domain.FirewallIPMatch{{Type: "subnet", Value: "192.0.2.0/24"}},
+			},
+			PortFilter: &domain.FirewallPortFilter{
+				Type: "ports", Items: []domain.FirewallPortMatch{{Type: "port_number_range", Start: 1024, Stop: 65535}},
+			},
+		},
+		DestinationFilter: &domain.FirewallTrafficFilter{Type: "domain"},
 	}
 	if !reflect.DeepEqual(items[0], want) {
 		t.Fatalf("normalized policy = %+v, want %+v", items[0], want)
@@ -386,6 +396,459 @@ func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *te
 		t.Fatalf("create requests = %#v, want body %#v", post, wantBody)
 	}
 	assertFirewallCall(t, api.calls, http.MethodGet, client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID), 1)
+}
+
+func TestFirewallExactCreateSendsOneOfficialIPAddressAndDestinationPort(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+	observed := map[string]any{
+		"id": createdPolicyID, "name": "Allow one TCP service", "enabled": true, "index": float64(120),
+		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": true},
+		"source": map[string]any{
+			"zoneId": internalZoneID,
+			"trafficFilter": map[string]any{
+				"type": "IP_ADDRESS",
+				"ipAddressFilter": map[string]any{
+					"type": "IP_ADDRESSES", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "IP_ADDRESS", "value": "192.0.2.10"}},
+				},
+			},
+		},
+		"destination": map[string]any{
+			"zoneId": externalZoneID,
+			"trafficFilter": map[string]any{
+				"type": "IP_ADDRESS",
+				"ipAddressFilter": map[string]any{
+					"type": "IP_ADDRESSES", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "IP_ADDRESS", "value": "198.51.100.20"}},
+				},
+				"portFilter": map[string]any{
+					"type": "PORTS", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "PORT_NUMBER", "value": float64(1514)}},
+				},
+			},
+		},
+		"ipProtocolScope": map[string]any{
+			"ipVersion": "IPV4",
+			"protocolFilter": map[string]any{
+				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
+			},
+		},
+		"loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"},
+	}
+	api.postResponse = map[string]any{"id": createdPolicyID}
+	api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+
+	if _, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	posts := firewallCalls(api.calls, http.MethodPost)
+	if len(posts) != 1 {
+		t.Fatalf("POST attempts = %d, want 1", len(posts))
+	}
+	wantBody := cloneFirewallMap(t, observed)
+	delete(wantBody, "id")
+	delete(wantBody, "index")
+	delete(wantBody, "metadata")
+	gotBody := cloneFirewallMap(t, posts[0].body.(map[string]any))
+	if !reflect.DeepEqual(gotBody, wantBody) {
+		t.Fatalf("exact create body = %#v\nwant %#v", posts[0].body, wantBody)
+	}
+}
+
+func TestFirewallExactCreateRejectsUnsupportedOrBroadenedInputWithoutWrite(t *testing.T) {
+	valid := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*domain.FirewallInput)
+	}{
+		{name: "source only", mutate: func(in *domain.FirewallInput) {
+			in.SetDestinationIP, in.SetDestinationPort = false, false
+			in.DestinationIP, in.DestinationPort = "", 0
+		}},
+		{name: "destination only", mutate: func(in *domain.FirewallInput) { in.SetSourceIP = false; in.SourceIP = "" }},
+		{name: "missing return traffic", mutate: func(in *domain.FirewallInput) { in.AllowReturnTraffic = false }},
+		{name: "block action", mutate: func(in *domain.FirewallInput) { in.Action = "block" }},
+		{name: "IPv6 scope", mutate: func(in *domain.FirewallInput) { in.IPVersion = "ipv6" }},
+		{name: "dual stack scope", mutate: func(in *domain.FirewallInput) { in.IPVersion = "ipv4_and_ipv6" }},
+		{name: "UDP protocol", mutate: func(in *domain.FirewallInput) { in.Protocol = "udp" }},
+		{name: "all protocols", mutate: func(in *domain.FirewallInput) { in.Protocol = "all" }},
+		{name: "ICMP protocol", mutate: func(in *domain.FirewallInput) { in.Protocol = "icmp" }},
+		{name: "invalid source", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.999" }},
+		{name: "source CIDR", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.0/24" }},
+		{name: "source range", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.10-192.0.2.20" }},
+		{name: "source hostname", mutate: func(in *domain.FirewallInput) { in.SourceIP = "source.example.test" }},
+		{name: "source any", mutate: func(in *domain.FirewallInput) { in.SourceIP = "any" }},
+		{name: "multiple source addresses", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.10,192.0.2.11" }},
+		{name: "source whitespace", mutate: func(in *domain.FirewallInput) { in.SourceIP = " 192.0.2.10" }},
+		{name: "source IPv6", mutate: func(in *domain.FirewallInput) { in.SourceIP = "2001:db8::10" }},
+		{name: "destination CIDR", mutate: func(in *domain.FirewallInput) { in.DestinationIP = "198.51.100.0/24" }},
+		{name: "destination range", mutate: func(in *domain.FirewallInput) { in.DestinationIP = "198.51.100.20-198.51.100.30" }},
+		{name: "destination hostname", mutate: func(in *domain.FirewallInput) { in.DestinationIP = "destination.example.test" }},
+		{name: "zero port", mutate: func(in *domain.FirewallInput) { in.DestinationPort = 0 }},
+		{name: "port above maximum", mutate: func(in *domain.FirewallInput) { in.DestinationPort = 65536 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			in := valid
+			tt.mutate(&in)
+			_, err := domain.NewFirewallService(api).Create(context.Background(), in)
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("error = %v, want validation_failed", err)
+			}
+			if calls := firewallMutationCalls(api.calls); len(calls) != 0 {
+				t.Fatalf("invalid exact input wrote: %+v", calls)
+			}
+		})
+	}
+}
+
+func TestFirewallExactCreateVerificationFailsClosedForEverySecurityField(t *testing.T) {
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+	base := exactFirewallObservedPolicy()
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "enabled changed", mutate: func(observed map[string]any) { observed["enabled"] = false }},
+		{name: "action changed", mutate: func(observed map[string]any) { observed["action"] = map[string]any{"type": "BLOCK"} }},
+		{name: "return traffic changed", mutate: func(observed map[string]any) { mapFieldTest(observed, "action")["allowReturnTraffic"] = false }},
+		{name: "source zone changed", mutate: func(observed map[string]any) { mapFieldTest(observed, "source")["zoneId"] = labZoneID }},
+		{name: "destination zone changed", mutate: func(observed map[string]any) { mapFieldTest(observed, "destination")["zoneId"] = labZoneID }},
+		{name: "IP version changed", mutate: func(observed map[string]any) { mapFieldTest(observed, "ipProtocolScope")["ipVersion"] = "IPV6" }},
+		{name: "protocol changed", mutate: func(observed map[string]any) {
+			mapFieldTest(mapFieldTest(observed, "ipProtocolScope"), "protocolFilter")["protocol"] = map[string]any{"name": "udp"}
+		}},
+		{name: "protocol opposite", mutate: func(observed map[string]any) {
+			mapFieldTest(mapFieldTest(observed, "ipProtocolScope"), "protocolFilter")["matchOpposite"] = true
+		}},
+		{name: "source IP changed", mutate: func(observed map[string]any) {
+			exactIPItems(observed, "source")[0].(map[string]any)["value"] = "192.0.2.11"
+		}},
+		{name: "destination IP changed", mutate: func(observed map[string]any) {
+			exactIPItems(observed, "destination")[0].(map[string]any)["value"] = "198.51.100.21"
+		}},
+		{name: "destination port changed", mutate: func(observed map[string]any) { exactPortItems(observed)[0].(map[string]any)["value"] = float64(1515) }},
+		{name: "source IP opposite", mutate: func(observed map[string]any) { exactIPAddressFilter(observed, "source")["matchOpposite"] = true }},
+		{name: "destination IP opposite", mutate: func(observed map[string]any) { exactIPAddressFilter(observed, "destination")["matchOpposite"] = true }},
+		{name: "destination port opposite", mutate: func(observed map[string]any) { exactPortFilter(observed)["matchOpposite"] = true }},
+		{name: "additional source IP", mutate: func(observed map[string]any) {
+			filter := exactIPAddressFilter(observed, "source")
+			filter["items"] = append(exactIPItems(observed, "source"), map[string]any{"type": "IP_ADDRESS", "value": "192.0.2.12"})
+		}},
+		{name: "additional destination IP", mutate: func(observed map[string]any) {
+			filter := exactIPAddressFilter(observed, "destination")
+			filter["items"] = append(exactIPItems(observed, "destination"), map[string]any{"type": "IP_ADDRESS", "value": "198.51.100.22"})
+		}},
+		{name: "additional destination port", mutate: func(observed map[string]any) {
+			filter := exactPortFilter(observed)
+			filter["items"] = append(exactPortItems(observed), map[string]any{"type": "PORT_NUMBER", "value": float64(1515)})
+		}},
+		{name: "source subnet", mutate: func(observed map[string]any) {
+			exactIPAddressFilter(observed, "source")["items"] = []any{map[string]any{"type": "SUBNET", "value": "192.0.2.0/24"}}
+		}},
+		{name: "destination range", mutate: func(observed map[string]any) {
+			exactIPAddressFilter(observed, "destination")["items"] = []any{map[string]any{"type": "IP_ADDRESS_RANGE", "start": "198.51.100.20", "stop": "198.51.100.30"}}
+		}},
+		{name: "IP matching list", mutate: func(observed map[string]any) {
+			mapFieldTest(mapFieldTest(observed, "source"), "trafficFilter")["ipAddressFilter"] = map[string]any{
+				"type": "TRAFFIC_MATCHING_LIST", "matchOpposite": false,
+				"trafficMatchingListId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			}
+		}},
+		{name: "port matching list", mutate: func(observed map[string]any) {
+			mapFieldTest(mapFieldTest(observed, "destination"), "trafficFilter")["portFilter"] = map[string]any{
+				"type": "TRAFFIC_MATCHING_LIST", "matchOpposite": false,
+				"trafficMatchingListId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+			}
+		}},
+		{name: "source port added", mutate: func(observed map[string]any) {
+			mapFieldTest(mapFieldTest(observed, "source"), "trafficFilter")["portFilter"] = map[string]any{
+				"type": "PORTS", "matchOpposite": false,
+				"items": []any{map[string]any{"type": "PORT_NUMBER", "value": float64(40000)}},
+			}
+		}},
+		{name: "source MAC added", mutate: func(observed map[string]any) {
+			mapFieldTest(mapFieldTest(observed, "source"), "trafficFilter")["macAddressFilter"] = "02:00:00:00:00:01"
+		}},
+		{name: "connection state added", mutate: func(observed map[string]any) { observed["connectionStateFilter"] = []any{"NEW"} }},
+		{name: "IPsec filter added", mutate: func(observed map[string]any) { observed["ipsecFilter"] = "MATCH_NOT_ENCRYPTED" }},
+		{name: "schedule added", mutate: func(observed map[string]any) {
+			observed["schedule"] = map[string]any{"mode": "EVERY_DAY", "timeFilter": map[string]any{"startTime": "08:00", "stopTime": "18:00"}}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			observed := cloneFirewallMap(t, base)
+			tt.mutate(observed)
+			api.postResponse = map[string]any{"id": createdPolicyID}
+			path := client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)
+			api.details[path] = observed
+
+			_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in)
+			if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "verification") {
+				t.Fatalf("error = %v, want verification conflict", err)
+			}
+			assertFirewallCall(t, api.calls, http.MethodPost, client.OfficialPath("sites", firewallSiteID, "firewall", "policies"), 1)
+			assertFirewallCall(t, api.calls, http.MethodGet, path, 1)
+		})
+	}
+}
+
+func TestFirewallExactCreateRejectsInvalidReturnedIDBeforeDetailRead(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	api.postResponse = map[string]any{"id": "not-a-policy-uuid"}
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+
+	_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in)
+	if !apperr.Is(err, apperr.Conflict) || !strings.Contains(strings.ToLower(err.Error()), "valid policy id") {
+		t.Fatalf("error = %v, want invalid policy ID conflict", err)
+	}
+	if got := len(firewallCalls(api.calls, http.MethodPost)); got != 1 {
+		t.Fatalf("POST attempts = %d, want 1", got)
+	}
+	if got := len(firewallCalls(api.calls, http.MethodGet)); got != 0 {
+		t.Fatalf("detail GETs = %d, want 0", got)
+	}
+}
+
+func TestFirewallExactCreateWriteFailureIsNeverRetried(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	path := client.OfficialPath("sites", firewallSiteID, "firewall", "policies")
+	api.errByMethodAndPath[http.MethodPost+" "+path] = errors.New("ambiguous controller write failure")
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+
+	_, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous controller write failure") {
+		t.Fatalf("error = %v, want original ambiguous write error", err)
+	}
+	if got := len(firewallCalls(api.calls, http.MethodPost)); got != 1 {
+		t.Fatalf("POST attempts = %d, want 1", got)
+	}
+	if got := len(firewallCalls(api.calls, http.MethodGet)); got != 0 {
+		t.Fatalf("detail GETs = %d, want 0", got)
+	}
+}
+
+func TestFirewallExactFiltersAreFullyInspectableAfterNormalization(t *testing.T) {
+	rule := domain.NormalizeFirewallRule(exactFirewallObservedPolicy())
+	if rule.SourceFilter == nil || rule.SourceFilter.Type != "ip_address" || rule.SourceFilter.IPAddressFilter == nil {
+		t.Fatalf("source filter = %#v, want typed IP-address filter", rule.SourceFilter)
+	}
+	sourceIP := rule.SourceFilter.IPAddressFilter
+	if sourceIP.Type != "ip_addresses" || sourceIP.MatchOpposite || len(sourceIP.Items) != 1 ||
+		sourceIP.Items[0].Type != "ip_address" || sourceIP.Items[0].Value != "192.0.2.10" {
+		t.Fatalf("source IP filter = %#v", sourceIP)
+	}
+	if rule.SourceFilter.PortFilter != nil {
+		t.Fatalf("source port filter = %#v, want absent", rule.SourceFilter.PortFilter)
+	}
+
+	if rule.DestinationFilter == nil || rule.DestinationFilter.Type != "ip_address" ||
+		rule.DestinationFilter.IPAddressFilter == nil || rule.DestinationFilter.PortFilter == nil {
+		t.Fatalf("destination filter = %#v, want typed IP and port filters", rule.DestinationFilter)
+	}
+	destinationIP := rule.DestinationFilter.IPAddressFilter
+	if destinationIP.Type != "ip_addresses" || destinationIP.MatchOpposite || len(destinationIP.Items) != 1 ||
+		destinationIP.Items[0].Type != "ip_address" || destinationIP.Items[0].Value != "198.51.100.20" {
+		t.Fatalf("destination IP filter = %#v", destinationIP)
+	}
+	destinationPort := rule.DestinationFilter.PortFilter
+	if destinationPort.Type != "ports" || destinationPort.MatchOpposite || len(destinationPort.Items) != 1 ||
+		destinationPort.Items[0].Type != "port_number" || destinationPort.Items[0].Value != 1514 {
+		t.Fatalf("destination port filter = %#v", destinationPort)
+	}
+}
+
+func TestFirewallFilterNormalizationPreservesRangesSubnetsListsAndOppositeState(t *testing.T) {
+	raw := exactFirewallObservedPolicy()
+	sourceIP := exactIPAddressFilter(raw, "source")
+	sourceIP["matchOpposite"] = true
+	sourceIP["items"] = []any{
+		map[string]any{"type": "SUBNET", "value": "192.0.2.0/24"},
+		map[string]any{"type": "IP_ADDRESS_RANGE", "start": "192.0.2.10", "stop": "192.0.2.20"},
+	}
+	mapFieldTest(mapFieldTest(raw, "destination"), "trafficFilter")["ipAddressFilter"] = map[string]any{
+		"type": "TRAFFIC_MATCHING_LIST", "matchOpposite": false,
+		"trafficMatchingListId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+	}
+	mapFieldTest(mapFieldTest(raw, "destination"), "trafficFilter")["portFilter"] = map[string]any{
+		"type": "PORTS", "matchOpposite": true,
+		"items": []any{map[string]any{"type": "PORT_NUMBER_RANGE", "start": float64(1500), "stop": float64(1600)}},
+	}
+
+	rule := domain.NormalizeFirewallRule(raw)
+	if rule.SourceFilter == nil || rule.SourceFilter.IPAddressFilter == nil || !rule.SourceFilter.IPAddressFilter.MatchOpposite ||
+		!reflect.DeepEqual(rule.SourceFilter.IPAddressFilter.Items, []domain.FirewallIPMatch{
+			{Type: "subnet", Value: "192.0.2.0/24"},
+			{Type: "ip_address_range", Start: "192.0.2.10", Stop: "192.0.2.20"},
+		}) {
+		t.Fatalf("source normalized filter = %#v", rule.SourceFilter)
+	}
+	if rule.DestinationFilter == nil || rule.DestinationFilter.IPAddressFilter == nil ||
+		rule.DestinationFilter.IPAddressFilter.Type != "traffic_matching_list" ||
+		rule.DestinationFilter.IPAddressFilter.TrafficMatchingListID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("destination normalized IP list = %#v", rule.DestinationFilter)
+	}
+	if rule.DestinationFilter.PortFilter == nil || !rule.DestinationFilter.PortFilter.MatchOpposite ||
+		!reflect.DeepEqual(rule.DestinationFilter.PortFilter.Items, []domain.FirewallPortMatch{{Type: "port_number_range", Start: 1500, Stop: 1600}}) {
+		t.Fatalf("destination normalized port range = %#v", rule.DestinationFilter)
+	}
+}
+
+func TestFirewallZoneOnlyNormalizationOmitsTrafficFiltersFromJSON(t *testing.T) {
+	raw := exactFirewallObservedPolicy()
+	delete(mapFieldTest(raw, "source"), "trafficFilter")
+	delete(mapFieldTest(raw, "destination"), "trafficFilter")
+	encoded, err := json.Marshal(domain.NormalizeFirewallRule(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := document["source_filter"]; present {
+		t.Fatalf("zone-only policy contains source_filter: %s", encoded)
+	}
+	if _, present := document["destination_filter"]; present {
+		t.Fatalf("zone-only policy contains destination_filter: %s", encoded)
+	}
+}
+
+func TestFirewallStableReadsRejectMalformedKnownTrafficFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "missing IP opposite", mutate: func(raw map[string]any) {
+			delete(exactIPAddressFilter(raw, "source"), "matchOpposite")
+		}},
+		{name: "non-boolean IP opposite", mutate: func(raw map[string]any) {
+			exactIPAddressFilter(raw, "source")["matchOpposite"] = "false"
+		}},
+		{name: "missing port opposite", mutate: func(raw map[string]any) {
+			delete(exactPortFilter(raw), "matchOpposite")
+		}},
+		{name: "non-boolean port opposite", mutate: func(raw map[string]any) {
+			exactPortFilter(raw)["matchOpposite"] = float64(0)
+		}},
+		{name: "fractional port", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = float64(1514.5)
+		}},
+		{name: "non-numeric port", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = "1514"
+		}},
+		{name: "port below range", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = float64(0)
+		}},
+		{name: "port above range", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = float64(65536)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			raw := exactFirewallObservedPolicy()
+			tt.mutate(raw)
+			api.policies = []map[string]any{raw}
+
+			if _, err := domain.NewFirewallService(api).List(context.Background()); !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), "malformed") {
+				t.Fatalf("List error = %v, want malformed official filter failure", err)
+			}
+		})
+	}
+}
+
+func exactFirewallObservedPolicy() map[string]any {
+	return map[string]any{
+		"id": createdPolicyID, "name": "Allow one TCP service", "enabled": true, "index": float64(120),
+		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": true},
+		"source": map[string]any{
+			"zoneId": internalZoneID,
+			"trafficFilter": map[string]any{
+				"type": "IP_ADDRESS",
+				"ipAddressFilter": map[string]any{
+					"type": "IP_ADDRESSES", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "IP_ADDRESS", "value": "192.0.2.10"}},
+				},
+			},
+		},
+		"destination": map[string]any{
+			"zoneId": externalZoneID,
+			"trafficFilter": map[string]any{
+				"type": "IP_ADDRESS",
+				"ipAddressFilter": map[string]any{
+					"type": "IP_ADDRESSES", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "IP_ADDRESS", "value": "198.51.100.20"}},
+				},
+				"portFilter": map[string]any{
+					"type": "PORTS", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "PORT_NUMBER", "value": float64(1514)}},
+				},
+			},
+		},
+		"ipProtocolScope": map[string]any{
+			"ipVersion": "IPV4",
+			"protocolFilter": map[string]any{
+				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
+			},
+		},
+		"loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"},
+	}
+}
+
+func mapFieldTest(value map[string]any, key string) map[string]any {
+	return value[key].(map[string]any)
+}
+
+func exactIPAddressFilter(observed map[string]any, endpoint string) map[string]any {
+	return mapFieldTest(mapFieldTest(mapFieldTest(observed, endpoint), "trafficFilter"), "ipAddressFilter")
+}
+
+func exactIPItems(observed map[string]any, endpoint string) []any {
+	return exactIPAddressFilter(observed, endpoint)["items"].([]any)
+}
+
+func exactPortFilter(observed map[string]any) map[string]any {
+	return mapFieldTest(mapFieldTest(mapFieldTest(observed, "destination"), "trafficFilter"), "portFilter")
+}
+
+func exactPortItems(observed map[string]any) []any {
+	return exactPortFilter(observed)["items"].([]any)
 }
 
 func TestFirewallBoundCreateDoesNotReresolveZoneNames(t *testing.T) {

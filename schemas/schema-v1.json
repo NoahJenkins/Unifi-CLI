@@ -215,7 +215,57 @@
     "network": {"type": "object", "additionalProperties": false, "required": ["id", "name", "purpose", "subnet", "dhcp_enabled", "domain_name", "wan"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "purpose": {"type": "string"}, "vlan": {"type": "integer"}, "subnet": {"type": "string"}, "dhcp_enabled": {"type": "boolean"}, "domain_name": {"type": "string"}, "wan": {"type": "boolean"}}},
     "wlan": {"type": "object", "additionalProperties": false, "required": ["id", "name", "enabled", "security", "network_id", "band", "guest"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "security": {"type": "string"}, "network_id": {"type": "string"}, "band": {"type": "string"}, "guest": {"type": "boolean"}}},
     "port": {"type": "object", "additionalProperties": false, "required": ["device_id", "device_name", "port_idx", "name", "media", "speed", "poe", "profile", "networks"], "properties": {"device_id": {"type": "string"}, "device_name": {"type": "string"}, "port_idx": {"type": "integer"}, "name": {"type": "string"}, "media": {"type": "string"}, "speed": {"type": "string"}, "poe": {"type": "string"}, "enabled": {"type": "boolean"}, "profile": {"type": "string"}, "networks": {"type": "string"}}},
-    "firewallPolicy": {"type": "object", "additionalProperties": false, "required": ["id", "name", "description", "enabled", "action", "allow_return_traffic", "source_zone_id", "destination_zone_id", "protocol", "logging_enabled", "index", "origin"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "enabled": {"type": "boolean"}, "action": {"type": "string"}, "allow_return_traffic": {"type": "boolean"}, "source_zone_id": {"type": "string"}, "destination_zone_id": {"type": "string"}, "protocol": {"type": "string"}, "logging_enabled": {"type": "boolean"}, "index": {"type": "integer"}, "origin": {"type": "string"}}},
+    "firewallIPMatch": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "ip_address"}, "value": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "subnet"}, "value": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "start", "stop"], "properties": {"type": {"const": "ip_address_range"}, "start": {"type": "string"}, "stop": {"type": "string"}}}
+      ]
+    },
+    "firewallPortMatch": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "port_number"}, "value": {"type": "integer", "minimum": 1, "maximum": 65535}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "start", "stop"], "properties": {"type": {"const": "port_number_range"}, "start": {"type": "integer", "minimum": 1, "maximum": 65535}, "stop": {"type": "integer", "minimum": 1, "maximum": 65535}}}
+      ]
+    },
+    "firewallIPAddressFilter": {
+      "type": "object", "additionalProperties": false, "required": ["type", "match_opposite"],
+      "properties": {
+        "type": {"enum": ["ip_addresses", "traffic_matching_list"]},
+        "match_opposite": {"type": "boolean"},
+        "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/firewallIPMatch"}},
+        "traffic_matching_list_id": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "ip_addresses"}}}, "then": {"required": ["items"], "not": {"required": ["traffic_matching_list_id"]}}},
+        {"if": {"properties": {"type": {"const": "traffic_matching_list"}}}, "then": {"required": ["traffic_matching_list_id"], "not": {"required": ["items"]}}}
+      ]
+    },
+    "firewallPortFilter": {
+      "type": "object", "additionalProperties": false, "required": ["type", "match_opposite"],
+      "properties": {
+        "type": {"enum": ["ports", "traffic_matching_list"]},
+        "match_opposite": {"type": "boolean"},
+        "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/firewallPortMatch"}},
+        "traffic_matching_list_id": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "ports"}}}, "then": {"required": ["items"], "not": {"required": ["traffic_matching_list_id"]}}},
+        {"if": {"properties": {"type": {"const": "traffic_matching_list"}}}, "then": {"required": ["traffic_matching_list_id"], "not": {"required": ["items"]}}}
+      ]
+    },
+    "firewallTrafficFilter": {
+      "type": "object", "additionalProperties": false, "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "minLength": 1},
+        "ip_address_filter": {"$ref": "#/$defs/firewallIPAddressFilter"},
+        "port_filter": {"$ref": "#/$defs/firewallPortFilter"}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "ip_address"}}}, "then": {"required": ["ip_address_filter"]}}
+      ]
+    },
+    "firewallPolicy": {"type": "object", "additionalProperties": false, "required": ["id", "name", "description", "enabled", "action", "allow_return_traffic", "source_zone_id", "destination_zone_id", "protocol", "logging_enabled", "index", "origin"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "enabled": {"type": "boolean"}, "action": {"type": "string"}, "allow_return_traffic": {"type": "boolean"}, "source_zone_id": {"type": "string"}, "destination_zone_id": {"type": "string"}, "source_filter": {"$ref": "#/$defs/firewallTrafficFilter"}, "destination_filter": {"$ref": "#/$defs/firewallTrafficFilter"}, "protocol": {"type": "string"}, "logging_enabled": {"type": "boolean"}, "index": {"type": "integer"}, "origin": {"type": "string"}}},
     "firewallZone": {"type": "object", "additionalProperties": false, "required": ["id", "name", "network_ids", "origin", "configurable"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "network_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "origin": {"type": "string"}, "configurable": {"type": "boolean"}}},
     "dnsRecord": {
       "type": "object",

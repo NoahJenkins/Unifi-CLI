@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"sort"
@@ -48,18 +49,57 @@ type FirewallZoneInput struct {
 // FirewallRule preserves the stable policy identifiers while exposing the
 // zone-aware fields from the official firewall policy schema.
 type FirewallRule struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	Enabled            bool   `json:"enabled"`
-	Action             string `json:"action"`
-	AllowReturnTraffic bool   `json:"allow_return_traffic"`
-	SourceZoneID       string `json:"source_zone_id"`
-	DestinationZoneID  string `json:"destination_zone_id"`
-	Protocol           string `json:"protocol"`
-	LoggingEnabled     bool   `json:"logging_enabled"`
-	Index              int    `json:"index"`
-	Origin             string `json:"origin"`
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name"`
+	Description        string                 `json:"description"`
+	Enabled            bool                   `json:"enabled"`
+	Action             string                 `json:"action"`
+	AllowReturnTraffic bool                   `json:"allow_return_traffic"`
+	SourceZoneID       string                 `json:"source_zone_id"`
+	DestinationZoneID  string                 `json:"destination_zone_id"`
+	SourceFilter       *FirewallTrafficFilter `json:"source_filter,omitempty"`
+	DestinationFilter  *FirewallTrafficFilter `json:"destination_filter,omitempty"`
+	Protocol           string                 `json:"protocol"`
+	LoggingEnabled     bool                   `json:"logging_enabled"`
+	Index              int                    `json:"index"`
+	Origin             string                 `json:"origin"`
+}
+
+// FirewallTrafficFilter is the loss-aware normalized read view for the
+// official IP-address and port filter unions. Other outer filter variants keep
+// their discriminator visible without gaining a writable CLI surface.
+type FirewallTrafficFilter struct {
+	Type            string                   `json:"type"`
+	IPAddressFilter *FirewallIPAddressFilter `json:"ip_address_filter,omitempty"`
+	PortFilter      *FirewallPortFilter      `json:"port_filter,omitempty"`
+}
+
+type FirewallIPAddressFilter struct {
+	Type                  string            `json:"type"`
+	MatchOpposite         bool              `json:"match_opposite"`
+	Items                 []FirewallIPMatch `json:"items,omitempty"`
+	TrafficMatchingListID string            `json:"traffic_matching_list_id,omitempty"`
+}
+
+type FirewallIPMatch struct {
+	Type  string `json:"type"`
+	Value string `json:"value,omitempty"`
+	Start string `json:"start,omitempty"`
+	Stop  string `json:"stop,omitempty"`
+}
+
+type FirewallPortFilter struct {
+	Type                  string              `json:"type"`
+	MatchOpposite         bool                `json:"match_opposite"`
+	Items                 []FirewallPortMatch `json:"items,omitempty"`
+	TrafficMatchingListID string              `json:"traffic_matching_list_id,omitempty"`
+}
+
+type FirewallPortMatch struct {
+	Type  string `json:"type"`
+	Value int    `json:"value,omitempty"`
+	Start int    `json:"start,omitempty"`
+	Stop  int    `json:"stop,omitempty"`
 }
 
 func (r FirewallRule) GetID() string   { return r.ID }
@@ -88,6 +128,12 @@ type FirewallInput struct {
 	SetIPVersion          bool
 	Protocol              string
 	SetProtocol           bool
+	SourceIP              string
+	SetSourceIP           bool
+	DestinationIP         string
+	SetDestinationIP      bool
+	DestinationPort       int
+	SetDestinationPort    bool
 	LoggingEnabled        bool
 	SetLoggingEnabled     bool
 }
@@ -545,17 +591,17 @@ func (s *FirewallService) ApplyCreateBound(ctx context.Context, in FirewallInput
 		return FirewallRule{}, err
 	}
 	id := strField(created, "id")
-	if id == "" {
-		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall create result is unverified: controller response is missing the policy ID")
+	if !looksLikeUUID(id) {
+		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall create result is unverified: controller response is missing a valid policy ID")
 	}
 	observed, observedRaw, err := s.readPolicyDetail(ctx, id)
 	if err != nil {
-		return FirewallRule{}, verificationError("created firewall policy could not be verified", err)
+		return FirewallRule{}, verificationError("created firewall policy verification failed: policy could not be verified", err)
 	}
 	if err := requireObservedResourceID(observedRaw, id, "firewall create"); err != nil {
 		return FirewallRule{}, err
 	}
-	if !reflect.DeepEqual(firewallWritableDocument(observedRaw), body) {
+	if !wireDocumentsEqualAtPaths(firewallWritableDocument(observedRaw), body, nil) {
 		return FirewallRule{}, apperr.New(apperr.Conflict, "created firewall policy verification failed: observed writable document differs from requested state")
 	}
 	return observed, nil
@@ -1181,7 +1227,11 @@ func (s *FirewallService) listPolicyDocuments(ctx context.Context) ([]firewallPo
 	}
 	docs := make([]firewallPolicyDocument, 0, len(raw))
 	for _, item := range raw {
-		docs = append(docs, firewallPolicyDocument{normalized: NormalizeFirewallRule(item), wire: deepCloneFirewallMap(item)})
+		normalized, normalizeErr := normalizeFirewallRuleForRead(item)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		docs = append(docs, firewallPolicyDocument{normalized: normalized, wire: deepCloneFirewallMap(item)})
 	}
 	sort.SliceStable(docs, func(i, j int) bool {
 		if docs[i].normalized.Index != docs[j].normalized.Index {
@@ -1222,7 +1272,180 @@ func (s *FirewallService) readPolicyDetail(ctx context.Context, id string) (Fire
 	if err := s.api.DoOfficial(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return FirewallRule{}, nil, err
 	}
-	return NormalizeFirewallRule(raw), raw, nil
+	normalized, err := normalizeFirewallRuleForRead(raw)
+	if err != nil {
+		return FirewallRule{}, nil, err
+	}
+	return normalized, raw, nil
+}
+
+func normalizeFirewallRuleForRead(m map[string]any) (FirewallRule, error) {
+	for _, field := range []string{"source", "destination"} {
+		endpoint, _ := m[field].(map[string]any)
+		if err := validateFirewallTrafficFilterForRead(endpoint); err != nil {
+			return FirewallRule{}, apperr.Newf(apperr.Internal, "official firewall policy has malformed %s traffic filter", field)
+		}
+	}
+	return NormalizeFirewallRule(m), nil
+}
+
+func validateFirewallTrafficFilterForRead(endpoint map[string]any) error {
+	value, present := endpoint["trafficFilter"]
+	if !present {
+		return nil
+	}
+	raw, ok := value.(map[string]any)
+	if !ok || raw == nil {
+		return fmt.Errorf("traffic filter is not an object")
+	}
+	typeValue, ok := raw["type"].(string)
+	if !ok || typeValue == "" {
+		return fmt.Errorf("traffic filter type is invalid")
+	}
+	if strings.EqualFold(typeValue, "IP_ADDRESS") && !firewallMapHasOnlyKeys(raw, "type", "ipAddressFilter", "portFilter") {
+		return fmt.Errorf("IP-address traffic filter has unsupported fields")
+	}
+	if ipValue, present := raw["ipAddressFilter"]; present {
+		ipFilter, ok := ipValue.(map[string]any)
+		if !ok || !validFirewallIPAddressFilterForRead(ipFilter) {
+			return fmt.Errorf("IP-address filter is invalid")
+		}
+	} else if strings.EqualFold(typeValue, "IP_ADDRESS") {
+		return fmt.Errorf("IP-address traffic filter is missing its address filter")
+	}
+	if portValue, present := raw["portFilter"]; present {
+		portFilter, ok := portValue.(map[string]any)
+		if !ok || !validFirewallPortFilterForRead(portFilter) {
+			return fmt.Errorf("port filter is invalid")
+		}
+	}
+	return nil
+}
+
+func validFirewallIPAddressFilterForRead(raw map[string]any) bool {
+	if _, ok := raw["matchOpposite"].(bool); !ok {
+		return false
+	}
+	typeValue, ok := raw["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "IP_ADDRESSES":
+		items, ok := raw["items"].([]any)
+		if !ok || len(items) == 0 || !firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "items") {
+			return false
+		}
+		for _, value := range items {
+			item, ok := value.(map[string]any)
+			if !ok || !validFirewallIPAddressItemForRead(item) {
+				return false
+			}
+		}
+		return true
+	case "TRAFFIC_MATCHING_LIST":
+		id, ok := raw["trafficMatchingListId"].(string)
+		return ok && id != "" && firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "trafficMatchingListId")
+	default:
+		return false
+	}
+}
+
+func validFirewallIPAddressItemForRead(item map[string]any) bool {
+	typeValue, ok := item["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "IP_ADDRESS", "SUBNET":
+		value, ok := item["value"].(string)
+		return ok && value != "" && firewallMapHasOnlyKeys(item, "type", "value")
+	case "IP_ADDRESS_RANGE":
+		start, startOK := item["start"].(string)
+		stop, stopOK := item["stop"].(string)
+		return startOK && stopOK && start != "" && stop != "" && firewallMapHasOnlyKeys(item, "type", "start", "stop")
+	default:
+		return false
+	}
+}
+
+func validFirewallPortFilterForRead(raw map[string]any) bool {
+	if _, ok := raw["matchOpposite"].(bool); !ok {
+		return false
+	}
+	typeValue, ok := raw["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "PORTS":
+		items, ok := raw["items"].([]any)
+		if !ok || len(items) == 0 || !firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "items") {
+			return false
+		}
+		for _, value := range items {
+			item, ok := value.(map[string]any)
+			if !ok || !validFirewallPortItemForRead(item) {
+				return false
+			}
+		}
+		return true
+	case "TRAFFIC_MATCHING_LIST":
+		id, ok := raw["trafficMatchingListId"].(string)
+		return ok && id != "" && firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "trafficMatchingListId")
+	default:
+		return false
+	}
+}
+
+func validFirewallPortItemForRead(item map[string]any) bool {
+	typeValue, ok := item["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "PORT_NUMBER":
+		_, ok := exactFirewallPortNumber(item["value"])
+		return ok && firewallMapHasOnlyKeys(item, "type", "value")
+	case "PORT_NUMBER_RANGE":
+		start, startOK := exactFirewallPortNumber(item["start"])
+		stop, stopOK := exactFirewallPortNumber(item["stop"])
+		return startOK && stopOK && start <= stop && firewallMapHasOnlyKeys(item, "type", "start", "stop")
+	default:
+		return false
+	}
+}
+
+func exactFirewallPortNumber(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed < 1 || typed > 65535 || typed != float64(int(typed)) {
+			return 0, false
+		}
+		return int(typed), true
+	case int:
+		return typed, typed >= 1 && typed <= 65535
+	case int64:
+		return int(typed), typed >= 1 && typed <= 65535
+	case jsonNumber:
+		integer, err := typed.Int64()
+		return int(integer), err == nil && integer >= 1 && integer <= 65535
+	default:
+		return 0, false
+	}
+}
+
+func firewallMapHasOnlyKeys(value map[string]any, allowed ...string) bool {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key := range value {
+		if _, ok := allowedSet[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func NormalizeFirewallRule(m map[string]any) FirewallRule {
@@ -1239,11 +1462,56 @@ func NormalizeFirewallRule(m map[string]any) FirewallRule {
 		AllowReturnTraffic: boolField(action, "allowReturnTraffic"),
 		SourceZoneID:       strField(source, "zoneId"),
 		DestinationZoneID:  strField(destination, "zoneId"),
+		SourceFilter:       normalizeFirewallTrafficFilter(source),
+		DestinationFilter:  normalizeFirewallTrafficFilter(destination),
 		Protocol:           normalizeOfficialFirewallProtocol(mapField(m, "ipProtocolScope")),
 		LoggingEnabled:     boolField(m, "loggingEnabled"),
 		Index:              intField(m, "index"),
 		Origin:             strField(metadata, "origin"),
 	}
+}
+
+func normalizeFirewallTrafficFilter(endpoint map[string]any) *FirewallTrafficFilter {
+	raw, ok := endpoint["trafficFilter"].(map[string]any)
+	if !ok || raw == nil {
+		return nil
+	}
+	filter := &FirewallTrafficFilter{Type: strings.ToLower(strField(raw, "type"))}
+	if ipRaw, ok := raw["ipAddressFilter"].(map[string]any); ok && ipRaw != nil {
+		ipFilter := &FirewallIPAddressFilter{
+			Type: strings.ToLower(strField(ipRaw, "type")), MatchOpposite: boolField(ipRaw, "matchOpposite"),
+			TrafficMatchingListID: strField(ipRaw, "trafficMatchingListId"),
+		}
+		if items, ok := ipRaw["items"].([]any); ok {
+			ipFilter.Items = make([]FirewallIPMatch, 0, len(items))
+			for _, value := range items {
+				item, _ := value.(map[string]any)
+				ipFilter.Items = append(ipFilter.Items, FirewallIPMatch{
+					Type: strings.ToLower(strField(item, "type")), Value: strField(item, "value"),
+					Start: strField(item, "start"), Stop: strField(item, "stop"),
+				})
+			}
+		}
+		filter.IPAddressFilter = ipFilter
+	}
+	if portRaw, ok := raw["portFilter"].(map[string]any); ok && portRaw != nil {
+		portFilter := &FirewallPortFilter{
+			Type: strings.ToLower(strField(portRaw, "type")), MatchOpposite: boolField(portRaw, "matchOpposite"),
+			TrafficMatchingListID: strField(portRaw, "trafficMatchingListId"),
+		}
+		if items, ok := portRaw["items"].([]any); ok {
+			portFilter.Items = make([]FirewallPortMatch, 0, len(items))
+			for _, value := range items {
+				item, _ := value.(map[string]any)
+				portFilter.Items = append(portFilter.Items, FirewallPortMatch{
+					Type: strings.ToLower(strField(item, "type")), Value: intField(item, "value"),
+					Start: intField(item, "start"), Stop: intField(item, "stop"),
+				})
+			}
+		}
+		filter.PortFilter = portFilter
+	}
+	return filter
 }
 
 func normalizeOfficialFirewallProtocol(scope map[string]any) string {
@@ -1286,12 +1554,18 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 	if in.SetEnabled {
 		enabled = in.Enabled
 	}
+	source := map[string]any{"zoneId": sourceZoneID}
+	destination := map[string]any{"zoneId": destinationZoneID}
+	if firewallExactFilterMode(in) {
+		source["trafficFilter"] = firewallExactIPAddressTrafficFilter(in.SourceIP, 0)
+		destination["trafficFilter"] = firewallExactIPAddressTrafficFilter(in.DestinationIP, in.DestinationPort)
+	}
 	body := map[string]any{
 		"name":            in.Name,
 		"enabled":         enabled,
 		"action":          firewallActionBody(in.Action, in.AllowReturnTraffic),
-		"source":          map[string]any{"zoneId": sourceZoneID},
-		"destination":     map[string]any{"zoneId": destinationZoneID},
+		"source":          source,
+		"destination":     destination,
 		"ipProtocolScope": firewallProtocolBody(ipVersion, protocol),
 		"loggingEnabled":  in.LoggingEnabled,
 	}
@@ -1299,6 +1573,23 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 		body["description"] = in.Description
 	}
 	return body
+}
+
+func firewallExactIPAddressTrafficFilter(address string, destinationPort int) map[string]any {
+	filter := map[string]any{
+		"type": "IP_ADDRESS",
+		"ipAddressFilter": map[string]any{
+			"type": "IP_ADDRESSES", "matchOpposite": false,
+			"items": []any{map[string]any{"type": "IP_ADDRESS", "value": address}},
+		},
+	}
+	if destinationPort != 0 {
+		filter["portFilter"] = map[string]any{
+			"type": "PORTS", "matchOpposite": false,
+			"items": []any{map[string]any{"type": "PORT_NUMBER", "value": destinationPort}},
+		}
+	}
+	return filter
 }
 
 func firewallActionBody(action string, allowReturnTraffic bool) map[string]any {
@@ -1363,12 +1654,19 @@ func firewallOrderingBody(ordering FirewallOrdering) map[string]any {
 }
 
 func firewallSnapshot(r FirewallRule) map[string]any {
-	return map[string]any{
+	snapshot := map[string]any{
 		"id": r.ID, "name": r.Name, "description": r.Description, "enabled": r.Enabled, "action": r.Action,
 		"allow_return_traffic": r.AllowReturnTraffic,
 		"source_zone_id":       r.SourceZoneID, "destination_zone_id": r.DestinationZoneID,
 		"protocol": r.Protocol, "logging_enabled": r.LoggingEnabled, "index": r.Index, "origin": r.Origin,
 	}
+	if r.SourceFilter != nil {
+		snapshot["source_filter"] = r.SourceFilter
+	}
+	if r.DestinationFilter != nil {
+		snapshot["destination_filter"] = r.DestinationFilter
+	}
+	return snapshot
 }
 
 func firewallOrderingSnapshot(sourceZoneID, destinationZoneID string, ordering FirewallOrdering) map[string]any {
@@ -1395,7 +1693,46 @@ func validateFirewallCreate(in FirewallInput) error {
 	if (in.SetAllowReturnTraffic || in.AllowReturnTraffic) && in.Action != "allow" {
 		return apperr.New(apperr.ValidationFailed, "allow-return-traffic applies only to action allow")
 	}
+	if err := validateFirewallExactCreate(in); err != nil {
+		return err
+	}
 	return validateFirewallFields(in, true)
+}
+
+func validateFirewallExactCreate(in FirewallInput) error {
+	if !firewallExactFilterMode(in) {
+		return nil
+	}
+	if !inputSetsFirewallSourceIP(in) || !inputSetsFirewallDestinationIP(in) || !inputSetsFirewallDestinationPort(in) {
+		return apperr.New(apperr.ValidationFailed, "--source-ip, --destination-ip, and --destination-port must be provided together")
+	}
+	if in.Action != "allow" || !in.AllowReturnTraffic {
+		return apperr.New(apperr.ValidationFailed, "exact IP and destination-port filters require action allow with --allow-return-traffic")
+	}
+	if in.IPVersion != "ipv4" {
+		return apperr.New(apperr.ValidationFailed, "exact IP filters currently require --ip-version ipv4")
+	}
+	if in.Protocol != "tcp" {
+		return apperr.New(apperr.ValidationFailed, "destination-port filters currently require --protocol tcp")
+	}
+	if err := validateCanonicalFirewallIPv4("source", in.SourceIP); err != nil {
+		return err
+	}
+	if err := validateCanonicalFirewallIPv4("destination", in.DestinationIP); err != nil {
+		return err
+	}
+	if in.DestinationPort < 1 || in.DestinationPort > 65535 {
+		return apperr.New(apperr.ValidationFailed, "firewall destination port must be from 1 through 65535")
+	}
+	return nil
+}
+
+func validateCanonicalFirewallIPv4(label, value string) error {
+	address, err := netip.ParseAddr(value)
+	if err != nil || !address.Is4() || address.String() != value {
+		return apperr.Newf(apperr.ValidationFailed, "firewall %s IP must be one canonical literal IPv4 address", label)
+	}
+	return nil
 }
 
 func validateFirewallUpdate(in FirewallInput) error {
@@ -1483,6 +1820,16 @@ func inputSetsFirewallDestinationZone(in FirewallInput) bool {
 }
 func inputSetsFirewallIPVersion(in FirewallInput) bool { return in.SetIPVersion || in.IPVersion != "" }
 func inputSetsFirewallProtocol(in FirewallInput) bool  { return in.SetProtocol || in.Protocol != "" }
+func inputSetsFirewallSourceIP(in FirewallInput) bool  { return in.SetSourceIP || in.SourceIP != "" }
+func inputSetsFirewallDestinationIP(in FirewallInput) bool {
+	return in.SetDestinationIP || in.DestinationIP != ""
+}
+func inputSetsFirewallDestinationPort(in FirewallInput) bool {
+	return in.SetDestinationPort || in.DestinationPort != 0
+}
+func firewallExactFilterMode(in FirewallInput) bool {
+	return inputSetsFirewallSourceIP(in) || inputSetsFirewallDestinationIP(in) || inputSetsFirewallDestinationPort(in)
+}
 
 func firewallStringSlice(value any) []string {
 	if value == nil {
