@@ -11,7 +11,7 @@ UniFi cloud or Site Manager.
 |---|---|
 | Earlier than 10.4.57 | Unsupported; required official schemas, discriminators, or endpoints can be absent or incompatible |
 | 10.4.57 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates. An earlier candidate passed read-only live checks and one A-record lifecycle |
-| 10.5.67 | Final v1 candidate passed all 19 configured read-only checks, with the empty DNS collection as one allowed `not_configured` result, and completed all seven disabled DNS policy lifecycles with exact baseline restoration |
+| 10.5.67 | Final v1 candidate passed all 19 configured read-only checks, with the empty DNS collection as one allowed `not_configured` result, and completed all seven disabled DNS policy lifecycles with exact baseline restoration. A later exact-filter firewall create request was rejected before creation; see the limitation below |
 | Later than 10.5.67 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
 
 Final live verification used a release-candidate executable from this branch.
@@ -34,6 +34,18 @@ live qualification conclusions above.
 RC.4 changes release documentation only. It corrects the stable release notes
 to identify the exact candidate used for unchanged-source promotion. It does
 not change controller or executable behavior.
+
+After the exact-filter firewall surface merged, two operator-reported 10.5.67
+apply attempts returned HTTP 400 before policy creation. Read-only before/after
+checks found no added or removed policy IDs. The published 10.4.57 OpenAPI
+request schema matches the CLI request document, including the integer
+`PORT_NUMBER`.
+As of 2026-08-29, Ubiquiti does not publish a 10.5.67 OpenAPI document, and the
+earlier CLI discarded the documented validation fields. Therefore there is not
+enough primary-source evidence to change the request body. The CLI now exposes
+only bounded, sanitized official validation `code` and `message` fields so a
+future authorized sacrificial-controller attempt can identify the difference.
+No controller request or live mutation was performed for this follow-up.
 
 The schema target is Ubiquiti's [UniFi Network 10.4.57 API
 reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
@@ -75,8 +87,10 @@ fails the entire command when any required detail fails.
   unsupported create surfaces.
 - Exact firewall filter create is derived from the official 10.4.57 OpenAPI
   schema and is covered by reduced synthetic fixtures and repository tests.
-  No live firewall mutation was performed, so it remains without
-  sacrificial-controller live qualification.
+  Network 10.5.67 rejected two operator-reported attempts before creation. The
+  request difference is unresolved because the earlier executable discarded
+  the official validation fields and no 10.5.67 OpenAPI document is published.
+  It remains without sacrificial-controller live qualification.
 - Switching and RADIUS profiles are read-only.
 - Accepted action output does not claim asynchronous completion.
 - Fixed-IP list returns enabled reservations only. Get can report disabled

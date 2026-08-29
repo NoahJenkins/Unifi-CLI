@@ -276,6 +276,39 @@ func TestFirewallExactCreateUsesExistingPlanApplyAndDryRunGates(t *testing.T) {
 	})
 }
 
+func TestFirewallExactCreateSurfacesSanitizedControllerValidation(t *testing.T) {
+	srv, writes := newFirewallMutationTestServerWithPostError(
+		t,
+		http.StatusBadRequest,
+		`{"code":"api.validation.invalid-request","message":"destination traffic filter is invalid","requestId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","requestPath":"/integration/v1/sites/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/firewall/policies"}`,
+	)
+	defer srv.Close()
+	useCommandTestRuntime(t, srv, true)
+	flagYes, flagExperimental, flagForce = true, true, true
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+
+	stdout, stderr, err := captureProcessOutput(t, func() error { return runFirewallCreate(in) })
+	if err == nil || stderr != "" || *writes != 1 {
+		t.Fatalf("exact create validation: err=%v writes=%d stdout=%q stderr=%q", err, *writes, stdout, stderr)
+	}
+	assertDecodedJSONEqual(t, stdout, `{"schema_version":"1","ok":false,"resource":"firewall","action":"create","data":null,"meta":{"site":"default","dry_run":false,"experimental":true},"error":{"code":"validation_failed","message":"controller returned HTTP status 400: api.validation.invalid-request: destination traffic filter is invalid"}}`)
+	for _, protected := range []string{
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"/integration/v1/sites/",
+	} {
+		if strings.Contains(stdout, protected) {
+			t.Fatalf("exact create validation rendered protected value %q: %s", protected, stdout)
+		}
+	}
+}
+
 func TestFirewallExactCreateAndGetExposeInspectableSchemaV1Filters(t *testing.T) {
 	srv, writes := newFirewallMutationTestServer(t)
 	defer srv.Close()
@@ -437,6 +470,10 @@ func TestFirewallDryRunMakesZeroWritesAndCreateReturnsObservedState(t *testing.T
 }
 
 func newFirewallMutationTestServer(t *testing.T) (*httptest.Server, *int) {
+	return newFirewallMutationTestServerWithPostError(t, 0, "")
+}
+
+func newFirewallMutationTestServerWithPostError(t *testing.T, postStatus int, postBody string) (*httptest.Server, *int) {
 	t.Helper()
 	writes := new(int)
 	policies := []map[string]any{
@@ -492,6 +529,11 @@ func newFirewallMutationTestServer(t *testing.T) (*httptest.Server, *int) {
 			_ = json.NewEncoder(w).Encode(ordering)
 		case r.Method == http.MethodPost && r.URL.Path == sitePath+"/firewall/policies":
 			*writes++
+			if postStatus != 0 {
+				w.WriteHeader(postStatus)
+				_, _ = io.WriteString(w, postBody)
+				return
+			}
 			var policy map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
 				http.Error(w, `{"message":"bad body"}`, http.StatusBadRequest)
