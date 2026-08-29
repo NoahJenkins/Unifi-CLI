@@ -596,7 +596,7 @@ func (s *FirewallService) ApplyCreateBound(ctx context.Context, in FirewallInput
 	}
 	observed, observedRaw, err := s.readPolicyDetail(ctx, id)
 	if err != nil {
-		return FirewallRule{}, verificationError("created firewall policy could not be verified", err)
+		return FirewallRule{}, verificationError("created firewall policy verification failed: policy could not be verified", err)
 	}
 	if err := requireObservedResourceID(observedRaw, id, "firewall create"); err != nil {
 		return FirewallRule{}, err
@@ -1227,7 +1227,11 @@ func (s *FirewallService) listPolicyDocuments(ctx context.Context) ([]firewallPo
 	}
 	docs := make([]firewallPolicyDocument, 0, len(raw))
 	for _, item := range raw {
-		docs = append(docs, firewallPolicyDocument{normalized: NormalizeFirewallRule(item), wire: deepCloneFirewallMap(item)})
+		normalized, normalizeErr := normalizeFirewallRuleForRead(item)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		docs = append(docs, firewallPolicyDocument{normalized: normalized, wire: deepCloneFirewallMap(item)})
 	}
 	sort.SliceStable(docs, func(i, j int) bool {
 		if docs[i].normalized.Index != docs[j].normalized.Index {
@@ -1268,7 +1272,180 @@ func (s *FirewallService) readPolicyDetail(ctx context.Context, id string) (Fire
 	if err := s.api.DoOfficial(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return FirewallRule{}, nil, err
 	}
-	return NormalizeFirewallRule(raw), raw, nil
+	normalized, err := normalizeFirewallRuleForRead(raw)
+	if err != nil {
+		return FirewallRule{}, nil, err
+	}
+	return normalized, raw, nil
+}
+
+func normalizeFirewallRuleForRead(m map[string]any) (FirewallRule, error) {
+	for _, field := range []string{"source", "destination"} {
+		endpoint, _ := m[field].(map[string]any)
+		if err := validateFirewallTrafficFilterForRead(endpoint); err != nil {
+			return FirewallRule{}, apperr.Newf(apperr.Internal, "official firewall policy has malformed %s traffic filter", field)
+		}
+	}
+	return NormalizeFirewallRule(m), nil
+}
+
+func validateFirewallTrafficFilterForRead(endpoint map[string]any) error {
+	value, present := endpoint["trafficFilter"]
+	if !present {
+		return nil
+	}
+	raw, ok := value.(map[string]any)
+	if !ok || raw == nil {
+		return fmt.Errorf("traffic filter is not an object")
+	}
+	typeValue, ok := raw["type"].(string)
+	if !ok || typeValue == "" {
+		return fmt.Errorf("traffic filter type is invalid")
+	}
+	if strings.EqualFold(typeValue, "IP_ADDRESS") && !firewallMapHasOnlyKeys(raw, "type", "ipAddressFilter", "portFilter") {
+		return fmt.Errorf("IP-address traffic filter has unsupported fields")
+	}
+	if ipValue, present := raw["ipAddressFilter"]; present {
+		ipFilter, ok := ipValue.(map[string]any)
+		if !ok || !validFirewallIPAddressFilterForRead(ipFilter) {
+			return fmt.Errorf("IP-address filter is invalid")
+		}
+	} else if strings.EqualFold(typeValue, "IP_ADDRESS") {
+		return fmt.Errorf("IP-address traffic filter is missing its address filter")
+	}
+	if portValue, present := raw["portFilter"]; present {
+		portFilter, ok := portValue.(map[string]any)
+		if !ok || !validFirewallPortFilterForRead(portFilter) {
+			return fmt.Errorf("port filter is invalid")
+		}
+	}
+	return nil
+}
+
+func validFirewallIPAddressFilterForRead(raw map[string]any) bool {
+	if _, ok := raw["matchOpposite"].(bool); !ok {
+		return false
+	}
+	typeValue, ok := raw["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "IP_ADDRESSES":
+		items, ok := raw["items"].([]any)
+		if !ok || len(items) == 0 || !firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "items") {
+			return false
+		}
+		for _, value := range items {
+			item, ok := value.(map[string]any)
+			if !ok || !validFirewallIPAddressItemForRead(item) {
+				return false
+			}
+		}
+		return true
+	case "TRAFFIC_MATCHING_LIST":
+		id, ok := raw["trafficMatchingListId"].(string)
+		return ok && id != "" && firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "trafficMatchingListId")
+	default:
+		return false
+	}
+}
+
+func validFirewallIPAddressItemForRead(item map[string]any) bool {
+	typeValue, ok := item["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "IP_ADDRESS", "SUBNET":
+		value, ok := item["value"].(string)
+		return ok && value != "" && firewallMapHasOnlyKeys(item, "type", "value")
+	case "IP_ADDRESS_RANGE":
+		start, startOK := item["start"].(string)
+		stop, stopOK := item["stop"].(string)
+		return startOK && stopOK && start != "" && stop != "" && firewallMapHasOnlyKeys(item, "type", "start", "stop")
+	default:
+		return false
+	}
+}
+
+func validFirewallPortFilterForRead(raw map[string]any) bool {
+	if _, ok := raw["matchOpposite"].(bool); !ok {
+		return false
+	}
+	typeValue, ok := raw["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "PORTS":
+		items, ok := raw["items"].([]any)
+		if !ok || len(items) == 0 || !firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "items") {
+			return false
+		}
+		for _, value := range items {
+			item, ok := value.(map[string]any)
+			if !ok || !validFirewallPortItemForRead(item) {
+				return false
+			}
+		}
+		return true
+	case "TRAFFIC_MATCHING_LIST":
+		id, ok := raw["trafficMatchingListId"].(string)
+		return ok && id != "" && firewallMapHasOnlyKeys(raw, "type", "matchOpposite", "trafficMatchingListId")
+	default:
+		return false
+	}
+}
+
+func validFirewallPortItemForRead(item map[string]any) bool {
+	typeValue, ok := item["type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToUpper(typeValue) {
+	case "PORT_NUMBER":
+		_, ok := exactFirewallPortNumber(item["value"])
+		return ok && firewallMapHasOnlyKeys(item, "type", "value")
+	case "PORT_NUMBER_RANGE":
+		start, startOK := exactFirewallPortNumber(item["start"])
+		stop, stopOK := exactFirewallPortNumber(item["stop"])
+		return startOK && stopOK && start <= stop && firewallMapHasOnlyKeys(item, "type", "start", "stop")
+	default:
+		return false
+	}
+}
+
+func exactFirewallPortNumber(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed < 1 || typed > 65535 || typed != float64(int(typed)) {
+			return 0, false
+		}
+		return int(typed), true
+	case int:
+		return typed, typed >= 1 && typed <= 65535
+	case int64:
+		return int(typed), typed >= 1 && typed <= 65535
+	case jsonNumber:
+		integer, err := typed.Int64()
+		return int(integer), err == nil && integer >= 1 && integer <= 65535
+	default:
+		return 0, false
+	}
+}
+
+func firewallMapHasOnlyKeys(value map[string]any, allowed ...string) bool {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key := range value {
+		if _, ok := allowedSet[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func NormalizeFirewallRule(m map[string]any) FirewallRule {

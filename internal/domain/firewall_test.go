@@ -749,6 +749,50 @@ func TestFirewallZoneOnlyNormalizationOmitsTrafficFiltersFromJSON(t *testing.T) 
 	}
 }
 
+func TestFirewallStableReadsRejectMalformedKnownTrafficFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "missing IP opposite", mutate: func(raw map[string]any) {
+			delete(exactIPAddressFilter(raw, "source"), "matchOpposite")
+		}},
+		{name: "non-boolean IP opposite", mutate: func(raw map[string]any) {
+			exactIPAddressFilter(raw, "source")["matchOpposite"] = "false"
+		}},
+		{name: "missing port opposite", mutate: func(raw map[string]any) {
+			delete(exactPortFilter(raw), "matchOpposite")
+		}},
+		{name: "non-boolean port opposite", mutate: func(raw map[string]any) {
+			exactPortFilter(raw)["matchOpposite"] = float64(0)
+		}},
+		{name: "fractional port", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = float64(1514.5)
+		}},
+		{name: "non-numeric port", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = "1514"
+		}},
+		{name: "port below range", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = float64(0)
+		}},
+		{name: "port above range", mutate: func(raw map[string]any) {
+			exactPortItems(raw)[0].(map[string]any)["value"] = float64(65536)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			raw := exactFirewallObservedPolicy()
+			tt.mutate(raw)
+			api.policies = []map[string]any{raw}
+
+			if _, err := domain.NewFirewallService(api).List(context.Background()); !apperr.Is(err, apperr.Internal) || !strings.Contains(err.Error(), "malformed") {
+				t.Fatalf("List error = %v, want malformed official filter failure", err)
+			}
+		})
+	}
+}
+
 func exactFirewallObservedPolicy() map[string]any {
 	return map[string]any{
 		"id": createdPolicyID, "name": "Allow one TCP service", "enabled": true, "index": float64(120),
