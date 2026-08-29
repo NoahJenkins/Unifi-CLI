@@ -547,6 +547,142 @@ func TestDoMapsConnectionError(t *testing.T) {
 	}
 }
 
+func TestDoMapsOfficialBadRequestValidationError(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{
+			"code":"api.validation.invalid-request",
+			"message":"destination traffic filter is invalid",
+			"requestId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			"requestPath":"/integration/v1/sites/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/firewall/policies",
+			"statusCode":400,
+			"statusName":"BAD_REQUEST",
+			"untrusted":"must-not-render"
+		}`)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.DoOfficial(context.Background(), http.MethodPost, "/firewall/policies", map[string]any{"name": "synthetic"}, nil)
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("error = %v, want validation_failed", err)
+	}
+	want := "validation_failed: controller returned HTTP status 400: api.validation.invalid-request: destination traffic filter is invalid"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
+	}
+	for _, protected := range []string{
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"/integration/v1/sites/",
+		"BAD_REQUEST",
+		"must-not-render",
+	} {
+		if strings.Contains(err.Error(), protected) {
+			t.Fatalf("validation error rendered ignored controller field %q: %v", protected, err)
+		}
+	}
+}
+
+func TestDoSanitizesOfficialBadRequestValidationError(t *testing.T) {
+	const body = `{
+		"code":"api.validation.rejected",
+		"message":"address 192.0.2.44, id aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, mac 02:00:5e:10:00:00, url https://controller.example/private, api-key=synthetic-secret-value, value 'private policy name', token abcdefghijklmnopqrstuvwxyz012345"
+	}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.DoOfficial(context.Background(), http.MethodPost, "/firewall/policies", nil, nil)
+	if !apperr.Is(err, apperr.ValidationFailed) {
+		t.Fatalf("error = %v, want validation_failed", err)
+	}
+	if !strings.Contains(err.Error(), "api.validation.rejected") || !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("validation error lacks safe diagnostic fields: %v", err)
+	}
+	for _, protected := range []string{
+		"192.0.2.44",
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"02:00:5e:10:00:00",
+		"controller.example",
+		"synthetic-secret-value",
+		"private policy name",
+		"abcdefghijklmnopqrstuvwxyz012345",
+	} {
+		if strings.Contains(err.Error(), protected) {
+			t.Fatalf("validation error rendered protected value %q: %v", protected, err)
+		}
+	}
+}
+
+func TestDoRejectsUnsafeOrMalformedOfficialBadRequestDetails(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "malformed", body: `{"code":`, want: "validation failed"},
+		{name: "invalid code", body: `{"code":"invalid code","message":"safe words"}`, want: "validation failed"},
+		{name: "identifier code", body: `{"code":"api.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","message":"safe words"}`, want: "validation failed"},
+		{name: "embedded raw body", body: `{"code":"api.validation.failed","message":"request contained {raw json}"}`, want: "api.validation.failed"},
+		{name: "terminal control", body: `{"code":"api.validation.failed","message":"unsafe\u001b[31mtext"}`, want: "api.validation.failed"},
+		{name: "oversized message", body: `{"code":"api.validation.failed","message":"` + strings.Repeat("x", 513) + `"}`, want: "api.validation.failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer srv.Close()
+
+			c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			err = c.DoOfficial(context.Background(), http.MethodPost, "/firewall/policies", nil, nil)
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("error = %v, want validation_failed", err)
+			}
+			want := "validation_failed: controller returned HTTP status 400: " + tt.want
+			if err.Error() != want {
+				t.Fatalf("error = %q, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestDoKeepsLegacyBadRequestBodyOpaque(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"code":"legacy.validation","message":"must-not-render"}`)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.Do(context.Background(), http.MethodPost, "/legacy", nil, nil)
+	if !apperr.Is(err, apperr.Internal) {
+		t.Fatalf("error = %v, want internal", err)
+	}
+	want := "internal: controller returned unexpected HTTP status 400"
+	if err.Error() != want || strings.Contains(err.Error(), "must-not-render") {
+		t.Fatalf("legacy bad-request error = %q, want %q", err, want)
+	}
+}
+
 func TestDoRejectsOversizedControllerResponse(t *testing.T) {
 	const responseLimit = 16 << 20
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

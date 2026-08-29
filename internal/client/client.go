@@ -13,9 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/authstore"
@@ -37,8 +40,22 @@ type Client struct {
 }
 
 const (
-	maxResponseBodyBytes = 16 << 20
-	maxCACertBytes       = 1 << 20
+	maxResponseBodyBytes           = 16 << 20
+	maxCACertBytes                 = 1 << 20
+	maxControllerErrorCodeBytes    = 128
+	maxControllerErrorMessageBytes = 512
+)
+
+var (
+	controllerErrorCodePattern   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,127}$`)
+	controllerSecretPattern      = regexp.MustCompile(`(?i)\b(api[-_ ]?key|authorization|bearer|token|password|passphrase|secret|cookie|csrf)\b\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)`)
+	controllerURLPattern         = regexp.MustCompile(`(?i)https?://[^\s,;]+`)
+	controllerUUIDPattern        = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
+	controllerMACPattern         = regexp.MustCompile(`(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b`)
+	controllerIPv4Pattern        = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:/[0-9]{1,3})?\b`)
+	controllerIPv6Pattern        = regexp.MustCompile(`(?i)(?:\b[0-9a-f]{1,4})?(?::[0-9a-f]{0,4}){2,7}\b`)
+	controllerQuotedValuePattern = regexp.MustCompile("(?:\\\"[^\\\"\\r\\n]*\\\"|'[^'\\r\\n]*'|`[^`\\r\\n]*`)")
+	controllerLongTokenPattern   = regexp.MustCompile(`\b[A-Za-z0-9_+/=-]{24,}\b`)
 )
 
 func New(cfg config.Config) (*Client, error) {
@@ -193,7 +210,7 @@ func (c *Client) DoOfficialSized(ctx context.Context, method, path string, in, o
 	var responseBytes int
 	err := c.doWithAuth(ctx, func(apiKey string) error {
 		var err error
-		responseBytes, err = c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, json.Unmarshal, "official API ")
+		responseBytes, err = c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, json.Unmarshal, "official API ", true)
 		return err
 	})
 	return responseBytes, err
@@ -226,12 +243,12 @@ func (c *Client) doWithAuth(ctx context.Context, request func(string) error) err
 }
 
 func (c *Client) doJSON(ctx context.Context, apiKey, method, path string, in, out any) error {
-	_, err := c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, DecodeData, "")
+	_, err := c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, DecodeData, "", false)
 	return err
 }
 
 func (c *Client) doOfficialJSON(ctx context.Context, apiKey, method, path string, in, out any) error {
-	_, err := c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, json.Unmarshal, "official API ")
+	_, err := c.doJSONWithDecoder(ctx, apiKey, method, path, in, out, json.Unmarshal, "official API ", true)
 	return err
 }
 
@@ -242,6 +259,7 @@ func (c *Client) doJSONWithDecoder(
 	in, out any,
 	decode func([]byte, any) error,
 	decodeKind string,
+	officialErrors bool,
 ) (int, error) {
 	var body io.Reader
 	if in != nil {
@@ -276,7 +294,7 @@ func (c *Client) doJSONWithDecoder(
 		return 0, apperr.New(apperr.Internal, "controller response is too large")
 	}
 
-	if err := mapStatus(resp.StatusCode, respBody); err != nil {
+	if err := mapStatus(resp.StatusCode, respBody, officialErrors); err != nil {
 		return 0, err
 	}
 	if out == nil || len(respBody) == 0 {
@@ -288,10 +306,12 @@ func (c *Client) doJSONWithDecoder(
 	return len(respBody), nil
 }
 
-func mapStatus(code int, _ []byte) error {
+func mapStatus(code int, body []byte, officialErrors bool) error {
 	switch {
 	case code >= 200 && code < 300:
 		return nil
+	case code == http.StatusBadRequest && officialErrors:
+		return mapBadRequest(body)
 	case code == http.StatusUnauthorized:
 		return apperr.Newf(apperr.AuthFailed, "controller returned HTTP status %d: authentication failed", code)
 	case code == http.StatusForbidden:
@@ -303,6 +323,70 @@ func mapStatus(code int, _ []byte) error {
 	default:
 		return apperr.Newf(apperr.Internal, "controller returned unexpected HTTP status %d", code)
 	}
+}
+
+type controllerErrorResponse struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func mapBadRequest(body []byte) error {
+	message := "validation failed"
+	var response controllerErrorResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return apperr.Newf(apperr.ValidationFailed, "controller returned HTTP status %d: %s", http.StatusBadRequest, message)
+	}
+
+	code, codeOK := sanitizeControllerErrorCode(response.Code)
+	detail, detailOK := sanitizeControllerErrorMessage(response.Message)
+	switch {
+	case codeOK && detailOK:
+		message = code + ": " + detail
+	case codeOK:
+		message = code
+	}
+	return apperr.Newf(apperr.ValidationFailed, "controller returned HTTP status %d: %s", http.StatusBadRequest, message)
+}
+
+func sanitizeControllerErrorCode(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxControllerErrorCodeBytes || !controllerErrorCodePattern.MatchString(value) ||
+		controllerUUIDPattern.MatchString(value) || controllerIPv4Pattern.MatchString(value) ||
+		controllerLongTokenPattern.MatchString(value) {
+		return "", false
+	}
+	return value, true
+}
+
+func sanitizeControllerErrorMessage(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxControllerErrorMessageBytes || !utf8.ValidString(value) ||
+		strings.ContainsAny(value, "{}[]") || containsUnsafeControllerErrorRune(value) {
+		return "", false
+	}
+
+	value = controllerSecretPattern.ReplaceAllString(value, "$1=[redacted]")
+	for _, pattern := range []*regexp.Regexp{
+		controllerURLPattern,
+		controllerUUIDPattern,
+		controllerMACPattern,
+		controllerIPv4Pattern,
+		controllerIPv6Pattern,
+		controllerQuotedValuePattern,
+		controllerLongTokenPattern,
+	} {
+		value = pattern.ReplaceAllString(value, "[redacted]")
+	}
+	return strings.Join(strings.Fields(value), " "), true
+}
+
+func containsUnsafeControllerErrorRune(value string) bool {
+	for _, current := range value {
+		if unicode.IsControl(current) || unicode.In(current, unicode.Cf) {
+			return true
+		}
+	}
+	return false
 }
 
 func mapTransportError(err error) error {

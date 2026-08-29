@@ -367,6 +367,13 @@ filter fails closed. The controller ID in a verified result can be used for an
 exact manual rollback with `unifi firewall delete <policy-id>` and the normal
 destructive apply gates. Create does not delete automatically.
 
+If the official integration API rejects a request with HTTP 400, the CLI emits
+`validation_failed`. It can include only the bounded, sanitized `code` and
+`message` fields from the documented official error envelope. Request IDs,
+request paths, status metadata, unknown fields, and raw response bodies are not
+rendered. IP and MAC addresses, UUIDs, URLs, credentials, quoted values, and
+long token-like values in a message are replaced with `[redacted]`.
+
 `firewall reorder` requires one source/destination zone pair plus the **complete**
 user-defined order split between `--before-system-ids` and
 `--after-system-ids`. It rejects duplicates, omissions, no-ops, and system
@@ -425,6 +432,9 @@ commands omit it. `meta.experimental` is present and true for every successful
 experimental read and for every experimental mutation plan, gate error, and
 successful apply; stable commands omit it. The v1
 surface has no `--raw` flag and never embeds upstream controller payloads.
+Official HTTP 400 responses use the same schema-v1 error object with code
+`validation_failed`; eligible controller validation details are bounded and
+sanitized as described in the firewall contract above.
 Normalized firewall policies can include optional `source_filter` and
 `destination_filter` objects. These objects expose the official filter type,
 opposite-match state, all typed IP and port items, and matching-list IDs. This

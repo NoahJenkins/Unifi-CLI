@@ -33,6 +33,15 @@ All notable changes to this project are documented here. The format follows
 - Schema-v1 now defines profile, effective-config, and doctor diagnostic data,
   including partial doctor data on local readiness failures.
 
+### Fixed
+
+- Official integration HTTP 400 responses now return `validation_failed` and
+  can include only bounded, sanitized controller `code` and `message` fields.
+  Raw bodies, request metadata, controller IDs, addresses, and credentials
+  remain excluded. The exact-filter firewall request is unchanged because the
+  published 10.4.57 schema matches it and no 10.5.67 schema was available
+  during diagnosis.
+
 ## [1.0.0-rc.4] - 2026-08-17
 
 ### Fixed
