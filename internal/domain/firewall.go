@@ -49,18 +49,57 @@ type FirewallZoneInput struct {
 // FirewallRule preserves the stable policy identifiers while exposing the
 // zone-aware fields from the official firewall policy schema.
 type FirewallRule struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	Enabled            bool   `json:"enabled"`
-	Action             string `json:"action"`
-	AllowReturnTraffic bool   `json:"allow_return_traffic"`
-	SourceZoneID       string `json:"source_zone_id"`
-	DestinationZoneID  string `json:"destination_zone_id"`
-	Protocol           string `json:"protocol"`
-	LoggingEnabled     bool   `json:"logging_enabled"`
-	Index              int    `json:"index"`
-	Origin             string `json:"origin"`
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name"`
+	Description        string                 `json:"description"`
+	Enabled            bool                   `json:"enabled"`
+	Action             string                 `json:"action"`
+	AllowReturnTraffic bool                   `json:"allow_return_traffic"`
+	SourceZoneID       string                 `json:"source_zone_id"`
+	DestinationZoneID  string                 `json:"destination_zone_id"`
+	SourceFilter       *FirewallTrafficFilter `json:"source_filter,omitempty"`
+	DestinationFilter  *FirewallTrafficFilter `json:"destination_filter,omitempty"`
+	Protocol           string                 `json:"protocol"`
+	LoggingEnabled     bool                   `json:"logging_enabled"`
+	Index              int                    `json:"index"`
+	Origin             string                 `json:"origin"`
+}
+
+// FirewallTrafficFilter is the loss-aware normalized read view for the
+// official IP-address and port filter unions. Other outer filter variants keep
+// their discriminator visible without gaining a writable CLI surface.
+type FirewallTrafficFilter struct {
+	Type            string                   `json:"type"`
+	IPAddressFilter *FirewallIPAddressFilter `json:"ip_address_filter,omitempty"`
+	PortFilter      *FirewallPortFilter      `json:"port_filter,omitempty"`
+}
+
+type FirewallIPAddressFilter struct {
+	Type                  string            `json:"type"`
+	MatchOpposite         bool              `json:"match_opposite"`
+	Items                 []FirewallIPMatch `json:"items,omitempty"`
+	TrafficMatchingListID string            `json:"traffic_matching_list_id,omitempty"`
+}
+
+type FirewallIPMatch struct {
+	Type  string `json:"type"`
+	Value string `json:"value,omitempty"`
+	Start string `json:"start,omitempty"`
+	Stop  string `json:"stop,omitempty"`
+}
+
+type FirewallPortFilter struct {
+	Type                  string              `json:"type"`
+	MatchOpposite         bool                `json:"match_opposite"`
+	Items                 []FirewallPortMatch `json:"items,omitempty"`
+	TrafficMatchingListID string              `json:"traffic_matching_list_id,omitempty"`
+}
+
+type FirewallPortMatch struct {
+	Type  string `json:"type"`
+	Value int    `json:"value,omitempty"`
+	Start int    `json:"start,omitempty"`
+	Stop  int    `json:"stop,omitempty"`
 }
 
 func (r FirewallRule) GetID() string   { return r.ID }
@@ -502,15 +541,9 @@ func (s *FirewallService) PrepareCreate(ctx context.Context, in FirewallInput) (
 	}
 	body := firewallCreateBody(in, source.ID, destination.ID)
 	item := NormalizeFirewallRule(body)
-	after := firewallSnapshot(item)
-	if firewallExactFilterMode(in) {
-		after["source_ip"] = in.SourceIP
-		after["destination_ip"] = in.DestinationIP
-		after["destination_port"] = in.DestinationPort
-	}
 	p := plan.Create("firewall", in.Name,
 		fmt.Sprintf("create firewall policy %s", in.Name),
-		after,
+		firewallSnapshot(item),
 	)
 	return p, FirewallCreateBinding{SourceZoneID: source.ID, DestinationZoneID: destination.ID}, nil
 }
@@ -1252,11 +1285,56 @@ func NormalizeFirewallRule(m map[string]any) FirewallRule {
 		AllowReturnTraffic: boolField(action, "allowReturnTraffic"),
 		SourceZoneID:       strField(source, "zoneId"),
 		DestinationZoneID:  strField(destination, "zoneId"),
+		SourceFilter:       normalizeFirewallTrafficFilter(source),
+		DestinationFilter:  normalizeFirewallTrafficFilter(destination),
 		Protocol:           normalizeOfficialFirewallProtocol(mapField(m, "ipProtocolScope")),
 		LoggingEnabled:     boolField(m, "loggingEnabled"),
 		Index:              intField(m, "index"),
 		Origin:             strField(metadata, "origin"),
 	}
+}
+
+func normalizeFirewallTrafficFilter(endpoint map[string]any) *FirewallTrafficFilter {
+	raw, ok := endpoint["trafficFilter"].(map[string]any)
+	if !ok || raw == nil {
+		return nil
+	}
+	filter := &FirewallTrafficFilter{Type: strings.ToLower(strField(raw, "type"))}
+	if ipRaw, ok := raw["ipAddressFilter"].(map[string]any); ok && ipRaw != nil {
+		ipFilter := &FirewallIPAddressFilter{
+			Type: strings.ToLower(strField(ipRaw, "type")), MatchOpposite: boolField(ipRaw, "matchOpposite"),
+			TrafficMatchingListID: strField(ipRaw, "trafficMatchingListId"),
+		}
+		if items, ok := ipRaw["items"].([]any); ok {
+			ipFilter.Items = make([]FirewallIPMatch, 0, len(items))
+			for _, value := range items {
+				item, _ := value.(map[string]any)
+				ipFilter.Items = append(ipFilter.Items, FirewallIPMatch{
+					Type: strings.ToLower(strField(item, "type")), Value: strField(item, "value"),
+					Start: strField(item, "start"), Stop: strField(item, "stop"),
+				})
+			}
+		}
+		filter.IPAddressFilter = ipFilter
+	}
+	if portRaw, ok := raw["portFilter"].(map[string]any); ok && portRaw != nil {
+		portFilter := &FirewallPortFilter{
+			Type: strings.ToLower(strField(portRaw, "type")), MatchOpposite: boolField(portRaw, "matchOpposite"),
+			TrafficMatchingListID: strField(portRaw, "trafficMatchingListId"),
+		}
+		if items, ok := portRaw["items"].([]any); ok {
+			portFilter.Items = make([]FirewallPortMatch, 0, len(items))
+			for _, value := range items {
+				item, _ := value.(map[string]any)
+				portFilter.Items = append(portFilter.Items, FirewallPortMatch{
+					Type: strings.ToLower(strField(item, "type")), Value: intField(item, "value"),
+					Start: intField(item, "start"), Stop: intField(item, "stop"),
+				})
+			}
+		}
+		filter.PortFilter = portFilter
+	}
+	return filter
 }
 
 func normalizeOfficialFirewallProtocol(scope map[string]any) string {
@@ -1399,12 +1477,19 @@ func firewallOrderingBody(ordering FirewallOrdering) map[string]any {
 }
 
 func firewallSnapshot(r FirewallRule) map[string]any {
-	return map[string]any{
+	snapshot := map[string]any{
 		"id": r.ID, "name": r.Name, "description": r.Description, "enabled": r.Enabled, "action": r.Action,
 		"allow_return_traffic": r.AllowReturnTraffic,
 		"source_zone_id":       r.SourceZoneID, "destination_zone_id": r.DestinationZoneID,
 		"protocol": r.Protocol, "logging_enabled": r.LoggingEnabled, "index": r.Index, "origin": r.Origin,
 	}
+	if r.SourceFilter != nil {
+		snapshot["source_filter"] = r.SourceFilter
+	}
+	if r.DestinationFilter != nil {
+		snapshot["destination_filter"] = r.DestinationFilter
+	}
+	return snapshot
 }
 
 func firewallOrderingSnapshot(sourceZoneID, destinationZoneID string, ordering FirewallOrdering) map[string]any {

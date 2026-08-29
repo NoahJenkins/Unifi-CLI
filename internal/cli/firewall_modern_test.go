@@ -233,7 +233,16 @@ func TestFirewallExactCreateUsesExistingPlanApplyAndDryRunGates(t *testing.T) {
 		if len(envelope.Plan.Changes) == 1 {
 			after = envelope.Plan.Changes[0].After
 		}
-		if err != nil || decodeErr != nil || *writes != 0 || after["source_ip"] != "192.0.2.10" || after["destination_port"] != float64(1514) {
+		sourceFilter, _ := after["source_filter"].(map[string]any)
+		destinationFilter, _ := after["destination_filter"].(map[string]any)
+		destinationPorts, _ := destinationFilter["port_filter"].(map[string]any)
+		portItems, _ := destinationPorts["items"].([]any)
+		port := float64(0)
+		if len(portItems) == 1 {
+			portItem, _ := portItems[0].(map[string]any)
+			port, _ = portItem["value"].(float64)
+		}
+		if err != nil || decodeErr != nil || *writes != 0 || sourceFilter["type"] != "ip_address" || destinationFilter["type"] != "ip_address" || port != float64(1514) {
 			t.Fatalf("plan-only exact create: err=%v writes=%d stdout=%q", err, *writes, stdout)
 		}
 	})
@@ -265,6 +274,55 @@ func TestFirewallExactCreateUsesExistingPlanApplyAndDryRunGates(t *testing.T) {
 			t.Fatalf("exact apply: err=%v writes=%d", err, *writes)
 		}
 	})
+}
+
+func TestFirewallExactCreateAndGetExposeInspectableSchemaV1Filters(t *testing.T) {
+	srv, writes := newFirewallMutationTestServer(t)
+	defer srv.Close()
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+
+	useCommandTestRuntime(t, srv, true)
+	flagYes, flagExperimental, flagForce = true, true, true
+	_, _, err := captureProcessOutput(t, func() error { return runFirewallCreate(in) })
+	if err != nil || *writes != 1 {
+		t.Fatalf("seed exact policy: err=%v writes=%d", err, *writes)
+	}
+
+	useCommandTestRuntime(t, srv, true)
+	stdout, stderr, err := captureProcessOutput(t, func() error { return runFirewallGet(createdPolicyID) })
+	if err != nil || stderr != "" {
+		t.Fatalf("JSON get: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	assertSchemaV1(t, stdout)
+	var envelope struct {
+		Data domain.FirewallRule `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Data.SourceFilter == nil || envelope.Data.DestinationFilter == nil ||
+		envelope.Data.SourceFilter.IPAddressFilter == nil || envelope.Data.DestinationFilter.IPAddressFilter == nil ||
+		envelope.Data.DestinationFilter.PortFilter == nil ||
+		len(envelope.Data.SourceFilter.IPAddressFilter.Items) != 1 ||
+		envelope.Data.SourceFilter.IPAddressFilter.Items[0].Value != "192.0.2.10" ||
+		len(envelope.Data.DestinationFilter.PortFilter.Items) != 1 ||
+		envelope.Data.DestinationFilter.PortFilter.Items[0].Value != 1514 {
+		t.Fatalf("normalized exact policy = %#v", envelope.Data)
+	}
+
+	useCommandTestRuntime(t, srv, false)
+	stdout, stderr, err = captureProcessOutput(t, func() error { return runFirewallGet(createdPolicyID) })
+	if err != nil || stderr != "" ||
+		!strings.Contains(stdout, `source_filter: {"type":"ip_address","ip_address_filter":{"type":"ip_addresses","match_opposite":false,"items":[{"type":"ip_address","value":"192.0.2.10"}]}}`) ||
+		!strings.Contains(stdout, `destination_filter: {"type":"ip_address","ip_address_filter":{"type":"ip_addresses","match_opposite":false,"items":[{"type":"ip_address","value":"198.51.100.20"}]},"port_filter":{"type":"ports","match_opposite":false,"items":[{"type":"port_number","value":1514}]}}`) {
+		t.Fatalf("human exact get: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
 }
 
 func TestFirewallWriteRiskClassesMatchApprovedTable(t *testing.T) {

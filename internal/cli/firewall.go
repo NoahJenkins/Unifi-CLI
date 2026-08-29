@@ -324,6 +324,20 @@ func runFirewallGet(query string) error {
 	fmt.Fprintf(rt.Out, "allow_return_traffic: %s\n", strconv.FormatBool(item.AllowReturnTraffic))
 	fmt.Fprintf(rt.Out, "source_zone_id: %s\n", render.SafeText(item.SourceZoneID))
 	fmt.Fprintf(rt.Out, "destination_zone_id: %s\n", render.SafeText(item.DestinationZoneID))
+	if item.SourceFilter != nil {
+		encoded, marshalErr := json.Marshal(item.SourceFilter)
+		if marshalErr != nil {
+			return fmt.Errorf("encode source firewall filter: %w", marshalErr)
+		}
+		fmt.Fprintf(rt.Out, "source_filter: %s\n", render.SafeText(string(encoded)))
+	}
+	if item.DestinationFilter != nil {
+		encoded, marshalErr := json.Marshal(item.DestinationFilter)
+		if marshalErr != nil {
+			return fmt.Errorf("encode destination firewall filter: %w", marshalErr)
+		}
+		fmt.Fprintf(rt.Out, "destination_filter: %s\n", render.SafeText(string(encoded)))
+	}
 	fmt.Fprintf(rt.Out, "protocol: %s\n", render.SafeText(item.Protocol))
 	fmt.Fprintf(rt.Out, "logging_enabled: %s\n", strconv.FormatBool(item.LoggingEnabled))
 	fmt.Fprintf(rt.Out, "index: %d\n", item.Index)

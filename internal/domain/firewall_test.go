@@ -227,6 +227,16 @@ func TestFirewallPoliciesNormalizeOfficialZonesActionsAndProtocols(t *testing.T)
 		ID: allowDNSPolicyID, Name: "Allow DNS", Description: "Permit DNS from internal clients",
 		Enabled: true, Action: "allow", SourceZoneID: internalZoneID, DestinationZoneID: externalZoneID,
 		Protocol: "ipv4:udp", LoggingEnabled: true, Index: 100, Origin: "USER_DEFINED",
+		SourceFilter: &domain.FirewallTrafficFilter{
+			Type: "ip_address",
+			IPAddressFilter: &domain.FirewallIPAddressFilter{
+				Type: "ip_addresses", Items: []domain.FirewallIPMatch{{Type: "subnet", Value: "192.0.2.0/24"}},
+			},
+			PortFilter: &domain.FirewallPortFilter{
+				Type: "ports", Items: []domain.FirewallPortMatch{{Type: "port_number_range", Start: 1024, Stop: 65535}},
+			},
+		},
+		DestinationFilter: &domain.FirewallTrafficFilter{Type: "domain"},
 	}
 	if !reflect.DeepEqual(items[0], want) {
 		t.Fatalf("normalized policy = %+v, want %+v", items[0], want)
@@ -650,6 +660,92 @@ func TestFirewallExactCreateWriteFailureIsNeverRetried(t *testing.T) {
 	}
 	if got := len(firewallCalls(api.calls, http.MethodGet)); got != 0 {
 		t.Fatalf("detail GETs = %d, want 0", got)
+	}
+}
+
+func TestFirewallExactFiltersAreFullyInspectableAfterNormalization(t *testing.T) {
+	rule := domain.NormalizeFirewallRule(exactFirewallObservedPolicy())
+	if rule.SourceFilter == nil || rule.SourceFilter.Type != "ip_address" || rule.SourceFilter.IPAddressFilter == nil {
+		t.Fatalf("source filter = %#v, want typed IP-address filter", rule.SourceFilter)
+	}
+	sourceIP := rule.SourceFilter.IPAddressFilter
+	if sourceIP.Type != "ip_addresses" || sourceIP.MatchOpposite || len(sourceIP.Items) != 1 ||
+		sourceIP.Items[0].Type != "ip_address" || sourceIP.Items[0].Value != "192.0.2.10" {
+		t.Fatalf("source IP filter = %#v", sourceIP)
+	}
+	if rule.SourceFilter.PortFilter != nil {
+		t.Fatalf("source port filter = %#v, want absent", rule.SourceFilter.PortFilter)
+	}
+
+	if rule.DestinationFilter == nil || rule.DestinationFilter.Type != "ip_address" ||
+		rule.DestinationFilter.IPAddressFilter == nil || rule.DestinationFilter.PortFilter == nil {
+		t.Fatalf("destination filter = %#v, want typed IP and port filters", rule.DestinationFilter)
+	}
+	destinationIP := rule.DestinationFilter.IPAddressFilter
+	if destinationIP.Type != "ip_addresses" || destinationIP.MatchOpposite || len(destinationIP.Items) != 1 ||
+		destinationIP.Items[0].Type != "ip_address" || destinationIP.Items[0].Value != "198.51.100.20" {
+		t.Fatalf("destination IP filter = %#v", destinationIP)
+	}
+	destinationPort := rule.DestinationFilter.PortFilter
+	if destinationPort.Type != "ports" || destinationPort.MatchOpposite || len(destinationPort.Items) != 1 ||
+		destinationPort.Items[0].Type != "port_number" || destinationPort.Items[0].Value != 1514 {
+		t.Fatalf("destination port filter = %#v", destinationPort)
+	}
+}
+
+func TestFirewallFilterNormalizationPreservesRangesSubnetsListsAndOppositeState(t *testing.T) {
+	raw := exactFirewallObservedPolicy()
+	sourceIP := exactIPAddressFilter(raw, "source")
+	sourceIP["matchOpposite"] = true
+	sourceIP["items"] = []any{
+		map[string]any{"type": "SUBNET", "value": "192.0.2.0/24"},
+		map[string]any{"type": "IP_ADDRESS_RANGE", "start": "192.0.2.10", "stop": "192.0.2.20"},
+	}
+	mapFieldTest(mapFieldTest(raw, "destination"), "trafficFilter")["ipAddressFilter"] = map[string]any{
+		"type": "TRAFFIC_MATCHING_LIST", "matchOpposite": false,
+		"trafficMatchingListId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+	}
+	mapFieldTest(mapFieldTest(raw, "destination"), "trafficFilter")["portFilter"] = map[string]any{
+		"type": "PORTS", "matchOpposite": true,
+		"items": []any{map[string]any{"type": "PORT_NUMBER_RANGE", "start": float64(1500), "stop": float64(1600)}},
+	}
+
+	rule := domain.NormalizeFirewallRule(raw)
+	if rule.SourceFilter == nil || rule.SourceFilter.IPAddressFilter == nil || !rule.SourceFilter.IPAddressFilter.MatchOpposite ||
+		!reflect.DeepEqual(rule.SourceFilter.IPAddressFilter.Items, []domain.FirewallIPMatch{
+			{Type: "subnet", Value: "192.0.2.0/24"},
+			{Type: "ip_address_range", Start: "192.0.2.10", Stop: "192.0.2.20"},
+		}) {
+		t.Fatalf("source normalized filter = %#v", rule.SourceFilter)
+	}
+	if rule.DestinationFilter == nil || rule.DestinationFilter.IPAddressFilter == nil ||
+		rule.DestinationFilter.IPAddressFilter.Type != "traffic_matching_list" ||
+		rule.DestinationFilter.IPAddressFilter.TrafficMatchingListID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("destination normalized IP list = %#v", rule.DestinationFilter)
+	}
+	if rule.DestinationFilter.PortFilter == nil || !rule.DestinationFilter.PortFilter.MatchOpposite ||
+		!reflect.DeepEqual(rule.DestinationFilter.PortFilter.Items, []domain.FirewallPortMatch{{Type: "port_number_range", Start: 1500, Stop: 1600}}) {
+		t.Fatalf("destination normalized port range = %#v", rule.DestinationFilter)
+	}
+}
+
+func TestFirewallZoneOnlyNormalizationOmitsTrafficFiltersFromJSON(t *testing.T) {
+	raw := exactFirewallObservedPolicy()
+	delete(mapFieldTest(raw, "source"), "trafficFilter")
+	delete(mapFieldTest(raw, "destination"), "trafficFilter")
+	encoded, err := json.Marshal(domain.NormalizeFirewallRule(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := document["source_filter"]; present {
+		t.Fatalf("zone-only policy contains source_filter: %s", encoded)
+	}
+	if _, present := document["destination_filter"]; present {
+		t.Fatalf("zone-only policy contains destination_filter: %s", encoded)
 	}
 }
 
