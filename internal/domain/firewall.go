@@ -558,8 +558,8 @@ func (s *FirewallService) ApplyCreateBound(ctx context.Context, in FirewallInput
 		return FirewallRule{}, err
 	}
 	id := strField(created, "id")
-	if id == "" {
-		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall create result is unverified: controller response is missing the policy ID")
+	if !looksLikeUUID(id) {
+		return FirewallRule{}, apperr.New(apperr.Conflict, "firewall create result is unverified: controller response is missing a valid policy ID")
 	}
 	observed, observedRaw, err := s.readPolicyDetail(ctx, id)
 	if err != nil {
