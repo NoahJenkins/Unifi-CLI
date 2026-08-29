@@ -67,6 +67,16 @@ fails the entire command when any required detail fails.
   underscore-prefixed SRV labels separately.
 - Firewall uses modern zones/policies and complete atomic ordering; classic
   rulesets and partial order replacement are unsupported.
+- Firewall policy create supports only one exact source IPv4 address, one
+  exact destination IPv4 address, and one exact TCP destination port when
+  address filters are requested. The three filters are an all-or-none bundle
+  with action allow and return traffic enabled. CIDR, ranges, matching lists,
+  MACs, port ranges, source ports, and connection-state controls remain
+  unsupported create surfaces.
+- Exact firewall filter create is derived from the official 10.4.57 OpenAPI
+  schema and is covered by reduced synthetic fixtures and repository tests.
+  No live firewall mutation was performed, so it remains without
+  sacrificial-controller live qualification.
 - Switching and RADIUS profiles are read-only.
 - Accepted action output does not claim asynchronous completion.
 - Fixed-IP list returns enabled reservations only. Get can report disabled

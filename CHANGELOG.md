@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Experimental modern firewall-policy create flags for one exact source IPv4
+  address, one exact destination IPv4 address, and one exact TCP destination
+  port. The all-or-none filter bundle uses the official integration API and
+  preserves the existing high-impact apply gates.
 - Experimental `client fixed-ip list` and `client fixed-ip get` inventory for
   enabled reservations and individual known-client state.
 - Named non-secret controller profiles with deterministic list/show/select
@@ -17,6 +21,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Firewall create now verifies the returned immutable policy ID by reading
+  that exact policy and comparing the complete security scope. Schema-v1
+  firewall data exposes optional typed source and destination filter objects.
+  No live firewall mutation was performed; sacrificial-controller
+  qualification remains absent.
 - Experimental fixed-IP set/clear can target a known offline client when its
   stored user record provides the immutable ID, valid MAC, and network ID.
   Writes keep the existing plan, drift, validation, one-attempt, verification,
