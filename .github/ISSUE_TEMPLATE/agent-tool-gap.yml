@@ -1,0 +1,74 @@
+name: Agent tool gap
+description: Report a safe, reproducible gap found by an automated tool.
+title: "[Agent Tool Gap] "
+labels:
+  - agent:tool-gap
+  - tool:unifi-cli
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Agent tool-gap issues are public. Do not include credentials, controller responses, hostnames, addresses, identifiers, network inventory, local paths, screenshots, or raw logs. Send security defects through private advisories as described in SECURITY.md.
+  - type: input
+    id: tool_version
+    attributes:
+      label: unifi-cli version or commit
+      placeholder: v0.1.0 or 1a2b3c4
+    validations:
+      required: true
+  - type: dropdown
+    id: report_kind
+    attributes:
+      label: Report kind
+      options:
+        - bug
+        - missing-capability
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the tool gap in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_capability
+    attributes:
+      label: Expected capability
+      description: Describe the safe capability or documentation that was expected.
+    validations:
+      required: true
+  - type: textarea
+    id: observed_behavior
+    attributes:
+      label: Observed behavior
+      description: Describe the sanitized result that the tool observed.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Safe reproduction
+      description: Provide the smallest safe, sanitized reproduction steps.
+    validations:
+      required: true
+  - type: dropdown
+    id: operating_system
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: source_repository
+    attributes:
+      label: Source repository
+      description: Identify the public repository that produced this report.
+    validations:
+      required: true

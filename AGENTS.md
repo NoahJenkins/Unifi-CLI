@@ -26,6 +26,19 @@ release notes; verify current behavior in code, tests, `README.md`, and
   code, tests, and root documentation take precedence.
 - Follow `SECURITY.md` for vulnerability reports and disclosure.
 
+## Agent Tool Feedback
+
+Agent tool-gap reports are public and must exclude credentials, controller
+responses, hostnames, addresses, identifiers, network inventory, local paths,
+screenshots, and raw logs. Send security defects through private advisories as
+described in `SECURITY.md`.
+
+An accepted report must lead to a focused failing test, official-API-first
+code, current documentation, repository checks, and a linked pull request.
+Do not implement only when the report is a private security defect, needs an
+unavailable secret, requires a prohibited live mutation, has no safe official
+or experimental path, or is a verified duplicate.
+
 ## Where Work Lives
 
 - `cmd/unifi/`: production CLI entrypoint.

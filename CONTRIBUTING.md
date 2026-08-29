@@ -34,6 +34,13 @@ hostnames, IP inventories, site/device/client identifiers, local configuration,
 generated reports, or release binaries. Do not paste secrets into test failure
 messages, PR descriptions, or issue comments.
 
+## Automated tool-gap reports
+
+Automated tool-gap reports are public. Do not include credentials, controller
+responses, hostnames, addresses, identifiers, network inventory, local paths,
+screenshots, or raw logs. Report security defects only through the private
+process in [SECURITY.md](SECURITY.md).
+
 ## Test-driven workflow
 
 For behavior changes:
