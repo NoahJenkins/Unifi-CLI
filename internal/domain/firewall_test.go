@@ -388,6 +388,124 @@ func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *te
 	assertFirewallCall(t, api.calls, http.MethodGet, client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID), 1)
 }
 
+func TestFirewallExactCreateSendsOneOfficialIPAddressAndDestinationPort(t *testing.T) {
+	api := newModernFirewallAPI(t)
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+	observed := map[string]any{
+		"id": createdPolicyID, "name": "Allow one TCP service", "enabled": true, "index": float64(120),
+		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": true},
+		"source": map[string]any{
+			"zoneId": internalZoneID,
+			"trafficFilter": map[string]any{
+				"type": "IP_ADDRESS",
+				"ipAddressFilter": map[string]any{
+					"type": "IP_ADDRESSES", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "IP_ADDRESS", "value": "192.0.2.10"}},
+				},
+			},
+		},
+		"destination": map[string]any{
+			"zoneId": externalZoneID,
+			"trafficFilter": map[string]any{
+				"type": "IP_ADDRESS",
+				"ipAddressFilter": map[string]any{
+					"type": "IP_ADDRESSES", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "IP_ADDRESS", "value": "198.51.100.20"}},
+				},
+				"portFilter": map[string]any{
+					"type": "PORTS", "matchOpposite": false,
+					"items": []any{map[string]any{"type": "PORT_NUMBER", "value": float64(1514)}},
+				},
+			},
+		},
+		"ipProtocolScope": map[string]any{
+			"ipVersion": "IPV4",
+			"protocolFilter": map[string]any{
+				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
+			},
+		},
+		"loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"},
+	}
+	api.postResponse = map[string]any{"id": createdPolicyID}
+	api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed
+
+	if _, err := domain.NewFirewallService(api).ApplyCreate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	posts := firewallCalls(api.calls, http.MethodPost)
+	if len(posts) != 1 {
+		t.Fatalf("POST attempts = %d, want 1", len(posts))
+	}
+	wantBody := cloneFirewallMap(t, observed)
+	delete(wantBody, "id")
+	delete(wantBody, "index")
+	delete(wantBody, "metadata")
+	gotBody := cloneFirewallMap(t, posts[0].body.(map[string]any))
+	if !reflect.DeepEqual(gotBody, wantBody) {
+		t.Fatalf("exact create body = %#v\nwant %#v", posts[0].body, wantBody)
+	}
+}
+
+func TestFirewallExactCreateRejectsUnsupportedOrBroadenedInputWithoutWrite(t *testing.T) {
+	valid := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*domain.FirewallInput)
+	}{
+		{name: "source only", mutate: func(in *domain.FirewallInput) {
+			in.SetDestinationIP, in.SetDestinationPort = false, false
+			in.DestinationIP, in.DestinationPort = "", 0
+		}},
+		{name: "destination only", mutate: func(in *domain.FirewallInput) { in.SetSourceIP = false; in.SourceIP = "" }},
+		{name: "missing return traffic", mutate: func(in *domain.FirewallInput) { in.AllowReturnTraffic = false }},
+		{name: "block action", mutate: func(in *domain.FirewallInput) { in.Action = "block" }},
+		{name: "IPv6 scope", mutate: func(in *domain.FirewallInput) { in.IPVersion = "ipv6" }},
+		{name: "dual stack scope", mutate: func(in *domain.FirewallInput) { in.IPVersion = "ipv4_and_ipv6" }},
+		{name: "UDP protocol", mutate: func(in *domain.FirewallInput) { in.Protocol = "udp" }},
+		{name: "all protocols", mutate: func(in *domain.FirewallInput) { in.Protocol = "all" }},
+		{name: "ICMP protocol", mutate: func(in *domain.FirewallInput) { in.Protocol = "icmp" }},
+		{name: "invalid source", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.999" }},
+		{name: "source CIDR", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.0/24" }},
+		{name: "source range", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.10-192.0.2.20" }},
+		{name: "source hostname", mutate: func(in *domain.FirewallInput) { in.SourceIP = "source.example.test" }},
+		{name: "source any", mutate: func(in *domain.FirewallInput) { in.SourceIP = "any" }},
+		{name: "multiple source addresses", mutate: func(in *domain.FirewallInput) { in.SourceIP = "192.0.2.10,192.0.2.11" }},
+		{name: "source whitespace", mutate: func(in *domain.FirewallInput) { in.SourceIP = " 192.0.2.10" }},
+		{name: "source IPv6", mutate: func(in *domain.FirewallInput) { in.SourceIP = "2001:db8::10" }},
+		{name: "destination CIDR", mutate: func(in *domain.FirewallInput) { in.DestinationIP = "198.51.100.0/24" }},
+		{name: "destination range", mutate: func(in *domain.FirewallInput) { in.DestinationIP = "198.51.100.20-198.51.100.30" }},
+		{name: "destination hostname", mutate: func(in *domain.FirewallInput) { in.DestinationIP = "destination.example.test" }},
+		{name: "zero port", mutate: func(in *domain.FirewallInput) { in.DestinationPort = 0 }},
+		{name: "port above maximum", mutate: func(in *domain.FirewallInput) { in.DestinationPort = 65536 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newModernFirewallAPI(t)
+			in := valid
+			tt.mutate(&in)
+			_, err := domain.NewFirewallService(api).Create(context.Background(), in)
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("error = %v, want validation_failed", err)
+			}
+			if calls := firewallMutationCalls(api.calls); len(calls) != 0 {
+				t.Fatalf("invalid exact input wrote: %+v", calls)
+			}
+		})
+	}
+}
+
 func TestFirewallBoundCreateDoesNotReresolveZoneNames(t *testing.T) {
 	api := newModernFirewallAPI(t)
 	svc := domain.NewFirewallService(api)

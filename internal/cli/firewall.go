@@ -161,6 +161,9 @@ func newFirewallCreateCmd() *cobra.Command {
 			in.SetDestinationZone = true
 			in.SetIPVersion = cmd.Flags().Changed("ip-version")
 			in.SetProtocol = cmd.Flags().Changed("protocol")
+			in.SetSourceIP = cmd.Flags().Changed("source-ip")
+			in.SetDestinationIP = cmd.Flags().Changed("destination-ip")
+			in.SetDestinationPort = cmd.Flags().Changed("destination-port")
 			in.SetLoggingEnabled = cmd.Flags().Changed("logging-enabled")
 			return runFirewallCreate(in)
 		},
@@ -174,6 +177,9 @@ func newFirewallCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&in.DestinationZone, "destination-zone", "", "destination firewall zone id or exact name")
 	cmd.Flags().StringVar(&in.IPVersion, "ip-version", "ipv4_and_ipv6", "ipv4|ipv6|ipv4_and_ipv6")
 	cmd.Flags().StringVar(&in.Protocol, "protocol", "all", "all|tcp|udp|tcp_udp|icmp|icmpv6")
+	cmd.Flags().StringVar(&in.SourceIP, "source-ip", "", "one exact source IPv4 address")
+	cmd.Flags().StringVar(&in.DestinationIP, "destination-ip", "", "one exact destination IPv4 address")
+	cmd.Flags().IntVar(&in.DestinationPort, "destination-port", 0, "one exact TCP destination port (1-65535)")
 	cmd.Flags().BoolVar(&in.LoggingEnabled, "logging-enabled", false, "send matches to the configured remote syslog server")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("action")

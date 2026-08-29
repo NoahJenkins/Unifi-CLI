@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"sort"
@@ -88,6 +89,12 @@ type FirewallInput struct {
 	SetIPVersion          bool
 	Protocol              string
 	SetProtocol           bool
+	SourceIP              string
+	SetSourceIP           bool
+	DestinationIP         string
+	SetDestinationIP      bool
+	DestinationPort       int
+	SetDestinationPort    bool
 	LoggingEnabled        bool
 	SetLoggingEnabled     bool
 }
@@ -495,9 +502,15 @@ func (s *FirewallService) PrepareCreate(ctx context.Context, in FirewallInput) (
 	}
 	body := firewallCreateBody(in, source.ID, destination.ID)
 	item := NormalizeFirewallRule(body)
+	after := firewallSnapshot(item)
+	if firewallExactFilterMode(in) {
+		after["source_ip"] = in.SourceIP
+		after["destination_ip"] = in.DestinationIP
+		after["destination_port"] = in.DestinationPort
+	}
 	p := plan.Create("firewall", in.Name,
 		fmt.Sprintf("create firewall policy %s", in.Name),
-		firewallSnapshot(item),
+		after,
 	)
 	return p, FirewallCreateBinding{SourceZoneID: source.ID, DestinationZoneID: destination.ID}, nil
 }
@@ -555,7 +568,7 @@ func (s *FirewallService) ApplyCreateBound(ctx context.Context, in FirewallInput
 	if err := requireObservedResourceID(observedRaw, id, "firewall create"); err != nil {
 		return FirewallRule{}, err
 	}
-	if !reflect.DeepEqual(firewallWritableDocument(observedRaw), body) {
+	if !wireDocumentsEqualAtPaths(firewallWritableDocument(observedRaw), body, nil) {
 		return FirewallRule{}, apperr.New(apperr.Conflict, "created firewall policy verification failed: observed writable document differs from requested state")
 	}
 	return observed, nil
@@ -1286,12 +1299,18 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 	if in.SetEnabled {
 		enabled = in.Enabled
 	}
+	source := map[string]any{"zoneId": sourceZoneID}
+	destination := map[string]any{"zoneId": destinationZoneID}
+	if firewallExactFilterMode(in) {
+		source["trafficFilter"] = firewallExactIPAddressTrafficFilter(in.SourceIP, 0)
+		destination["trafficFilter"] = firewallExactIPAddressTrafficFilter(in.DestinationIP, in.DestinationPort)
+	}
 	body := map[string]any{
 		"name":            in.Name,
 		"enabled":         enabled,
 		"action":          firewallActionBody(in.Action, in.AllowReturnTraffic),
-		"source":          map[string]any{"zoneId": sourceZoneID},
-		"destination":     map[string]any{"zoneId": destinationZoneID},
+		"source":          source,
+		"destination":     destination,
 		"ipProtocolScope": firewallProtocolBody(ipVersion, protocol),
 		"loggingEnabled":  in.LoggingEnabled,
 	}
@@ -1299,6 +1318,23 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 		body["description"] = in.Description
 	}
 	return body
+}
+
+func firewallExactIPAddressTrafficFilter(address string, destinationPort int) map[string]any {
+	filter := map[string]any{
+		"type": "IP_ADDRESS",
+		"ipAddressFilter": map[string]any{
+			"type": "IP_ADDRESSES", "matchOpposite": false,
+			"items": []any{map[string]any{"type": "IP_ADDRESS", "value": address}},
+		},
+	}
+	if destinationPort != 0 {
+		filter["portFilter"] = map[string]any{
+			"type": "PORTS", "matchOpposite": false,
+			"items": []any{map[string]any{"type": "PORT_NUMBER", "value": destinationPort}},
+		}
+	}
+	return filter
 }
 
 func firewallActionBody(action string, allowReturnTraffic bool) map[string]any {
@@ -1395,7 +1431,46 @@ func validateFirewallCreate(in FirewallInput) error {
 	if (in.SetAllowReturnTraffic || in.AllowReturnTraffic) && in.Action != "allow" {
 		return apperr.New(apperr.ValidationFailed, "allow-return-traffic applies only to action allow")
 	}
+	if err := validateFirewallExactCreate(in); err != nil {
+		return err
+	}
 	return validateFirewallFields(in, true)
+}
+
+func validateFirewallExactCreate(in FirewallInput) error {
+	if !firewallExactFilterMode(in) {
+		return nil
+	}
+	if !inputSetsFirewallSourceIP(in) || !inputSetsFirewallDestinationIP(in) || !inputSetsFirewallDestinationPort(in) {
+		return apperr.New(apperr.ValidationFailed, "--source-ip, --destination-ip, and --destination-port must be provided together")
+	}
+	if in.Action != "allow" || !in.AllowReturnTraffic {
+		return apperr.New(apperr.ValidationFailed, "exact IP and destination-port filters require action allow with --allow-return-traffic")
+	}
+	if in.IPVersion != "ipv4" {
+		return apperr.New(apperr.ValidationFailed, "exact IP filters currently require --ip-version ipv4")
+	}
+	if in.Protocol != "tcp" {
+		return apperr.New(apperr.ValidationFailed, "destination-port filters currently require --protocol tcp")
+	}
+	if err := validateCanonicalFirewallIPv4("source", in.SourceIP); err != nil {
+		return err
+	}
+	if err := validateCanonicalFirewallIPv4("destination", in.DestinationIP); err != nil {
+		return err
+	}
+	if in.DestinationPort < 1 || in.DestinationPort > 65535 {
+		return apperr.New(apperr.ValidationFailed, "firewall destination port must be from 1 through 65535")
+	}
+	return nil
+}
+
+func validateCanonicalFirewallIPv4(label, value string) error {
+	address, err := netip.ParseAddr(value)
+	if err != nil || !address.Is4() || address.String() != value {
+		return apperr.Newf(apperr.ValidationFailed, "firewall %s IP must be one canonical literal IPv4 address", label)
+	}
+	return nil
 }
 
 func validateFirewallUpdate(in FirewallInput) error {
@@ -1483,6 +1558,16 @@ func inputSetsFirewallDestinationZone(in FirewallInput) bool {
 }
 func inputSetsFirewallIPVersion(in FirewallInput) bool { return in.SetIPVersion || in.IPVersion != "" }
 func inputSetsFirewallProtocol(in FirewallInput) bool  { return in.SetProtocol || in.Protocol != "" }
+func inputSetsFirewallSourceIP(in FirewallInput) bool  { return in.SetSourceIP || in.SourceIP != "" }
+func inputSetsFirewallDestinationIP(in FirewallInput) bool {
+	return in.SetDestinationIP || in.DestinationIP != ""
+}
+func inputSetsFirewallDestinationPort(in FirewallInput) bool {
+	return in.SetDestinationPort || in.DestinationPort != 0
+}
+func firewallExactFilterMode(in FirewallInput) bool {
+	return inputSetsFirewallSourceIP(in) || inputSetsFirewallDestinationIP(in) || inputSetsFirewallDestinationPort(in)
+}
 
 func firewallStringSlice(value any) []string {
 	if value == nil {

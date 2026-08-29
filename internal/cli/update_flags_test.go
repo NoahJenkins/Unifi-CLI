@@ -26,7 +26,7 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 			"SetCOAEnabled", "SetWPA3SecurityMode",
 		}},
 		{name: "port", typeOf: reflect.TypeOf(domain.PortInput{}), fields: []string{"SetName", "ClearName", "SetProfile"}},
-		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled"}},
+		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled", "SetSourceIP", "SetDestinationIP", "SetDestinationPort"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

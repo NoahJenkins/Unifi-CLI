@@ -172,6 +172,14 @@ func TestModernFirewallCLIFlagsRemoveLegacyRulesetContract(t *testing.T) {
 			t.Errorf("create is missing --%s", flag)
 		}
 	}
+	for _, flag := range []string{"source-ip", "destination-ip", "destination-port"} {
+		if create.Flags().Lookup(flag) == nil {
+			t.Errorf("create is missing --%s", flag)
+		}
+		if update.Flags().Lookup(flag) != nil {
+			t.Errorf("update unexpectedly exposes --%s", flag)
+		}
+	}
 	for _, flag := range []string{"source-zone", "destination-zone", "before-system-ids", "after-system-ids"} {
 		if reorder.Flags().Lookup(flag) == nil {
 			t.Errorf("reorder is missing --%s", flag)
@@ -197,6 +205,66 @@ func TestModernFirewallCLIFlagsRemoveLegacyRulesetContract(t *testing.T) {
 			t.Errorf("relative move unexpectedly exposes --%s", obsolete)
 		}
 	}
+}
+
+func TestFirewallExactCreateUsesExistingPlanApplyAndDryRunGates(t *testing.T) {
+	in := domain.FirewallInput{
+		Name: "Allow one TCP service", Action: "allow", AllowReturnTraffic: true, SetAllowReturnTraffic: true,
+		SourceZone: "Internal", DestinationZone: "External", IPVersion: "ipv4", Protocol: "tcp",
+		SourceIP: "192.0.2.10", SetSourceIP: true,
+		DestinationIP: "198.51.100.20", SetDestinationIP: true,
+		DestinationPort: 1514, SetDestinationPort: true,
+	}
+
+	t.Run("plan only", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		stdout, _, err := captureProcessOutput(t, func() error { return runFirewallCreate(in) })
+		var envelope struct {
+			Plan struct {
+				Changes []struct {
+					After map[string]any `json:"after"`
+				} `json:"changes"`
+			} `json:"plan"`
+		}
+		decodeErr := json.Unmarshal([]byte(stdout), &envelope)
+		var after map[string]any
+		if len(envelope.Plan.Changes) == 1 {
+			after = envelope.Plan.Changes[0].After
+		}
+		if err != nil || decodeErr != nil || *writes != 0 || after["source_ip"] != "192.0.2.10" || after["destination_port"] != float64(1514) {
+			t.Fatalf("plan-only exact create: err=%v writes=%d stdout=%q", err, *writes, stdout)
+		}
+	})
+
+	t.Run("dry run wins", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes, flagDryRun, flagExperimental, flagForce = true, true, true, true
+		stdout, _, err := captureProcessOutput(t, func() error { return runFirewallCreate(in) })
+		var envelope struct {
+			Meta struct {
+				DryRun bool `json:"dry_run"`
+			} `json:"meta"`
+		}
+		decodeErr := json.Unmarshal([]byte(stdout), &envelope)
+		if err != nil || decodeErr != nil || *writes != 0 || !envelope.Meta.DryRun {
+			t.Fatalf("dry-run exact create: err=%v writes=%d stdout=%q", err, *writes, stdout)
+		}
+	})
+
+	t.Run("apply uses one write", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes, flagExperimental, flagForce = true, true, true
+		_, _, err := captureProcessOutput(t, func() error { return runFirewallCreate(in) })
+		if err != nil || *writes != 1 {
+			t.Fatalf("exact apply: err=%v writes=%d", err, *writes)
+		}
+	})
 }
 
 func TestFirewallWriteRiskClassesMatchApprovedTable(t *testing.T) {
