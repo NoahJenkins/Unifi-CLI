@@ -69,11 +69,8 @@ func TestAgentToolGapIssueFormContract(t *testing.T) {
 			t.Errorf("first markdown safety guidance must mention %q", phrase)
 		}
 	}
-	if !strings.Contains(firstMarkdown, "security defects") || !strings.Contains(firstMarkdown, "private advisories") {
-		t.Error("first markdown safety guidance must direct security defects to private advisories")
-	}
-	if !strings.Contains(firstMarkdown, "security.md") {
-		t.Error("first markdown safety guidance must reference SECURITY.md")
+	if !strings.Contains(firstMarkdown, "send security defects through private advisories as described in security.md.") {
+		t.Error("first markdown safety guidance must send security defects through private advisories as described in SECURITY.md")
 	}
 
 	gotIDs := make([]string, 0, len(form.Body))
