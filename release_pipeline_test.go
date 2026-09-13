@@ -231,7 +231,7 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 	for _, want := range []string{
 		"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94",
-		"anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610",
+		"anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26",
 		"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
 		"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
