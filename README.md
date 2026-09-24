@@ -153,6 +153,42 @@ The configured site selector must exactly match a site UUID,
 `ambiguous_id`; there is no fuzzy match. The resolved UUID is cached for the
 remainder of that CLI invocation and is used in official API paths.
 
+## Controller-free command discovery
+
+Every `--help` invocation is local command metadata. It does not load
+controller configuration, credentials, or send a controller request, so an
+agent can inspect the CLI before a controller profile or API key exists:
+
+```bash
+# List the top-level command groups.
+unifi --help
+
+# Traverse a command group.
+unifi firewall --help
+
+# Inspect one operation and its flags.
+unifi firewall create --help
+```
+
+Continue this pattern with `unifi <command> --help` and
+`unifi <command> <subcommand> --help` until the required operation and flags
+are identified. Help output describes the local CLI surface; it does not prove
+online controller support, controller-version compatibility, permissions, or
+current resource state.
+
+The distinction between local inspection and online operations is:
+
+| Invocation | Controller request | Purpose |
+|---|---:|---|
+| `unifi ... --help` | No | Traverse the compiled command tree |
+| `unifi version` | No | Show local build information |
+| `unifi doctor` | No | Check local configuration and credential-source readiness |
+| `unifi auth status --json` | Yes | Check controller reachability and API-key validity |
+| Resource reads and mutations | Yes | Inspect or change controller state |
+
+The command table below describes the available surface; it is not a claim
+that every listed operation is available on the connected controller.
+
 ## Commands and support status
 
 Stable controller inventory and health reads below use the official local
