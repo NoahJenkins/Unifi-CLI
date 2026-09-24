@@ -111,3 +111,24 @@ func TestDocumentedUnifiCommandsExist(t *testing.T) {
 		t.Fatal("documentation has no unifi command examples")
 	}
 }
+
+func TestControllerFreeHelpDiscoveryIsDocumented(t *testing.T) {
+	data, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+
+	readme := strings.Join(strings.Fields(string(data)), " ")
+	for _, want := range []string{
+		"## Controller-free command discovery",
+		"unifi --help",
+		"unifi firewall --help",
+		"unifi firewall create --help",
+		"does not load controller configuration, credentials, or send a controller request",
+		"Help output describes the local CLI surface; it does not prove online controller support",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README is missing controller-free help guidance %q", want)
+		}
+	}
+}
