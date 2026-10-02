@@ -16,7 +16,9 @@ import (
 )
 
 func TestReleaseSmokeDescribesExactTargetAndCommandContract(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// A fresh cache compiles the Go standard library too. Allow a bounded cold
+	// build on constrained offline runners while preserving the exact contract.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/release-smoke", "--describe")
 	cmd.Env = append(os.Environ(), "GOCACHE="+t.TempDir())
