@@ -80,6 +80,7 @@ func TestReleaseNoteReferencesResolve(t *testing.T) {
 
 func TestDocumentedUnifiCommandsExist(t *testing.T) {
 	root := cli.NewRoot()
+	root.InitDefaultCompletionCmd()
 	found := 0
 	for _, path := range repositoryMarkdownFiles(t) {
 		data, err := os.ReadFile(path)
@@ -129,6 +130,27 @@ func TestControllerFreeHelpDiscoveryIsDocumented(t *testing.T) {
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README is missing controller-free help guidance %q", want)
+		}
+	}
+}
+
+func TestControllerFreeShellCompletionIsDocumented(t *testing.T) {
+	data, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+
+	readme := strings.Join(strings.Fields(string(data)), " ")
+	for _, want := range []string{
+		"## Shell completion",
+		"source <(unifi completion bash)",
+		"unifi completion bash > ~/.local/share/bash-completion/completions/unifi",
+		"source <(unifi completion zsh)",
+		"unifi completion zsh > ~/.zfunc/_unifi",
+		"requires no controller configuration or sign-in",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README is missing controller-free shell completion guidance %q", want)
 		}
 	}
 }
