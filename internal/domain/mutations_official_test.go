@@ -638,6 +638,66 @@ func TestOfficialWlanBroadcastingPlanAndDrift(t *testing.T) {
 	}
 }
 
+func TestOfficialWlanBroadcastingSetOrderDoesNotCauseDrift(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const first = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	const second = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
+	const third = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3"
+	for _, kind := range []struct{ name, field string }{{"DEVICES", "deviceIds"}, {"DEVICE_TAGS", "deviceTagIds"}} {
+		for _, changed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/changed=%t", kind.name, changed), func(t *testing.T) {
+				doc := officialWlanDocument()
+				doc["broadcastingDeviceFilter"] = map[string]any{"type": kind.name, kind.field: []any{first, second}}
+				api := networklessWlanMutationAPI(doc)
+				in := domain.WlanInput{SetAllAPs: true}
+				p, _, err := domain.NewWlanService(api).Update(context.Background(), id, in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err := plan.Targeted(p, id, p.Changes, plan.HighImpact, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				target, _ := prepared.Target()
+				path := client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", id)
+				ids := []any{second, first}
+				if changed {
+					ids = []any{second, third}
+				}
+				api.details[path]["broadcastingDeviceFilter"] = map[string]any{"type": kind.name, kind.field: ids}
+				api.mutate = func(method, gotPath string, in, out any) error {
+					if method != http.MethodPut || gotPath != path {
+						t.Fatal("unexpected mutation")
+					}
+					body := cloneMutationTestValue(in).(map[string]any)
+					if filter, present := body["broadcastingDeviceFilter"]; !present || filter != nil {
+						t.Fatal("reset did not send explicit null")
+					}
+					body["id"] = id
+					api.details[path] = body
+					return copyTestJSON(body, out)
+				}
+				_, err = domain.NewWlanService(api).ApplyUpdatePrepared(context.Background(), target, id, in)
+				if changed {
+					if !apperr.Is(err, apperr.Conflict) {
+						t.Fatal("membership drift was not refused")
+					}
+					if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+						t.Fatal("membership drift performed a write")
+					}
+				} else {
+					if err != nil {
+						t.Fatalf("same set in a different order was rejected: %v", err)
+					}
+					if len(mutationCalls(api.official, http.MethodPut)) != 1 {
+						t.Fatal("reordered unchanged set did not produce exactly one update")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestOfficialWlanBroadcastingValidationBeforeWrites(t *testing.T) {
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"

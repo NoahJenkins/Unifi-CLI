@@ -1216,6 +1216,11 @@ func appendWlanBroadcastingPlan(snapshot map[string]any, raw map[string]any) {
 		return
 	}
 	filter, _ := raw["broadcastingDeviceFilter"].(map[string]any)
+	// Use the same set semantics as wire-document verification so controller
+	// ordering cannot turn an unchanged prepared target into apparent drift.
+	if normalized, ok := normalizeWireDocument(filter, "broadcastingDeviceFilter", officialWlanSetPaths); ok {
+		filter, _ = normalized.(map[string]any)
+	}
 	switch strField(filter, "type") {
 	case "DEVICES":
 		snapshot["broadcasting_ap_scope"] = "selected"
