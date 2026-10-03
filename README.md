@@ -189,6 +189,47 @@ The distinction between local inspection and online operations is:
 The command table below describes the available surface; it is not a claim
 that every listed operation is available on the connected controller.
 
+## Shell completion
+
+Completion generation uses only the CLI's compiled command metadata. It
+requires no controller configuration or sign-in and sends no controller
+request.
+
+Generate and load Bash completion for the current shell:
+
+```bash
+source <(unifi completion bash)
+```
+
+To load it in future Bash sessions, write the script to your user completion
+directory (with the `bash-completion` package configured for your shell):
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+unifi completion bash > ~/.local/share/bash-completion/completions/unifi
+```
+
+Generate and load Zsh completion for the current shell:
+
+```zsh
+autoload -Uz compinit && compinit
+source <(unifi completion zsh)
+```
+
+To load it in future Zsh sessions, save the script in a directory on `fpath`
+before initializing completion. Add the last two lines to `.zshrc` if they are
+not already present:
+
+```zsh
+mkdir -p ~/.zfunc
+unifi completion zsh > ~/.zfunc/_unifi
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit && compinit
+```
+
+Regenerate the saved script after upgrading `unifi` so completions match the
+installed command surface.
+
 ## Commands and support status
 
 Stable controller inventory and health reads below use the official local
