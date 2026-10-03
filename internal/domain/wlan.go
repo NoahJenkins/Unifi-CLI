@@ -519,6 +519,44 @@ func wlanComparisonDocument(value any) any {
 	return comparable
 }
 
+// Both recognized official variants require a nonempty set of UUIDs. Refuse
+// incomplete current scope before planning or replacing the full document.
+func validOfficialWlanBroadcastingFilter(value any) bool {
+	if value == nil {
+		return true
+	}
+	filter, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	var key string
+	switch strField(filter, "type") {
+	case "DEVICES":
+		key = "deviceIds"
+	case "DEVICE_TAGS":
+		key = "deviceTagIds"
+	default:
+		return false
+	}
+	ids, ok := filter[key].([]any)
+	if !ok || len(ids) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, value := range ids {
+		id, ok := value.(string)
+		if !ok || !looksLikeUUID(id) {
+			return false
+		}
+		id = strings.ToLower(id)
+		if _, exists := seen[id]; exists {
+			return false
+		}
+		seen[id] = struct{}{}
+	}
+	return true
+}
+
 func wlanResponseView(body, existing map[string]any) map[string]any {
 	view := deepCloneMap(body)
 	for _, key := range []string{"id", "metadata"} {
@@ -576,11 +614,8 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 			return wlanDocument{}, nil, err
 		}
 	}
-	if inputSetsWlanBroadcastingAPs(in) && doc.wire["broadcastingDeviceFilter"] != nil {
-		filter, ok := doc.wire["broadcastingDeviceFilter"].(map[string]any)
-		if !ok || (strField(filter, "type") != "DEVICES" && strField(filter, "type") != "DEVICE_TAGS") {
-			return wlanDocument{}, nil, apperr.New(apperr.Conflict, "WLAN broadcasting filter is malformed or unsupported")
-		}
+	if inputSetsWlanBroadcastingAPs(in) && !validOfficialWlanBroadcastingFilter(doc.wire["broadcastingDeviceFilter"]) {
+		return wlanDocument{}, nil, apperr.New(apperr.Conflict, "WLAN broadcasting filter is malformed or unsupported")
 	}
 	body := wlanWritableDocument(doc.wire)
 	if inputSetsWlanName(in) {

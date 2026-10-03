@@ -789,6 +789,45 @@ func TestOfficialWlanBroadcastingValidationBeforeWrites(t *testing.T) {
 	}
 }
 
+func TestOfficialWlanBroadcastingMalformedCurrentFilterBeforeWrites(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, variant := range []struct{ kind, key string }{{"DEVICES", "deviceIds"}, {"DEVICE_TAGS", "deviceTagIds"}} {
+		for _, payload := range []struct {
+			name string
+			ids  any
+		}{
+			{"missing", nil}, {"empty", []any{}}, {"scalar", ap}, {"invalid", []any{"invalid"}},
+			{"non-string", []any{42}}, {"duplicate", []any{ap, ap}}, {"case-duplicate", []any{ap, strings.ToUpper(ap)}},
+		} {
+			for _, apply := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/apply=%t", variant.kind, payload.name, apply), func(t *testing.T) {
+					doc := officialWlanDocument()
+					filter := map[string]any{"type": variant.kind}
+					if payload.name != "missing" {
+						filter[variant.key] = payload.ids
+					}
+					doc["broadcastingDeviceFilter"] = filter
+					api := networklessWlanMutationAPI(doc)
+					svc := domain.NewWlanService(api)
+					var err error
+					if apply {
+						_, err = svc.ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+					} else {
+						_, _, err = svc.Update(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+					}
+					if !apperr.Is(err, apperr.Conflict) {
+						t.Fatal("malformed recognized controller filter was accepted")
+					}
+					if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+						t.Fatal("malformed filter performed a write")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestOfficialMutationVerificationRejectsMismatchedObservedIdentity(t *testing.T) {
 	const (
 		createdID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
