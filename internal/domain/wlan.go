@@ -564,6 +564,12 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 			return wlanDocument{}, nil, err
 		}
 	}
+	if inputSetsWlanBroadcastingAPs(in) && doc.wire["broadcastingDeviceFilter"] != nil {
+		filter, ok := doc.wire["broadcastingDeviceFilter"].(map[string]any)
+		if !ok || (strField(filter, "type") != "DEVICES" && strField(filter, "type") != "DEVICE_TAGS") {
+			return wlanDocument{}, nil, apperr.New(apperr.Conflict, "WLAN broadcasting filter is malformed or unsupported")
+		}
+	}
 	body := wlanWritableDocument(doc.wire)
 	if inputSetsWlanName(in) {
 		body["name"] = in.Name
@@ -595,7 +601,7 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 		}
 		body["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": deviceIDs}
 	} else if in.SetAllAPs {
-		body["broadcastingDeviceFilter"] = map[string]any{"type": "ALL"}
+		body["broadcastingDeviceFilter"] = nil
 	}
 	if inputSetsWlanSecurity(in) || inputSetsWlanPassword(in) || inputSetsWlanAdvancedSecurity(in) {
 		current, ok := body["securityConfiguration"].(map[string]any)
@@ -1205,13 +1211,18 @@ func officialWlanSnapshot(raw map[string]any) map[string]any {
 }
 
 func appendWlanBroadcastingPlan(snapshot map[string]any, raw map[string]any) {
+	if raw["broadcastingDeviceFilter"] == nil {
+		snapshot["broadcasting_ap_scope"] = "all"
+		return
+	}
 	filter, _ := raw["broadcastingDeviceFilter"].(map[string]any)
 	switch strField(filter, "type") {
-	case "ALL":
-		snapshot["broadcasting_ap_scope"] = "all"
 	case "DEVICES":
 		snapshot["broadcasting_ap_scope"] = "selected"
 		snapshot["broadcasting_ap_ids"] = deepCloneValue(filter["deviceIds"])
+	case "DEVICE_TAGS":
+		snapshot["broadcasting_ap_scope"] = "device-tags"
+		snapshot["broadcasting_ap_tag_ids"] = deepCloneValue(filter["deviceTagIds"])
 	}
 }
 

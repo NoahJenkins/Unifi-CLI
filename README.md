@@ -408,7 +408,9 @@ document when a field is not changed.
 
 `wlan update` can restrict a broadcast to selected access points with repeatable
 `--broadcasting-ap <ap-uuid>` flags, or restore the default controller-wide
-selection with `--all-aps`. These official full-document updates preserve
+selection with `--all-aps`, which sends an explicit null broadcasting filter
+as defined by the pinned official schema. Plans include the current device or
+device-tag scope and reject changes to it before applying. These full-document updates preserve
 unrelated WLAN settings, including security and meshing-related fields, and use
 the normal dry-run, experimental, and confirmation gates.
 
