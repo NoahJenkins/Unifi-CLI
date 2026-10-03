@@ -526,6 +526,51 @@ func TestOfficialWlanUpdatePreservesCompleteWritableDocumentAndVerifies(t *testi
 	}
 }
 
+func TestOfficialWlanUpdateConfiguresBroadcastingAccessPoints(t *testing.T) {
+	const (
+		id  = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+		apA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+		apB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
+	)
+	tests := []struct {
+		name string
+		in   domain.WlanInput
+		want map[string]any
+	}{
+		{name: "selected APs", in: domain.WlanInput{BroadcastingAPIDs: []string{apA, apB}, SetBroadcastingAPs: true}, want: map[string]any{"type": "DEVICES", "deviceIds": []any{apA, apB}}},
+		{name: "all APs", in: domain.WlanInput{SetAllAPs: true}, want: map[string]any{"type": "ALL"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": []any{apA}}
+			api := networklessWlanMutationAPI(doc)
+			path := client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", id)
+			api.mutate = func(_ string, _ string, in, out any) error {
+				observed := cloneMutationTestValue(in).(map[string]any)
+				observed["id"] = id
+				observed["metadata"] = map[string]any{"origin": "USER"}
+				api.details[path] = observed
+				return copyTestJSON(observed, out)
+			}
+			if _, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, tt.in); err != nil {
+				t.Fatal(err)
+			}
+			puts := mutationCalls(api.official, http.MethodPut)
+			if len(puts) != 1 {
+				t.Fatalf("PUT count = %d, want 1", len(puts))
+			}
+			body := puts[0].body.(map[string]any)
+			if !reflect.DeepEqual(body["broadcastingDeviceFilter"], tt.want) {
+				t.Fatalf("broadcastingDeviceFilter = %#v, want %#v", body["broadcastingDeviceFilter"], tt.want)
+			}
+			if !reflect.DeepEqual(body["securityConfiguration"], doc["securityConfiguration"]) {
+				t.Fatal("broadcasting AP update changed unrelated WLAN security")
+			}
+		})
+	}
+}
+
 func TestOfficialMutationVerificationRejectsMismatchedObservedIdentity(t *testing.T) {
 	const (
 		createdID = "ffffffff-ffff-4fff-8fff-ffffffffffff"

@@ -23,7 +23,7 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 			"SetName", "SetSecurity", "SetNetwork", "SetPassword", "SetBand", "SetPMFMode",
 			"SetSAEAnticloggingThresholdSeconds", "SetSAESyncTimeSeconds", "SetFastRoamingEnabled",
 			"SetWPA3FastRoamingEnabled", "SetRadiusProfileID", "SetRadiusNASIDSource", "SetRadiusNASID",
-			"SetCOAEnabled", "SetWPA3SecurityMode",
+			"SetCOAEnabled", "SetWPA3SecurityMode", "SetBroadcastingAPs", "SetAllAPs",
 		}},
 		{name: "port", typeOf: reflect.TypeOf(domain.PortInput{}), fields: []string{"SetName", "ClearName", "SetProfile"}},
 		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled", "SetSourceIP", "SetDestinationIP", "SetDestinationPort"}},
@@ -53,6 +53,11 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 			if command.Flags().Lookup(flag) == nil {
 				t.Errorf("%s is missing --%s", command.CommandPath(), flag)
 			}
+		}
+	}
+	for _, flag := range []string{"broadcasting-ap", "all-aps"} {
+		if newWlanUpdateCmd().Flags().Lookup(flag) == nil {
+			t.Errorf("wlan update is missing --%s", flag)
 		}
 	}
 	if newPortUpdateCmd().Flags().Lookup("clear-name") == nil {
