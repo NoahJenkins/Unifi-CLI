@@ -504,7 +504,19 @@ var officialWlanSetPaths = map[string]struct{}{
 }
 
 func wlanWireDocumentsEqual(a, b any) bool {
-	return wireDocumentsEqualAtPaths(a, b, officialWlanSetPaths)
+	return wireDocumentsEqualAtPaths(wlanComparisonDocument(a), wlanComparisonDocument(b), officialWlanSetPaths)
+}
+
+func wlanComparisonDocument(value any) any {
+	doc, ok := value.(map[string]any)
+	if !ok || doc == nil || doc["broadcastingDeviceFilter"] != nil {
+		return value
+	}
+	// The optional nullable filter represents all APs when null or omitted.
+	// Normalize only comparisons; reset requests still carry explicit null.
+	comparable := deepCloneMap(doc)
+	delete(comparable, "broadcastingDeviceFilter")
+	return comparable
 }
 
 func wlanResponseView(body, existing map[string]any) map[string]any {

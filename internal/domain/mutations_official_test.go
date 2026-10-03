@@ -698,6 +698,71 @@ func TestOfficialWlanBroadcastingSetOrderDoesNotCauseDrift(t *testing.T) {
 	}
 }
 
+func TestOfficialWlanBroadcastingResetVerificationAcceptsOnlyAllAPScope(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, observed := range []string{"null", "omitted", "selected", "unrelated-drift"} {
+		t.Run(observed, func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": []any{ap}}
+			api := networklessWlanMutationAPI(doc)
+			api.mutate = func(method, path string, in, out any) error {
+				if method != http.MethodPut {
+					t.Fatal("unexpected mutation")
+				}
+				body := cloneMutationTestValue(in).(map[string]any)
+				if filter, present := body["broadcastingDeviceFilter"]; !present || filter != nil {
+					t.Fatal("reset did not send explicit null")
+				}
+				body["id"] = id
+				switch observed {
+				case "omitted":
+					delete(body, "broadcastingDeviceFilter")
+				case "selected":
+					body["broadcastingDeviceFilter"] = doc["broadcastingDeviceFilter"]
+				case "unrelated-drift":
+					delete(body, "broadcastingDeviceFilter")
+					body["name"] = "Unexpected"
+				}
+				api.details[path] = body
+				return copyTestJSON(body, out)
+			}
+			_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+			if observed == "null" || observed == "omitted" {
+				if err != nil {
+					t.Fatalf("verified all-AP response was rejected: %v", err)
+				}
+			} else if !apperr.Is(err, apperr.Conflict) {
+				t.Fatal("nonmatching observed document was accepted")
+			}
+			if len(mutationCalls(api.official, http.MethodPut)) != 1 {
+				t.Fatal("reset was not exactly one write")
+			}
+		})
+	}
+}
+
+func TestOfficialWlanBroadcastingResetAlreadyAllIsNoOp(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	for _, omitted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("omitted=%t", omitted), func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = nil
+			if omitted {
+				delete(doc, "broadcastingDeviceFilter")
+			}
+			api := networklessWlanMutationAPI(doc)
+			_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatal("unchanged all-AP scope was not rejected as a no-op")
+			}
+			if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+				t.Fatal("all-AP no-op performed a write")
+			}
+		})
+	}
+}
+
 func TestOfficialWlanBroadcastingValidationBeforeWrites(t *testing.T) {
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
