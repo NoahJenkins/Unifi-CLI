@@ -212,6 +212,7 @@ unifi completion bash > ~/.local/share/bash-completion/completions/unifi
 Generate and load Zsh completion for the current shell:
 
 ```zsh
+autoload -Uz compinit && compinit
 source <(unifi completion zsh)
 ```
 

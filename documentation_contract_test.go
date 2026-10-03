@@ -146,6 +146,7 @@ func TestControllerFreeShellCompletionIsDocumented(t *testing.T) {
 		"source <(unifi completion bash)",
 		"unifi completion bash > ~/.local/share/bash-completion/completions/unifi",
 		"source <(unifi completion zsh)",
+		"autoload -Uz compinit && compinit source <(unifi completion zsh)",
 		"unifi completion zsh > ~/.zfunc/_unifi",
 		"requires no controller configuration or sign-in",
 	} {
