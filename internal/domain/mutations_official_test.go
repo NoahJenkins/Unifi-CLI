@@ -539,6 +539,7 @@ func TestOfficialWlanUpdateConfiguresBroadcastingAccessPoints(t *testing.T) {
 		want any
 	}{
 		{name: "selected APs", in: domain.WlanInput{BroadcastingAPIDs: []string{apA, apB}, SetBroadcastingAPs: true}, want: map[string]any{"type": "DEVICES", "deviceIds": []any{apA, apB}}},
+		{name: "mixed-case selected APs", in: domain.WlanInput{BroadcastingAPIDs: []string{strings.ToUpper(apA), strings.ToUpper(apB)}, SetBroadcastingAPs: true}, want: map[string]any{"type": "DEVICES", "deviceIds": []any{apA, apB}}},
 		{name: "all APs", in: domain.WlanInput{SetAllAPs: true}, want: nil},
 	}
 	for _, tt := range tests {
@@ -786,6 +787,30 @@ func TestOfficialWlanBroadcastingValidationBeforeWrites(t *testing.T) {
 		if !apperr.Is(err, apperr.Conflict) || len(mutationCalls(api.official, http.MethodPut)) != 0 {
 			t.Fatal("unsupported controller filter was not refused before a write")
 		}
+	}
+}
+
+func TestOfficialWlanBroadcastingCaseEquivalentIDsRejectedBeforePlanningOrWrites(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, apply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("apply=%t", apply), func(t *testing.T) {
+			api := networklessWlanMutationAPI(officialWlanDocument())
+			in := domain.WlanInput{SetBroadcastingAPs: true, BroadcastingAPIDs: []string{ap, strings.ToUpper(ap)}}
+			svc := domain.NewWlanService(api)
+			var err error
+			if apply {
+				_, err = svc.ApplyUpdate(context.Background(), id, in)
+			} else {
+				_, _, err = svc.Update(context.Background(), id, in)
+			}
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("case-equivalent AP IDs were accepted: %v", err)
+			}
+			if len(api.official) != 0 || len(api.legacy) != 0 {
+				t.Fatal("invalid AP IDs reached the controller API")
+			}
+		})
 	}
 }
 

@@ -644,7 +644,7 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 	if in.SetBroadcastingAPs {
 		deviceIDs := make([]any, len(in.BroadcastingAPIDs))
 		for i, id := range in.BroadcastingAPIDs {
-			deviceIDs[i] = id
+			deviceIDs[i] = strings.ToLower(id)
 		}
 		body["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": deviceIDs}
 	} else if in.SetAllAPs {
@@ -1417,6 +1417,7 @@ func validateWlanFields(in WlanInput) error {
 			if !looksLikeUUID(id) {
 				return apperr.Newf(apperr.ValidationFailed, "broadcasting access-point ID %q must be a valid UUID", id)
 			}
+			id = strings.ToLower(id)
 			if _, exists := seen[id]; exists {
 				return apperr.Newf(apperr.ValidationFailed, "duplicate broadcasting access-point ID %q", id)
 			}
