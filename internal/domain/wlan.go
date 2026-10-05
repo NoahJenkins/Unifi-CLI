@@ -509,14 +509,48 @@ func wlanWireDocumentsEqual(a, b any) bool {
 
 func wlanComparisonDocument(value any) any {
 	doc, ok := value.(map[string]any)
-	if !ok || doc == nil || doc["broadcastingDeviceFilter"] != nil {
+	if !ok || doc == nil {
 		return value
 	}
 	// The optional nullable filter represents all APs when null or omitted.
 	// Normalize only comparisons; reset requests still carry explicit null.
+	// Recognized AP/tag UUID values use the same identity casing as requests.
 	comparable := deepCloneMap(doc)
-	delete(comparable, "broadcastingDeviceFilter")
+	if doc["broadcastingDeviceFilter"] == nil {
+		delete(comparable, "broadcastingDeviceFilter")
+	} else if filter, ok := doc["broadcastingDeviceFilter"].(map[string]any); ok {
+		comparable["broadcastingDeviceFilter"] = canonicalWlanBroadcastingFilter(filter)
+	}
 	return comparable
+}
+
+// UUID letter casing does not change AP or tag identity. Normalize only the
+// filter's UUID values; preserve every unrelated writable field.
+func canonicalWlanBroadcastingFilter(filter map[string]any) map[string]any {
+	var key string
+	switch strField(filter, "type") {
+	case "DEVICES":
+		key = "deviceIds"
+	case "DEVICE_TAGS":
+		key = "deviceTagIds"
+	default:
+		return filter
+	}
+	ids, ok := filter[key].([]any)
+	if !ok {
+		return filter
+	}
+	canonical := deepCloneMap(filter)
+	values := make([]any, len(ids))
+	for i, value := range ids {
+		if id, ok := value.(string); ok && looksLikeUUID(id) {
+			values[i] = strings.ToLower(id)
+		} else {
+			values[i] = deepCloneValue(value)
+		}
+	}
+	canonical[key] = values
+	return canonical
 }
 
 // Both recognized official variants require a nonempty set of UUIDs. Refuse
@@ -644,7 +678,7 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 	if in.SetBroadcastingAPs {
 		deviceIDs := make([]any, len(in.BroadcastingAPIDs))
 		for i, id := range in.BroadcastingAPIDs {
-			deviceIDs[i] = id
+			deviceIDs[i] = strings.ToLower(id)
 		}
 		body["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": deviceIDs}
 	} else if in.SetAllAPs {
@@ -1263,6 +1297,7 @@ func appendWlanBroadcastingPlan(snapshot map[string]any, raw map[string]any) {
 		return
 	}
 	filter, _ := raw["broadcastingDeviceFilter"].(map[string]any)
+	filter = canonicalWlanBroadcastingFilter(filter)
 	// Use the same set semantics as wire-document verification so controller
 	// ordering cannot turn an unchanged prepared target into apparent drift.
 	if normalized, ok := normalizeWireDocument(filter, "broadcastingDeviceFilter", officialWlanSetPaths); ok {
@@ -1417,6 +1452,7 @@ func validateWlanFields(in WlanInput) error {
 			if !looksLikeUUID(id) {
 				return apperr.Newf(apperr.ValidationFailed, "broadcasting access-point ID %q must be a valid UUID", id)
 			}
+			id = strings.ToLower(id)
 			if _, exists := seen[id]; exists {
 				return apperr.Newf(apperr.ValidationFailed, "duplicate broadcasting access-point ID %q", id)
 			}

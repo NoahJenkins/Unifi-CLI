@@ -410,7 +410,9 @@ document when a field is not changed.
 `--broadcasting-ap <ap-uuid>` flags, or restore the default controller-wide
 selection with `--all-aps`, which sends an explicit null broadcasting filter
 as defined by the pinned official schema. Plans include the current device or
-device-tag scope and reject changes to it before applying. These full-document updates preserve
+device-tag scope and reject changes to it before applying. AP UUID selections
+use lowercase IDs and reject case-equivalent duplicates; AP/device-tag identity
+comparisons ignore hexadecimal letter casing. These full-document updates preserve
 unrelated WLAN settings, including security and meshing-related fields, and use
 the normal dry-run, experimental, and confirmation gates.
 
