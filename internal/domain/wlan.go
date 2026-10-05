@@ -68,6 +68,9 @@ type WlanInput struct {
 	SetCOAEnabled                      bool
 	WPA3SecurityMode                   string
 	SetWPA3SecurityMode                bool
+	BroadcastingAPIDs                  []string
+	SetBroadcastingAPs                 bool
+	SetAllAPs                          bool
 }
 
 type WlanService struct {
@@ -210,6 +213,9 @@ func (s *WlanService) Update(ctx context.Context, id string, in WlanInput) (plan
 			fmt.Sprintf("update wlan %s", doc.normalized.Name), beforeSnapshot, afterSnapshot)
 		return p, doc.normalized, nil
 	}
+	if inputSetsWlanBroadcastingAPs(in) {
+		return plan.Plan{}, Wlan{}, apperr.New(apperr.ValidationFailed, "broadcasting access-point selection requires the official API")
+	}
 	w, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Wlan{}, err
@@ -241,6 +247,9 @@ func (s *WlanService) applyUpdate(ctx context.Context, id string, in WlanInput, 
 	}
 	if supportsOfficialDetails(s.api) {
 		return s.applyOfficialUpdate(ctx, id, in, target)
+	}
+	if inputSetsWlanBroadcastingAPs(in) {
+		return Wlan{}, apperr.New(apperr.ValidationFailed, "broadcasting access-point selection requires the official API")
 	}
 	w, err := s.getLegacy(ctx, id)
 	if err != nil {
@@ -495,7 +504,91 @@ var officialWlanSetPaths = map[string]struct{}{
 }
 
 func wlanWireDocumentsEqual(a, b any) bool {
-	return wireDocumentsEqualAtPaths(a, b, officialWlanSetPaths)
+	return wireDocumentsEqualAtPaths(wlanComparisonDocument(a), wlanComparisonDocument(b), officialWlanSetPaths)
+}
+
+func wlanComparisonDocument(value any) any {
+	doc, ok := value.(map[string]any)
+	if !ok || doc == nil {
+		return value
+	}
+	// The optional nullable filter represents all APs when null or omitted.
+	// Normalize only comparisons; reset requests still carry explicit null.
+	// Recognized AP/tag UUID values use the same identity casing as requests.
+	comparable := deepCloneMap(doc)
+	if doc["broadcastingDeviceFilter"] == nil {
+		delete(comparable, "broadcastingDeviceFilter")
+	} else if filter, ok := doc["broadcastingDeviceFilter"].(map[string]any); ok {
+		comparable["broadcastingDeviceFilter"] = canonicalWlanBroadcastingFilter(filter)
+	}
+	return comparable
+}
+
+// UUID letter casing does not change AP or tag identity. Normalize only the
+// filter's UUID values; preserve every unrelated writable field.
+func canonicalWlanBroadcastingFilter(filter map[string]any) map[string]any {
+	var key string
+	switch strField(filter, "type") {
+	case "DEVICES":
+		key = "deviceIds"
+	case "DEVICE_TAGS":
+		key = "deviceTagIds"
+	default:
+		return filter
+	}
+	ids, ok := filter[key].([]any)
+	if !ok {
+		return filter
+	}
+	canonical := deepCloneMap(filter)
+	values := make([]any, len(ids))
+	for i, value := range ids {
+		if id, ok := value.(string); ok && looksLikeUUID(id) {
+			values[i] = strings.ToLower(id)
+		} else {
+			values[i] = deepCloneValue(value)
+		}
+	}
+	canonical[key] = values
+	return canonical
+}
+
+// Both recognized official variants require a nonempty set of UUIDs. Refuse
+// incomplete current scope before planning or replacing the full document.
+func validOfficialWlanBroadcastingFilter(value any) bool {
+	if value == nil {
+		return true
+	}
+	filter, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	var key string
+	switch strField(filter, "type") {
+	case "DEVICES":
+		key = "deviceIds"
+	case "DEVICE_TAGS":
+		key = "deviceTagIds"
+	default:
+		return false
+	}
+	ids, ok := filter[key].([]any)
+	if !ok || len(ids) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, value := range ids {
+		id, ok := value.(string)
+		if !ok || !looksLikeUUID(id) {
+			return false
+		}
+		id = strings.ToLower(id)
+		if _, exists := seen[id]; exists {
+			return false
+		}
+		seen[id] = struct{}{}
+	}
+	return true
 }
 
 func wlanResponseView(body, existing map[string]any) map[string]any {
@@ -555,6 +648,9 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 			return wlanDocument{}, nil, err
 		}
 	}
+	if inputSetsWlanBroadcastingAPs(in) && !validOfficialWlanBroadcastingFilter(doc.wire["broadcastingDeviceFilter"]) {
+		return wlanDocument{}, nil, apperr.New(apperr.Conflict, "WLAN broadcasting filter is malformed or unsupported")
+	}
 	body := wlanWritableDocument(doc.wire)
 	if inputSetsWlanName(in) {
 		body["name"] = in.Name
@@ -578,6 +674,15 @@ func (s *WlanService) prepareOfficialUpdate(ctx context.Context, query string, i
 		} else {
 			delete(body, "hotspotConfiguration")
 		}
+	}
+	if in.SetBroadcastingAPs {
+		deviceIDs := make([]any, len(in.BroadcastingAPIDs))
+		for i, id := range in.BroadcastingAPIDs {
+			deviceIDs[i] = strings.ToLower(id)
+		}
+		body["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": deviceIDs}
+	} else if in.SetAllAPs {
+		body["broadcastingDeviceFilter"] = nil
 	}
 	if inputSetsWlanSecurity(in) || inputSetsWlanPassword(in) || inputSetsWlanAdvancedSecurity(in) {
 		current, ok := body["securityConfiguration"].(map[string]any)
@@ -1177,12 +1282,35 @@ func wlanSnapshot(w Wlan) map[string]any {
 
 func officialWlanSnapshot(raw map[string]any) map[string]any {
 	snapshot := wlanSnapshot(NormalizeWlan(raw))
+	appendWlanBroadcastingPlan(snapshot, raw)
 	security, _ := raw["securityConfiguration"].(map[string]any)
 	if security == nil {
 		return snapshot
 	}
 	appendWlanSecurityPlan(snapshot, security)
 	return snapshot
+}
+
+func appendWlanBroadcastingPlan(snapshot map[string]any, raw map[string]any) {
+	if raw["broadcastingDeviceFilter"] == nil {
+		snapshot["broadcasting_ap_scope"] = "all"
+		return
+	}
+	filter, _ := raw["broadcastingDeviceFilter"].(map[string]any)
+	filter = canonicalWlanBroadcastingFilter(filter)
+	// Use the same set semantics as wire-document verification so controller
+	// ordering cannot turn an unchanged prepared target into apparent drift.
+	if normalized, ok := normalizeWireDocument(filter, "broadcastingDeviceFilter", officialWlanSetPaths); ok {
+		filter, _ = normalized.(map[string]any)
+	}
+	switch strField(filter, "type") {
+	case "DEVICES":
+		snapshot["broadcasting_ap_scope"] = "selected"
+		snapshot["broadcasting_ap_ids"] = deepCloneValue(filter["deviceIds"])
+	case "DEVICE_TAGS":
+		snapshot["broadcasting_ap_scope"] = "device-tags"
+		snapshot["broadcasting_ap_tag_ids"] = deepCloneValue(filter["deviceTagIds"])
+	}
 }
 
 func officialWlanUpdateSnapshots(beforeRaw, afterRaw map[string]any, in WlanInput) (map[string]any, map[string]any) {
@@ -1300,7 +1428,7 @@ func validateWlanCreate(in WlanInput) error {
 
 func validateWlanUpdate(in WlanInput) error {
 	if !inputSetsWlanName(in) && !inputSetsWlanSecurity(in) && !inputSetsWlanNetwork(in) &&
-		!inputSetsWlanPassword(in) && !inputSetsWlanBand(in) && !in.SetGuest && !in.SetEnabled && !inputSetsWlanAdvancedSecurity(in) {
+		!inputSetsWlanPassword(in) && !inputSetsWlanBand(in) && !in.SetGuest && !in.SetEnabled && !inputSetsWlanAdvancedSecurity(in) && !inputSetsWlanBroadcastingAPs(in) {
 		return apperr.New(apperr.ValidationFailed, "WLAN update requires at least one changed field")
 	}
 	if inputSetsWlanName(in) {
@@ -1312,6 +1440,25 @@ func validateWlanUpdate(in WlanInput) error {
 }
 
 func validateWlanFields(in WlanInput) error {
+	if in.SetBroadcastingAPs && in.SetAllAPs {
+		return apperr.New(apperr.ValidationFailed, "choose selected broadcasting access points or all access points, not both")
+	}
+	if in.SetBroadcastingAPs {
+		if len(in.BroadcastingAPIDs) == 0 {
+			return apperr.New(apperr.ValidationFailed, "at least one broadcasting access-point ID is required")
+		}
+		seen := make(map[string]struct{}, len(in.BroadcastingAPIDs))
+		for _, id := range in.BroadcastingAPIDs {
+			if !looksLikeUUID(id) {
+				return apperr.Newf(apperr.ValidationFailed, "broadcasting access-point ID %q must be a valid UUID", id)
+			}
+			id = strings.ToLower(id)
+			if _, exists := seen[id]; exists {
+				return apperr.Newf(apperr.ValidationFailed, "duplicate broadcasting access-point ID %q", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
 	if inputSetsWlanSecurity(in) {
 		if _, err := canonicalOfficialWlanSecurity(in.Security); err != nil {
 			return err
@@ -1320,11 +1467,12 @@ func validateWlanFields(in WlanInput) error {
 	return validateEnum("WLAN band", in.Band, "2g", "5g", "6g", "both")
 }
 
-func inputSetsWlanName(in WlanInput) bool     { return in.SetName || in.Name != "" }
-func inputSetsWlanSecurity(in WlanInput) bool { return in.SetSecurity || in.Security != "" }
-func inputSetsWlanNetwork(in WlanInput) bool  { return in.SetNetwork || in.Network != "" }
-func inputSetsWlanPassword(in WlanInput) bool { return in.SetPassword || in.Password != "" }
-func inputSetsWlanBand(in WlanInput) bool     { return in.SetBand || in.Band != "" }
+func inputSetsWlanName(in WlanInput) bool            { return in.SetName || in.Name != "" }
+func inputSetsWlanSecurity(in WlanInput) bool        { return in.SetSecurity || in.Security != "" }
+func inputSetsWlanNetwork(in WlanInput) bool         { return in.SetNetwork || in.Network != "" }
+func inputSetsWlanPassword(in WlanInput) bool        { return in.SetPassword || in.Password != "" }
+func inputSetsWlanBand(in WlanInput) bool            { return in.SetBand || in.Band != "" }
+func inputSetsWlanBroadcastingAPs(in WlanInput) bool { return in.SetBroadcastingAPs || in.SetAllAPs }
 
 func inputSetsWlanAdvancedSecurity(in WlanInput) bool {
 	return in.SetPMFMode || in.SetSAEAnticloggingThresholdSeconds || in.SetSAESyncTimeSeconds ||

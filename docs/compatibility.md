@@ -74,6 +74,9 @@ fails the entire command when any required detail fails.
 - Network management transitions require every target-mode field; DHCP ranges
   and controller defaults are never inferred.
 - Personal WiFi secrets are accepted only by hidden prompt or bounded stdin.
+- Per-WLAN access-point broadcasting selection uses the official
+  `broadcastingDeviceFilter` representation and remains an experimental WiFi
+  update without sacrificial-controller live qualification.
 - DNS type changes are unsupported; update preserves the existing policy type.
 - SRV `--name` is the base domain; `--service` and `--protocol` provide the
   underscore-prefixed SRV labels separately.

@@ -406,6 +406,16 @@ the hidden `--password` prompt or bounded `--password-stdin`, never as an
 argument value or plan field. Updates preserve the complete official security
 document when a field is not changed.
 
+`wlan update` can restrict a broadcast to selected access points with repeatable
+`--broadcasting-ap <ap-uuid>` flags, or restore the default controller-wide
+selection with `--all-aps`, which sends an explicit null broadcasting filter
+as defined by the pinned official schema. Plans include the current device or
+device-tag scope and reject changes to it before applying. AP UUID selections
+use lowercase IDs and reject case-equivalent duplicates; AP/device-tag identity
+comparisons ignore hexadecimal letter casing. These full-document updates preserve
+unrelated WLAN settings, including security and meshing-related fields, and use
+the normal dry-run, experimental, and confirmation gates.
+
 ### Firewall
 
 Firewall reads and writes use modern official zones and policies; classic

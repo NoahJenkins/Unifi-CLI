@@ -13,6 +13,7 @@ import (
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/client"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
+	"github.com/noahjenkins/unifi-cli/internal/plan"
 )
 
 const mutationSiteID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -523,6 +524,319 @@ func TestOfficialWlanUpdatePreservesCompleteWritableDocumentAndVerifies(t *testi
 	if !reflect.DeepEqual(body["securityConfiguration"], officialWlanDocument()["securityConfiguration"]) ||
 		!reflect.DeepEqual(body["clientFilteringPolicy"], officialWlanDocument()["clientFilteringPolicy"]) {
 		t.Fatalf("PUT lost untouched WLAN fields: %#v", body)
+	}
+}
+
+func TestOfficialWlanUpdateConfiguresBroadcastingAccessPoints(t *testing.T) {
+	const (
+		id  = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+		apA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+		apB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
+	)
+	tests := []struct {
+		name string
+		in   domain.WlanInput
+		want any
+	}{
+		{name: "selected APs", in: domain.WlanInput{BroadcastingAPIDs: []string{apA, apB}, SetBroadcastingAPs: true}, want: map[string]any{"type": "DEVICES", "deviceIds": []any{apA, apB}}},
+		{name: "canonical APs", in: domain.WlanInput{BroadcastingAPIDs: []string{strings.ToUpper(apA), strings.ToUpper(apB)}, SetBroadcastingAPs: true}, want: map[string]any{"type": "DEVICES", "deviceIds": []any{apA, apB}}},
+		{name: "all APs", in: domain.WlanInput{SetAllAPs: true}, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": []any{apA}}
+			api := networklessWlanMutationAPI(doc)
+			path := client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", id)
+			api.mutate = func(_ string, _ string, in, out any) error {
+				observed := cloneMutationTestValue(in).(map[string]any)
+				observed["id"] = id
+				observed["metadata"] = map[string]any{"origin": "USER"}
+				if tt.name == "canonical APs" {
+					observed["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": []any{strings.ToUpper(apA), strings.ToUpper(apB)}}
+				}
+				api.details[path] = observed
+				return copyTestJSON(observed, out)
+			}
+			if _, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, tt.in); err != nil {
+				t.Fatal(err)
+			}
+			puts := mutationCalls(api.official, http.MethodPut)
+			if len(puts) != 1 {
+				t.Fatalf("PUT count = %d, want 1", len(puts))
+			}
+			body := puts[0].body.(map[string]any)
+			if value, present := body["broadcastingDeviceFilter"]; !present || !reflect.DeepEqual(value, tt.want) {
+				t.Fatalf("broadcastingDeviceFilter = %#v, want %#v", body["broadcastingDeviceFilter"], tt.want)
+			}
+			unchanged := cloneMutationTestValue(doc).(map[string]any)
+			delete(unchanged, "id")
+			delete(unchanged, "metadata")
+			unchanged["broadcastingDeviceFilter"] = tt.want
+			if !reflect.DeepEqual(body, unchanged) {
+				t.Fatal("broadcasting AP update changed unrelated WLAN fields")
+			}
+		})
+	}
+}
+
+// The pinned 10.4.57 OpenAPI describes null as all AP-capable devices,
+// and DEVICES / DEVICE_TAGS as the only custom filter discriminators.
+func TestOfficialWlanBroadcastingPlanAndDrift(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	const tagA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
+	const tagB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3"
+	for _, initial := range []struct {
+		name   string
+		filter any
+		scope  string
+	}{
+		{"all", nil, "all"},
+		{"selected", map[string]any{"type": "DEVICES", "deviceIds": []any{ap}}, "selected"},
+		{"tags", map[string]any{"type": "DEVICE_TAGS", "deviceTagIds": []any{tagA}}, "device-tags"},
+	} {
+		t.Run(initial.name, func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = initial.filter
+			api := networklessWlanMutationAPI(doc)
+			in := domain.WlanInput{SetAllAPs: true}
+			if initial.filter == nil {
+				in = domain.WlanInput{SetBroadcastingAPs: true, BroadcastingAPIDs: []string{ap}}
+			}
+			p, _, err := domain.NewWlanService(api).Update(context.Background(), id, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Changes[0].Before.(map[string]any)["broadcasting_ap_scope"] != initial.scope {
+				t.Fatal("plan omitted initial broadcasting scope")
+			}
+			want := "all"
+			if initial.filter == nil {
+				want = "selected"
+			}
+			if p.Changes[0].After.(map[string]any)["broadcasting_ap_scope"] != want {
+				t.Fatal("plan omitted requested broadcasting scope")
+			}
+			if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+				t.Fatal("planning performed a write")
+			}
+			if initial.name != "tags" {
+				return
+			}
+			prepared, err := plan.Targeted(p, id, p.Changes, plan.HighImpact, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, _ := prepared.Target()
+			path := client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", id)
+			api.details[path]["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICE_TAGS", "deviceTagIds": []any{tagB}}
+			_, err = domain.NewWlanService(api).ApplyUpdatePrepared(context.Background(), target, id, in)
+			if !apperr.Is(err, apperr.Conflict) {
+				t.Fatal("changed device-tag scope was not refused")
+			}
+			if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+				t.Fatal("drift refusal performed a write")
+			}
+		})
+	}
+}
+
+func TestOfficialWlanBroadcastingSetOrderDoesNotCauseDrift(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const first = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	const second = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
+	const third = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3"
+	for _, kind := range []struct{ name, field string }{{"DEVICES", "deviceIds"}, {"DEVICE_TAGS", "deviceTagIds"}} {
+		for _, changed := range []bool{false, true} {
+			for _, uppercase := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/changed=%t/uppercase=%t", kind.name, changed, uppercase), func(t *testing.T) {
+					doc := officialWlanDocument()
+					doc["broadcastingDeviceFilter"] = map[string]any{"type": kind.name, kind.field: []any{first, second}}
+					api := networklessWlanMutationAPI(doc)
+					in := domain.WlanInput{SetAllAPs: true}
+					p, _, err := domain.NewWlanService(api).Update(context.Background(), id, in)
+					if err != nil {
+						t.Fatal(err)
+					}
+					prepared, err := plan.Targeted(p, id, p.Changes, plan.HighImpact, true)
+					if err != nil {
+						t.Fatal(err)
+					}
+					target, _ := prepared.Target()
+					path := client.OfficialPath("sites", mutationSiteID, "wifi", "broadcasts", id)
+					ids := []any{second, first}
+					if changed {
+						ids = []any{second, third}
+					}
+					if uppercase {
+						for i, value := range ids {
+							ids[i] = strings.ToUpper(value.(string))
+						}
+					}
+					api.details[path]["broadcastingDeviceFilter"] = map[string]any{"type": kind.name, kind.field: ids}
+					api.mutate = func(method, gotPath string, in, out any) error {
+						if method != http.MethodPut || gotPath != path {
+							t.Fatal("unexpected mutation")
+						}
+						body := cloneMutationTestValue(in).(map[string]any)
+						if filter, present := body["broadcastingDeviceFilter"]; !present || filter != nil {
+							t.Fatal("reset did not send explicit null")
+						}
+						body["id"] = id
+						api.details[path] = body
+						return copyTestJSON(body, out)
+					}
+					_, err = domain.NewWlanService(api).ApplyUpdatePrepared(context.Background(), target, id, in)
+					if changed {
+						if !apperr.Is(err, apperr.Conflict) {
+							t.Fatal("membership drift was not refused")
+						}
+						if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+							t.Fatal("membership drift performed a write")
+						}
+					} else {
+						if err != nil {
+							t.Fatalf("same set in a different order was rejected: %v", err)
+						}
+						if len(mutationCalls(api.official, http.MethodPut)) != 1 {
+							t.Fatal("reordered unchanged set did not produce exactly one update")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestOfficialWlanBroadcastingResetVerificationAcceptsOnlyAllAPScope(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, observed := range []string{"null", "omitted", "selected", "unrelated-drift"} {
+		t.Run(observed, func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = map[string]any{"type": "DEVICES", "deviceIds": []any{ap}}
+			api := networklessWlanMutationAPI(doc)
+			api.mutate = func(method, path string, in, out any) error {
+				if method != http.MethodPut {
+					t.Fatal("unexpected mutation")
+				}
+				body := cloneMutationTestValue(in).(map[string]any)
+				if filter, present := body["broadcastingDeviceFilter"]; !present || filter != nil {
+					t.Fatal("reset did not send explicit null")
+				}
+				body["id"] = id
+				switch observed {
+				case "omitted":
+					delete(body, "broadcastingDeviceFilter")
+				case "selected":
+					body["broadcastingDeviceFilter"] = doc["broadcastingDeviceFilter"]
+				case "unrelated-drift":
+					delete(body, "broadcastingDeviceFilter")
+					body["name"] = "Unexpected"
+				}
+				api.details[path] = body
+				return copyTestJSON(body, out)
+			}
+			_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+			if observed == "null" || observed == "omitted" {
+				if err != nil {
+					t.Fatalf("verified all-AP response was rejected: %v", err)
+				}
+			} else if !apperr.Is(err, apperr.Conflict) {
+				t.Fatal("nonmatching observed document was accepted")
+			}
+			if len(mutationCalls(api.official, http.MethodPut)) != 1 {
+				t.Fatal("reset was not exactly one write")
+			}
+		})
+	}
+}
+
+func TestOfficialWlanBroadcastingResetAlreadyAllIsNoOp(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	for _, omitted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("omitted=%t", omitted), func(t *testing.T) {
+			doc := officialWlanDocument()
+			doc["broadcastingDeviceFilter"] = nil
+			if omitted {
+				delete(doc, "broadcastingDeviceFilter")
+			}
+			api := networklessWlanMutationAPI(doc)
+			_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatal("unchanged all-AP scope was not rejected as a no-op")
+			}
+			if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+				t.Fatal("all-AP no-op performed a write")
+			}
+		})
+	}
+}
+
+func TestOfficialWlanBroadcastingValidationBeforeWrites(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, in := range []domain.WlanInput{
+		{SetBroadcastingAPs: true},
+		{SetBroadcastingAPs: true, BroadcastingAPIDs: []string{"invalid"}},
+		{SetBroadcastingAPs: true, BroadcastingAPIDs: []string{ap, ap}},
+		{SetBroadcastingAPs: true, BroadcastingAPIDs: []string{ap, strings.ToUpper(ap)}},
+		{SetBroadcastingAPs: true, SetAllAPs: true, BroadcastingAPIDs: []string{ap}},
+	} {
+		api := wlanMutationAPI()
+		_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, in)
+		if !apperr.Is(err, apperr.ValidationFailed) || len(mutationCalls(api.official, http.MethodPut)) != 0 {
+			t.Fatal("invalid broadcasting selection was not refused before a write")
+		}
+	}
+	for _, filter := range []any{"malformed", map[string]any{"type": "ALL"}} {
+		doc := officialWlanDocument()
+		doc["broadcastingDeviceFilter"] = filter
+		api := networklessWlanMutationAPI(doc)
+		_, err := domain.NewWlanService(api).ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+		if !apperr.Is(err, apperr.Conflict) || len(mutationCalls(api.official, http.MethodPut)) != 0 {
+			t.Fatal("unsupported controller filter was not refused before a write")
+		}
+	}
+}
+
+func TestOfficialWlanBroadcastingMalformedCurrentFilterBeforeWrites(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, variant := range []struct{ kind, key string }{{"DEVICES", "deviceIds"}, {"DEVICE_TAGS", "deviceTagIds"}} {
+		for _, payload := range []struct {
+			name string
+			ids  any
+		}{
+			{"missing", nil}, {"empty", []any{}}, {"scalar", ap}, {"invalid", []any{"invalid"}},
+			{"non-string", []any{42}}, {"duplicate", []any{ap, ap}}, {"case-duplicate", []any{ap, strings.ToUpper(ap)}},
+		} {
+			for _, apply := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/apply=%t", variant.kind, payload.name, apply), func(t *testing.T) {
+					doc := officialWlanDocument()
+					filter := map[string]any{"type": variant.kind}
+					if payload.name != "missing" {
+						filter[variant.key] = payload.ids
+					}
+					doc["broadcastingDeviceFilter"] = filter
+					api := networklessWlanMutationAPI(doc)
+					svc := domain.NewWlanService(api)
+					var err error
+					if apply {
+						_, err = svc.ApplyUpdate(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+					} else {
+						_, _, err = svc.Update(context.Background(), id, domain.WlanInput{SetAllAPs: true})
+					}
+					if !apperr.Is(err, apperr.Conflict) {
+						t.Fatal("malformed recognized controller filter was accepted")
+					}
+					if len(mutationCalls(api.official, http.MethodPut)) != 0 {
+						t.Fatal("malformed filter performed a write")
+					}
+				})
+			}
+		}
 	}
 }
 
