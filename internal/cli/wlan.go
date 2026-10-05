@@ -104,12 +104,14 @@ func newWlanCreateCmd() *cobra.Command {
 
 func newWlanUpdateCmd() *cobra.Command {
 	var (
-		name          string
-		security      string
-		network       string
-		password      bool
-		passwordStdin bool
-		securityFlags wlanSecurityFlagValues
+		name            string
+		security        string
+		network         string
+		password        bool
+		passwordStdin   bool
+		broadcastingAPs []string
+		allAPs          bool
+		securityFlags   wlanSecurityFlagValues
 	)
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -121,14 +123,17 @@ func newWlanUpdateCmd() *cobra.Command {
 				return emitErr("wlan", "update", err)
 			}
 			in := domain.WlanInput{
-				Name:        name,
-				SetName:     cmd.Flags().Changed("name"),
-				Security:    security,
-				SetSecurity: cmd.Flags().Changed("security"),
-				Network:     network,
-				SetNetwork:  cmd.Flags().Changed("network"),
-				Password:    secret,
-				SetPassword: password || passwordStdin,
+				Name:               name,
+				SetName:            cmd.Flags().Changed("name"),
+				Security:           security,
+				SetSecurity:        cmd.Flags().Changed("security"),
+				Network:            network,
+				SetNetwork:         cmd.Flags().Changed("network"),
+				Password:           secret,
+				SetPassword:        password || passwordStdin,
+				BroadcastingAPIDs:  broadcastingAPs,
+				SetBroadcastingAPs: cmd.Flags().Changed("broadcasting-ap"),
+				SetAllAPs:          allAPs,
 			}
 			securityFlags.apply(cmd, &in)
 			return runWlanUpdate(args[0], in)
@@ -139,6 +144,9 @@ func newWlanUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&network, "network", "", "network id")
 	cmd.Flags().BoolVar(&password, "password", false, "prompt for the WLAN password")
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the WLAN password from stdin")
+	cmd.Flags().StringSliceVar(&broadcastingAPs, "broadcasting-ap", nil, "access point UUID to broadcast from; repeat for more than one")
+	cmd.Flags().BoolVar(&allAPs, "all-aps", false, "restore broadcasting from all access points")
+	cmd.MarkFlagsMutuallyExclusive("broadcasting-ap", "all-aps")
 	securityFlags.add(cmd)
 	return cmd
 }
