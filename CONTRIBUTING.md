@@ -118,8 +118,8 @@ Release action updates must also update the approved immutable pins in
 `release_pipeline_test.go` after checking each upstream release tag. Keep
 full-SHA pinning and permission checks. The auto-merge workflow enables eligible
 updates; it does not repair failed checks. Standard-library vulnerability
-failures require a patched Go version in `go.mod`, which Dependabot Go module
-updates do not change.
+failures require a patched Go toolchain. Check `go.mod` separately when
+module updates leave a standard-library vulnerability failure unresolved.
 
 ## Security reports
 
