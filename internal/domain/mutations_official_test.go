@@ -801,6 +801,30 @@ func TestOfficialWlanBroadcastingValidationBeforeWrites(t *testing.T) {
 	}
 }
 
+func TestOfficialWlanBroadcastingCaseEquivalentIDsRejectedBeforePlanningOrWrites(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+	for _, apply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("apply=%t", apply), func(t *testing.T) {
+			api := networklessWlanMutationAPI(officialWlanDocument())
+			in := domain.WlanInput{SetBroadcastingAPs: true, BroadcastingAPIDs: []string{ap, strings.ToUpper(ap)}}
+			svc := domain.NewWlanService(api)
+			var err error
+			if apply {
+				_, err = svc.ApplyUpdate(context.Background(), id, in)
+			} else {
+				_, _, err = svc.Update(context.Background(), id, in)
+			}
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("case-equivalent AP IDs were accepted: %v", err)
+			}
+			if len(api.official) != 0 || len(api.legacy) != 0 {
+				t.Fatal("invalid AP IDs reached the controller API")
+			}
+		})
+	}
+}
+
 func TestOfficialWlanBroadcastingMalformedCurrentFilterBeforeWrites(t *testing.T) {
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	const ap = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
