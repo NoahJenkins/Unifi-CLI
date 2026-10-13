@@ -233,10 +233,10 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 	for _, want := range []string{
 		"goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94",
-		"anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26",
+		"anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
 		"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
-		"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+		"actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+		"actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
 	} {
 		if !slices.Contains(uses, want) {
 			t.Errorf("release workflow missing approved action %q", want)
