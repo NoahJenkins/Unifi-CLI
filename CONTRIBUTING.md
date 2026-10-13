@@ -114,6 +114,13 @@ development. Keep reports private, redacted, and uncommitted.
 Dependabot patch and minor updates are grouped by ecosystem. Major updates and
 changes that affect controller wire behavior require manual review.
 
+Release action updates must also update the approved immutable pins in
+`release_pipeline_test.go` after checking each upstream release tag. Keep
+full-SHA pinning and permission checks. The auto-merge workflow enables eligible
+updates; it does not repair failed checks. Standard-library vulnerability
+failures require a patched Go version in `go.mod`, which Dependabot Go module
+updates do not change.
+
 ## Security reports
 
 Do not disclose vulnerabilities publicly. Follow [SECURITY.md](SECURITY.md).
