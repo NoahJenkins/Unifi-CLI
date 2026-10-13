@@ -123,6 +123,9 @@ func resolveCIRoutingValue(t *testing.T, value string, context map[string]string
 	expression := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "${{"), "}}"))
 	for _, operand := range strings.Split(expression, "||") {
 		key := strings.TrimSpace(operand)
+		if strings.HasPrefix(key, "'") && strings.HasSuffix(key, "'") {
+			return strings.Trim(key, "'")
+		}
 		result, ok := context[key]
 		if !ok && key != "matrix.runner" {
 			t.Fatalf("unsupported routing operand: %s", key)
@@ -132,6 +135,38 @@ func resolveCIRoutingValue(t *testing.T, value string, context map[string]string
 		}
 	}
 	return ""
+}
+
+func TestCIRoutingSelectorFailureRetainsRequiredChecks(t *testing.T) {
+	jobs := mapValue(t, readYAMLMap(t, ".github/workflows/ci.yml"), "jobs")
+	context := map[string]string{"needs.runner-routing.outputs.linux_runner": ""}
+	for _, id := range []string{"test", "native-keyring", "vulnerability-scan", "fuzz"} {
+		t.Run(id, func(t *testing.T) {
+			job := mapValue(t, jobs, id)
+			// A status function overrides the implicit success() dependency
+			// gate. !cancelled() still honors workflow cancellation.
+			if job["if"] != "${{ !cancelled() }}" {
+				t.Fatal("required checks must run after selector failure while honoring cancellation")
+			}
+			if id == "test" || id == "native-keyring" {
+				matrix := mapValue(t, mapValue(t, job, "strategy"), "matrix")
+				for _, platform := range stringSliceValue(t, matrix, "os") {
+					leg := map[string]string{"matrix.os": platform}
+					for _, raw := range matrix["include"].([]any) {
+						entry := raw.(map[string]any)
+						if entry["os"] == platform {
+							leg["matrix.runner"] = resolveCIRoutingValue(t, fmt.Sprint(entry["runner"]), context)
+						}
+					}
+					if got := resolveCIRoutingValue(t, fmt.Sprint(job["runs-on"]), leg); got != platform {
+						t.Errorf("fallback runner = %s, want %s", got, platform)
+					}
+				}
+			} else if got := resolveCIRoutingValue(t, fmt.Sprint(job["runs-on"]), context); got != "ubuntu-latest" {
+				t.Errorf("fallback runner = %s, want ubuntu-latest", got)
+			}
+		})
+	}
 }
 
 func TestCICheckContextsRemainStable(t *testing.T) {

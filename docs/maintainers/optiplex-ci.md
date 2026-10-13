@@ -16,9 +16,11 @@ repositories and unknown event types stay hosted.
 The new **select Linux CI runner** job therefore runs a case-sensitive Bash
 selector on `ubuntu-latest`, without checking out or running PR code. Its
 output is one of two constant labels. The four scoped jobs now depend on
-this selector. This added hosted job and dependency are the only scheduling
-compatibility adjustment. Selector failure blocks dependent checks; its
-timeout is five minutes.
+this selector. This hosted job, dependency, and status condition are the
+scheduling compatibility adjustment. Its timeout is five minutes. Missing
+selector output falls back to hosted runners; `!cancelled()` lets required
+checks execute after selector failure while honoring workflow cancellation.
+This avoids [required checks being accepted when skipped after a failed dependency](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 `matrix.os` retains its original values. An `include` entry adds a scheduling
 `runner` only for the Linux leg; macOS and Windows fall back to `matrix.os`.
@@ -77,7 +79,8 @@ it. Lifecycle isolation and cleanup belong to the infrastructure controller.
 `TestCIRunnerRouting` executes the workflow's actual Bash selector with
 synthetic inputs and follows its output through the real scheduling matrices.
 It covers enabled, disabled, absent, forks, Dependabot forks, malformed values,
-and case-sensitive opt-in. `TestCICheckContextsRemainStable` protects names.
+and case-sensitive opt-in. Selector-failure coverage protects hosted fallback
+and required-check execution. `TestCICheckContextsRemainStable` protects names.
 Run repository gates with Go 1.26.9 and validate all workflows with actionlint.
 Existing tests still protect race mode, native keyring setup, seals and provenance.
 
