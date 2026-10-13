@@ -9,8 +9,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - Experimental WLAN access-point selection with repeatable `--broadcasting-ap`
-  UUIDs and an `--all-aps` reset. Updates retain the plan, confirmation,
-  experimental, high-impact, target-drift, and verification gates.
+  UUIDs and an `--all-aps` reset. Updates retain routine risk classification,
+  planning, `--experimental`, `--yes`, target-drift checks, and verification.
 
 - Experimental modern firewall-policy create flags for one exact source IPv4
   address, one exact destination IPv4 address, and one exact TCP destination
