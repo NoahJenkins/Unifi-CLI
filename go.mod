@@ -1,6 +1,6 @@
 module github.com/noahjenkins/unifi-cli
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3

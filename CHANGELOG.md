@@ -21,6 +21,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The minimum Go toolchain is 1.26.9 to include the October 2026 standard-library
+  security fixes. CI and release builds use the version declared in `go.mod`.
+
 - Firewall create now verifies the returned immutable policy ID by reading
   that exact policy and comparing the complete security scope. Schema-v1
   firewall data exposes optional typed source and destination filter objects.
