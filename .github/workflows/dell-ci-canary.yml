@@ -39,16 +39,24 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os, pathlib, stat
-          assert os.geteuid() != 0
+          def require(condition):
+              if not condition:
+                  raise SystemExit('Guest identity verification failed')
+          def verify_hook(path):
+              hook = path.lstat()
+              require(stat.S_ISREG(hook.st_mode) and hook.st_uid == 0 and stat.S_IMODE(hook.st_mode) == 0o555)
+              for parent in path.parents:
+                  info = parent.lstat()
+                  require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not os.access(parent, os.W_OK))
+          require(os.geteuid() != 0)
           profile = pathlib.Path('/opt/dell-ci/profile').read_text().strip()
-          assert profile == os.environ['EXPECTED_RUNNER_PROFILE']
-          hook = pathlib.Path('/opt/dell-ci/admit.sh').stat()
-          assert hook.st_uid == 0 and stat.S_IMODE(hook.st_mode) == 0o555
+          require(profile == os.environ['EXPECTED_RUNNER_PROFILE'])
+          verify_hook(pathlib.Path('/opt/dell-ci/admit.sh'))
           port = pathlib.Path('/dev/virtio-ports/dell-ci.admission').stat()
-          assert port.st_uid == os.geteuid() and stat.S_IMODE(port.st_mode) == 0o600
-          assert not pathlib.Path('/run/dell-ci-jit').exists()
-          assert not pathlib.Path('/etc/dell-ci/credentials/github-app.pem').exists()
-          assert not any(line.split()[2] in {'9p', 'virtiofs', 'nfs', 'cifs'} for line in pathlib.Path('/proc/mounts').read_text().splitlines())
+          require(port.st_uid == os.geteuid() and stat.S_IMODE(port.st_mode) == 0o600)
+          require(not pathlib.Path('/run/dell-ci-jit').exists())
+          require(not pathlib.Path('/etc/dell-ci/credentials/github-app.pem').exists())
+          require(not any(line.split()[2] in {'9p', 'virtiofs', 'nfs', 'cifs'} for line in pathlib.Path('/proc/mounts').read_text().splitlines()))
           evidence = {key: os.environ[key] for key in ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'RUNNER_NAME', 'RUNNER_OS', 'RUNNER_ARCH']}
           evidence.update({'profile': profile, 'guest_checks_passed': True})
           pathlib.Path('dell-ci-canary.json').write_text(json.dumps(evidence) + '\n')
