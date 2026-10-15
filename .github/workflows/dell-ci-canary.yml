@@ -42,6 +42,15 @@ jobs:
           def require(condition):
               if not condition:
                   raise SystemExit('Guest identity verification failed')
+          def verify_profile(path, expected):
+              marker = path.lstat()
+              require(stat.S_ISREG(marker.st_mode) and marker.st_uid == 0 and not os.access(path, os.W_OK))
+              profile = path.read_text().strip()
+              require(profile == expected)
+              return profile
+          def verify_port(path):
+              port = path.stat()
+              require(stat.S_ISCHR(port.st_mode) and port.st_uid == os.geteuid() and stat.S_IMODE(port.st_mode) == 0o600)
           def verify_hook(path):
               hook = path.lstat()
               require(stat.S_ISREG(hook.st_mode) and hook.st_uid == 0 and stat.S_IMODE(hook.st_mode) == 0o555)
@@ -49,11 +58,9 @@ jobs:
                   info = parent.lstat()
                   require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not os.access(parent, os.W_OK))
           require(os.geteuid() != 0)
-          profile = pathlib.Path('/opt/dell-ci/profile').read_text().strip()
-          require(profile == os.environ['EXPECTED_RUNNER_PROFILE'])
+          profile = verify_profile(pathlib.Path('/opt/dell-ci/profile'), os.environ['EXPECTED_RUNNER_PROFILE'])
           verify_hook(pathlib.Path('/opt/dell-ci/admit.sh'))
-          port = pathlib.Path('/dev/virtio-ports/dell-ci.admission').stat()
-          require(port.st_uid == os.geteuid() and stat.S_IMODE(port.st_mode) == 0o600)
+          verify_port(pathlib.Path('/dev/virtio-ports/dell-ci.admission'))
           require(not pathlib.Path('/run/dell-ci-jit').exists())
           require(not pathlib.Path('/etc/dell-ci/credentials/github-app.pem').exists())
           require(not any(line.split()[2] in {'9p', 'virtiofs', 'nfs', 'cifs'} for line in pathlib.Path('/proc/mounts').read_text().splitlines()))
