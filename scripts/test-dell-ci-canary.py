@@ -27,11 +27,15 @@ class GuestIdentityTests(unittest.TestCase):
         with patch('os.access', return_value=writable):
             return self.validators['verify_profile'](path, 'ubuntu24')
 
-    def port(self, mode=stat.S_IFCHR | 0o600, uid=1000):
+    def port(self, mode=stat.S_IFCHR | 0o600, uid=1000, link_uid=0, parent_uid=0, writable_parent=False):
         path = Mock()
+        path.lstat.return_value = types.SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=link_uid)
+        parent = Mock()
+        parent.lstat.return_value = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=parent_uid)
+        path.parents = [parent]
         # stat follows the intentionally symlinked udev path to its target.
         path.stat.return_value = types.SimpleNamespace(st_mode=mode, st_uid=uid)
-        with patch('os.geteuid', return_value=1000):
+        with patch('os.geteuid', return_value=1000), patch('os.access', return_value=writable_parent):
             self.validators['verify_port'](path)
         path.stat.assert_called_once_with()
 
@@ -67,6 +71,17 @@ class GuestIdentityTests(unittest.TestCase):
             self.port(uid=0)
         with self.assertRaises(SystemExit):
             self.port(mode=stat.S_IFCHR | 0o660)
+
+    def test_port_rejects_unprotected_path(self):
+        for arguments in ({'link_uid': 1000}, {'parent_uid': 1000}, {'writable_parent': True}):
+            with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
+                self.port(**arguments)
+
+    def test_shared_mount_types(self):
+        self.validators['verify_mounts'](['/dev/vda1 / ext4 rw 0 0'])
+        for kind in ('9p', 'virtiofs', 'nfs', 'nfs4', 'cifs'):
+            with self.subTest(kind=kind), self.assertRaises(SystemExit):
+                self.validators['verify_mounts']([f'synthetic /mnt/shared {kind} rw 0 0'])
 
 
 if __name__ == '__main__':

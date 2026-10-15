@@ -49,21 +49,28 @@ jobs:
               require(profile == expected)
               return profile
           def verify_port(path):
+              link = path.lstat()
+              require(stat.S_ISLNK(link.st_mode) and link.st_uid == 0)
+              verify_parents(path)
               port = path.stat()
               require(stat.S_ISCHR(port.st_mode) and port.st_uid == os.geteuid() and stat.S_IMODE(port.st_mode) == 0o600)
-          def verify_hook(path):
-              hook = path.lstat()
-              require(stat.S_ISREG(hook.st_mode) and hook.st_uid == 0 and stat.S_IMODE(hook.st_mode) == 0o555)
+          def verify_parents(path):
               for parent in path.parents:
                   info = parent.lstat()
                   require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not os.access(parent, os.W_OK))
+          def verify_hook(path):
+              hook = path.lstat()
+              require(stat.S_ISREG(hook.st_mode) and hook.st_uid == 0 and stat.S_IMODE(hook.st_mode) == 0o555)
+              verify_parents(path)
+          def verify_mounts(lines):
+              require(not any(line.split()[2] in {'9p', 'virtiofs', 'nfs', 'nfs4', 'cifs'} for line in lines))
           require(os.geteuid() != 0)
           profile = verify_profile(pathlib.Path('/opt/dell-ci/profile'), os.environ['EXPECTED_RUNNER_PROFILE'])
           verify_hook(pathlib.Path('/opt/dell-ci/admit.sh'))
           verify_port(pathlib.Path('/dev/virtio-ports/dell-ci.admission'))
           require(not pathlib.Path('/run/dell-ci-jit').exists())
           require(not pathlib.Path('/etc/dell-ci/credentials/github-app.pem').exists())
-          require(not any(line.split()[2] in {'9p', 'virtiofs', 'nfs', 'cifs'} for line in pathlib.Path('/proc/mounts').read_text().splitlines()))
+          verify_mounts(pathlib.Path('/proc/mounts').read_text().splitlines())
           evidence = {key: os.environ[key] for key in ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'RUNNER_NAME', 'RUNNER_OS', 'RUNNER_ARCH']}
           evidence.update({'profile': profile, 'guest_checks_passed': True})
           pathlib.Path('dell-ci-canary.json').write_text(json.dumps(evidence) + '\n')
