@@ -107,6 +107,10 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 Do not weaken, skip, or disable a test to obtain a green result. If a test is
 incorrect, explain the evidence before changing its contract.
 
+For Go 1.26.9, run build-info-sensitive release tests in a full clone. Its VCS
+discovery can omit a linked worktree's `.git` file and produce an unversioned
+module. Preserve the worktree; use a disposable clone for these checks.
+
 ## Live Controller Safety
 
 - Unit tests and schema-derived fixtures do not authorize live mutations.
