@@ -121,6 +121,14 @@ updates; it does not repair failed checks. Standard-library vulnerability
 failures require a patched Go toolchain. Check `go.mod` separately when
 module updates leave a standard-library vulnerability failure unresolved.
 
+## CI runner preparation
+
+Linux x64 CI can opt in to disposable Dell workers while preserving hosted
+fork PR execution and existing required check names. See the
+[routing and infrastructure handoff](docs/maintainers/optiplex-ci.md) for image
+requirements, the exact opt-in policy, live acceptance, and rollback. Release
+and dependency auto-merge workflows remain hosted.
+
 ## Security reports
 
 Do not disclose vulnerabilities publicly. Follow [SECURITY.md](SECURITY.md).
