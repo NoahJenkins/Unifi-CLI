@@ -117,3 +117,16 @@ and vulnerability checks. The earlier x64 emulation run exposed a cold cross-bui
 fixture timeout; the fixed prebuild avoids charging that setup to each fixture's
 five-minute context. Production remains Linux AMD64. A hosted AMD64 canary and
 real App/provider publication remain unverified.
+
+### Recovery provenance
+
+Automatic merge and recovery require controller code from the current `main`
+commit. A queued run from an older workflow revision leaves the merge gate
+pending and cancels existing automatic merge intent.
+
+CI retry reservations record the authenticated workflow run ID and run attempt.
+A later interrupted attempt on the same PR commit can use the second retry, but
+a duplicate event cannot repeat a write. The run and attempt are checked again
+before dispatch. Old reservations without these fields remain consumed and block
+repeat recovery for that head. The two-attempt lifetime and daily limits still
+apply. GitHub's accepted, bodyless HTTP 201 rerun response is treated as success.

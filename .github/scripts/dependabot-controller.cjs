@@ -44,7 +44,9 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
   const health = await release()
   if(health.kind !== 'ready')return stop(health.kind === 'blocked' ? 'blocked' : 'waiting', health.reason)
   const main = await client.getMain()
-  const decision = evaluate(await client.snapshot(pr, main))
+  if (config.workflowSha !== main) return stop('waiting', 'Wait for controller code from current main before automatic merge or recovery.')
+  const initialSnapshot = await client.snapshot(pr, main)
+  const decision = evaluate(initialSnapshot)
   if (decision.kind === 'ready') {
     if (!protectionAllowsMerge(await client.getProtection(), config.appId)) return stop('blocked', 'Require current-base CI, resolved review threads, CodeQL and an App-bound Dependabot Merge Gate in main rulesets.')
     await assertFresh(client, pr, main)
@@ -67,14 +69,14 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
     if (!defaultBranchEvent(config.eventName) || config.workSourceVerified !== true || config.runAttempt !== 1 || config.workflowSha !== main || config.ref !== 'refs/heads/main') return stop('waiting','Wait for a trusted current-main recovery run.')
     if (!protectionAllowsMerge(await client.getProtection(),config.appId))return stop('blocked','Required branch gates are not configured.')
     if (!state.ledger) Object.assign(state, await client.getLedger())
-    const next = reserve(state.ledger,{pr:number,prId:pr.node_id,head:pr.head.sha,base:main,kind:decision.kind},config.now)
+    const next = reserve(state.ledger,{pr:number,prId:pr.node_id,head:pr.head.sha,base:main,kind: decision.kind, ...(decision.kind === 'retry' ? { ciRunId: initialSnapshot.ci?.id, ciRunAttempt: initialSnapshot.ci?.run_attempt } : {}) }, config.now)
     if (!next.reservation) return stop('blocked',next.reason)
     await assertFresh(client,pr,main)
     await client.saveLedger(next.ledger,state); state.ledger=next.ledger
     if(decision.kind==='refresh') await client.updateBranch(pr)
     else {
       const snapshot=await client.snapshot(pr,main)
-      if(evaluate(snapshot).kind!=='retry') return stop('waiting','CI changed after recovery reservation; attempt remains consumed.')
+      if(evaluate(snapshot).kind!=='retry' || snapshot.ci?.id !== next.reservation.ciRunId || snapshot.ci?.run_attempt !== next.reservation.ciRunAttempt) return stop('waiting','CI changed after recovery reservation; attempt remains consumed.')
       await client.retryCi(snapshot.ci.id)
     }
     return stop('waiting',`Requested ${decision.kind}; recovery attempt is consumed. Await fresh CI.`)

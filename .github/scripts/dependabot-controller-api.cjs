@@ -10,7 +10,7 @@ const CLAIM = '<!-- dependabot-opencode-claim:v1 -->'
 function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms => new Promise(resolve => setTimeout(resolve,ms))) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repo)) throw new Error('Invalid repository')
   const root = `/repos/${config.repo}`
-  async function request(method, path, body, useWrite = method !== 'GET') {
+  async function request(method, path, body, useWrite = method !== 'GET', emptyCreated = false) {
     if (!path.startsWith('/') || path.startsWith('//') || /[\r\n]/.test(path)) throw new Error('Invalid API path')
     let response
     for(let attempt=0; attempt<3; attempt++) {
@@ -26,7 +26,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
      break
     }
     if (!response.ok) throw new Error(`GitHub HTTP ${response.status}: ${method} ${path.split('?')[0]}`)
-    if (response.status === 204) return null
+    if (response.status === 204 || (emptyCreated && response.status === 201)) return null
     const data = await response.json()
     if (data.errors) throw new Error('GitHub GraphQL request rejected; no automatic retry')
     return data
@@ -158,7 +158,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
     },
     disableMerge: (pr) => request('POST', '/graphql', { query: 'mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { id } } }', variables: { id: pr.node_id } }),
     async approve() { /* Existing UniFi policy requires no formal approval. Independent review is enforced by the App gate. */ },
-    retryCi: id=>{if(!Number.isSafeInteger(id)||id<1)throw Error('Invalid CI run');return request('POST',`${root}/actions/runs/${id}/rerun`)},
+    retryCi: id=>{if(!Number.isSafeInteger(id)||id<1)throw Error('Invalid CI run');return request('POST',`${root}/actions/runs/${id}/rerun`,undefined,true,true)},
     updateBranch: (pr) => request('PUT', `${root}/pulls/${pr.number}/update-branch`, { expected_head_sha: pr.head.sha }),
     getLedger: async () => readLedger(await list(`${root}/issues/${config.stateIssue}/comments`), config.appBotId),
     async saveLedger(ledger, state) {

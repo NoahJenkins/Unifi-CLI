@@ -98,7 +98,7 @@ test('interrupted trusted CI gets one bounded retry decision before missing chec
 test('refresh/retry budgets do not consume the two repair reservations',()=>{
  let ledger={version:1,reservations:[]};
  for(const kind of ['refresh','retry','repair']){
-  const r=reserve(ledger,{pr:1,prId:'PR_1',head:sha,base:next,kind},'2026-10-20T12:00:00.000Z');assert.ok(r.reservation);ledger=r.ledger;
+  const r=reserve(ledger,{pr:1,prId:'PR_1',head:sha,base:next,kind,...(kind==='retry'?{ciRunId:55,ciRunAttempt:1}:{})},'2026-10-20T12:00:00.000Z');assert.ok(r.reservation);ledger=r.ledger;
  }
  assert.ok(reserve(ledger,{pr:1,prId:'PR_1',head:next,base:sha,kind:'repair'},'2026-10-21T12:00:00.000Z').reservation);
 });
