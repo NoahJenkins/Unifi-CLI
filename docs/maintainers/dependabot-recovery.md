@@ -130,3 +130,5 @@ a duplicate event cannot repeat a write. The run and attempt are checked again
 before dispatch. Old reservations without these fields remain consumed and block
 repeat recovery for that head. The two-attempt lifetime and daily limits still
 apply. GitHub's accepted, bodyless HTTP 201 rerun response is treated as success.
+
+The scope check compares PR file changes against the authenticated common ancestor of current main and the PR head. This permits bounded refresh when main changed unrelated protected settings. After refresh, the common ancestor must equal current main before merge can proceed. Missing or contradictory comparison evidence blocks the controller.

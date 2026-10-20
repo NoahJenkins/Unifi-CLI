@@ -82,10 +82,16 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
     async snapshot(pr, main) {
       const files = await list(`${root}/pulls/${pr.number}/files`)
       if (files.length !== pr.changed_files || files.length > 100) throw new Error('Incomplete or excessive PR file list')
+      const compare = await request('GET', `${root}/compare/${main}...${pr.head.sha}`)
+      const containsMain = ['ahead', 'identical'].includes(compare.status)
+      const scopeBase = compare.merge_base_commit?.sha
+      if (!['ahead', 'identical', 'behind', 'diverged'].includes(compare.status) || !/^[0-9a-f]{40}$/.test(scopeBase || '') || (containsMain && scopeBase !== main)) throw new Error('Invalid PR merge base evidence')
+      // PR file lists describe the delta from this common ancestor. Current main
+      // may contain unrelated policy edits until a bounded branch refresh lands.
       const changes = []
       for (const file of files) {
         const needText = ['go.mod','release_pipeline_test.go'].includes(file.filename) || file.filename.startsWith('.github/workflows/')
-        changes.push({ ...file, before: needText && file.status === 'modified' ? await content(file.filename, main) : '', after: needText && !['removed', 'renamed'].includes(file.status) ? await content(file.filename, pr.head.sha) : '' })
+        changes.push({ ...file, before: needText && file.status === 'modified' ? await content(file.filename, scopeBase) : '', after: needText && !['removed', 'renamed'].includes(file.status) ? await content(file.filename, pr.head.sha) : '' })
       }
       const scope = evaluateScope(changes)
       if (scope.allowed) await client.verifyActionPins(changes.filter((file) => file.filename.startsWith('.github/workflows/')))
@@ -98,8 +104,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       const statuses = []
       const ciAssociations = Array.isArray(ci?.pull_requests) && ci.pull_requests.length===0 ? await list(`${root}/commits/${pr.head.sha}/pulls`) : []
       const independentReview = await client.getIndependentReview(pr,main,files.map(f=>f.filename),checks)
-      const compare = await request('GET', `${root}/compare/${main}...${pr.head.sha}`)
-      return { pr, mainSha: main, repositoryId: config.repositoryId, scope, containsMain: ['ahead', 'identical'].includes(compare.status), ciWorkflowId: workflow.id, ci, ciAssociations, jobs, checks, statuses, independentReview, releaseHealth:await client.getReleaseHealth() }
+      return { pr, mainSha: main, repositoryId: config.repositoryId, scope, containsMain, ciWorkflowId: workflow.id, ci, ciAssociations, jobs, checks, statuses, independentReview, releaseHealth:await client.getReleaseHealth() }
     },
     async getReleaseHealth() {
       const workflow=await request('GET',`${root}/actions/workflows/release.yml`)
