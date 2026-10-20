@@ -246,8 +246,13 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       if(pr.node_id!==task.prId || pr.head.sha!==task.head || pr.base.sha!==task.base || await client.getMain()!==task.base)throw Error('Snapshot head/base changed')
       const files=await list(`${root}/pulls/${task.pr}/files`)
       if(files.length!==pr.changed_files || files.length>64 || !files.length)throw Error('Incomplete snapshot file set')
+      const compare=await request('GET',`${root}/compare/${task.base}...${task.head}`)
+      const scopeBase=compare.merge_base_commit?.sha
+      if(!['ahead','identical','behind','diverged'].includes(compare.status) || !/^[0-9a-f]{40}$/.test(scopeBase || '') || (['ahead','identical'].includes(compare.status) && scopeBase!==task.base))throw Error('Invalid repair merge base evidence')
+      // Keep current main available for conflict repair; authorize the PR delta
+      // against its common ancestor, matching GitHub's pull-file list.
       const baseFiles={};const headFiles={};const changes=[]
-      for(const f of files){if(['removed','renamed'].includes(f.status))throw Error('Unsupported changed file');baseFiles[f.filename]=f.status==='added'?'':await content(f.filename,task.base);headFiles[f.filename]=await content(f.filename,task.head);changes.push({...f,before:baseFiles[f.filename],after:headFiles[f.filename]})}
+      for(const f of files){if(['removed','renamed'].includes(f.status))throw Error('Unsupported changed file');baseFiles[f.filename]=f.status==='added'?'':await content(f.filename,task.base);headFiles[f.filename]=await content(f.filename,task.head);changes.push({...f,before:f.status==='added'?'':scopeBase===task.base?baseFiles[f.filename]:await content(f.filename,scopeBase),after:headFiles[f.filename]})}
       const scope=evaluateScope(changes);if(!scope.allowed)throw Error(scope.reason)
       await client.verifyActionPins(changes.filter(f=>f.filename.startsWith('.github/workflows/')))
       const contextFiles={};const tree=await request('GET',`${root}/git/trees/${task.head}?recursive=1`)
