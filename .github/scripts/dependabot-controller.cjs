@@ -2,7 +2,7 @@
 const { REQUIRED_CHECKS, GATE, DEPENDABOT_ID, eligiblePr, evaluateCandidate } = require('./dependabot-controller-policy.cjs')
 const { verifyRun } = require('./dependabot-opencode-publish.cjs')
 const { defaultBranchEvent } = require('./dependabot-opencode-contract.cjs')
-const { reserve, validateTask } = require('./dependabot-controller-ledger.cjs')
+const { reserve, validateTask, MAX_TASKS } = require('./dependabot-controller-ledger.cjs')
 
 function protectionAllowsMerge(protection, appId) {
   const checks = protection.required_status_checks?.checks || []
@@ -82,6 +82,7 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
     return stop('waiting',`Requested ${decision.kind}; recovery attempt is consumed. Await fresh CI.`)
   }
   if (['repair', 'review'].includes(decision.kind)) {
+    if (tasks.length >= MAX_TASKS) return stop('waiting', 'Task batch is full. Defer to the next reconciliation without consuming a reservation.')
     if (!defaultBranchEvent(config.eventName) || config.workSourceVerified !== true || config.runAttempt !== 1 || config.workflowSha !== main || config.ref !== 'refs/heads/main') return stop('waiting', 'Wait for a controller run from current main.')
     if (!config.agentEnabled) return stop('blocked', `${decision.reason} Agent dispatch is disabled pending credentials and OpenCode settings.`)
     // Fail closed before spending credits if the required gate can be forged or omitted.

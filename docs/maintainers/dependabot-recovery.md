@@ -132,3 +132,5 @@ repeat recovery for that head. The two-attempt lifetime and daily limits still
 apply. GitHub's accepted, bodyless HTTP 201 rerun response is treated as success.
 
 The scope check compares PR file changes against the authenticated common ancestor of current main and the PR head. This permits bounded refresh when main changed unrelated protected settings. After refresh, the common ancestor must equal current main before merge can proceed. Missing or contradictory comparison evidence blocks the controller.
+
+Each reconciliation reserves at most ten model tasks, matching the claim limit. Excess work waits for another run without consuming a reservation, including when reconciliation crosses UTC midnight. Daily and per-PR limits remain unchanged.

@@ -2,6 +2,7 @@
 const fs=require('node:fs');const path=require('node:path');const {randomBytes}=require('node:crypto')
 const {createClient}=require('./dependabot-controller-api.cjs')
 const {reconcileOne,claimOne}=require('./dependabot-controller.cjs')
+const {MAX_TASKS}=require('./dependabot-controller-ledger.cjs')
 const {evaluateCandidate}=require('./dependabot-controller-policy.cjs')
 const {runAgent}=require('./dependabot-opencode-worker.cjs')
 const {validateRepair,rejectLinks}=require('./dependabot-opencode-validate.cjs')
@@ -42,7 +43,7 @@ async function run(env=process.env,mode=process.argv[2]) {
  }
  if(privileged && !env.DEPENDABOT_APP_TOKEN)throw Error('Controller App credential is missing')
  if(mode==='claim') {
-  const tasks=JSON.parse(env.DEPENDABOT_TASKS || '[]');if(!Array.isArray(tasks)||tasks.length>10)throw Error('Invalid claim batch')
+  const tasks=JSON.parse(env.DEPENDABOT_TASKS || '[]');if(!Array.isArray(tasks)||tasks.length>MAX_TASKS)throw Error('Invalid claim batch')
   const claimed=[];let failed=false
   for(const t of tasks){try{const result=await claimOne(client,config,t);if(result)claimed.push(result)}catch{failed=true}}
   output(env,{tasks:claimed,has_tasks:claimed.length>0,app_slug:config.appSlug})

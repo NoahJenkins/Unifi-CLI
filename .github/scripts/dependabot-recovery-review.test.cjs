@@ -89,3 +89,21 @@ runTest('reconciliation dispatches two distinct failed CI attempts and never dup
  assert.equal(f.events.filter(e => e === 'retry').length, 2)
  assert.equal(state.ledger.reservations.length, 2)
 })
+
+runTest('task batch capacity defers reservations across a UTC day boundary', async () => {
+ const f=fixture(), state={}, tasks=[];
+ const template=await f.client.getPr(1);
+ let current;
+ f.client.getPr=async()=>current;
+ for(let number=1;number<=11;number++) {
+  current={...template,number,node_id:`PR_${number}`,head:{...template.head,sha:number.toString(16).padStart(40,'0')}};
+  f.config.now=number<=8?'2026-10-20T23:59:00.000Z':'2026-10-21T00:00:00.000Z';
+  const result=await reconcileOne(f.client,f.config,number,state,tasks,()=>({kind:'review',reason:'review needed'}));
+  if(number===11)assert.equal(result.kind,'waiting');
+ }
+ assert.equal(tasks.length,10);assert.equal(state.ledger.reservations.length,10);
+ assert.ok(!state.ledger.reservations.some(item=>item.pr===11));
+ const next=[];
+ assert.equal((await reconcileOne(f.client,f.config,11,state,next,()=>({kind:'review',reason:'review needed'}))).kind,'review');
+ assert.equal(next.length,1);assert.equal(state.ledger.reservations.length,11);
+});
