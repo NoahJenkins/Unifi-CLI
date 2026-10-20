@@ -157,7 +157,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install pinned Syft for archive SBOMs
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.51.0
 
@@ -177,7 +177,7 @@ jobs:
           echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Build release artifacts without publishing
-        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         env:
           GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
         with:
@@ -487,7 +487,7 @@ jobs:
 
       - name: Attest exact release assets from tag push
         if: github.event_name != 'workflow_dispatch'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/attest/*.tar.gz
@@ -497,7 +497,7 @@ jobs:
 
       - name: Attest resumed exact-source release assets
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/attest/*.tar.gz

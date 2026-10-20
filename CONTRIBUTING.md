@@ -116,8 +116,9 @@ changes that affect controller wire behavior require manual review.
 
 Release action updates must also update the approved immutable pins in
 `release_pipeline_test.go` after checking each upstream release tag. Keep
-full-SHA pinning and permission checks. The auto-merge workflow enables eligible
-updates; it does not repair failed checks. Standard-library vulnerability
+full-SHA pinning and permission checks. The recovery workflow can repair eligible failures within bounded attempts.
+It requires independent review and new checks on the latest commit. See the
+[recovery setup and limits](docs/maintainers/dependabot-recovery.md). Standard-library vulnerability
 failures require a patched Go toolchain. Check `go.mod` separately when
 module updates leave a standard-library vulnerability failure unresolved.
 
