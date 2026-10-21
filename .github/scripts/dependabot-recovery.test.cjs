@@ -219,13 +219,14 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
  const mainText=original.replace('1.26.9','1.26.10')+'// trusted main policy\n';
  const pr={id:1,node_id:'PR_one',number:1,changed_files:1,head:{sha:head,ref:'dependabot/go_modules/group',repo:{id:1}},base:{sha:main,ref:'main',repo:{id:1}},user:{id:49699333,type:'Bot',login:'dependabot[bot]'},body:'Bumps next from 16.0.0 to 16.0.1',title:'Bump next from 16.0.0 to 16.0.1',state:'open',draft:false,mergeable:true,mergeable_state:'behind'};
  let comparison={status:'diverged',merge_base_commit:{sha:ancestor}};
- let headText=updated;
+ let headText=updated;let ancestorText=original;
  const reads=[];
  const client=createClient({repo:'o/r',repositoryId:1},'read',undefined,async(url)=>{
   const parsed=new URL(url), path=parsed.pathname.replace('/repos/o/r','');let data;
   if(path==='/pulls/1/files')data=[{filename,status:'modified'}];
   else if(path.startsWith('/compare/'))data=comparison;
-  else if(path==='/contents/'+filename){const ref=parsed.searchParams.get('ref');reads.push(ref);const value=ref===main?mainText:ref===ancestor?original:ref===head?headText:null;assert.notEqual(value,null);data={type:'file',size:value.length,encoding:'base64',content:Buffer.from(value).toString('base64')};}
+  else if(path==='/contents/'+filename){const ref=parsed.searchParams.get('ref');reads.push(ref);const value=ref===main?mainText:ref===ancestor?ancestorText:ref===head?headText:null;assert.notEqual(value,null);data={sha:'d'.repeat(40),type:'file',size:value.length,encoding:'base64',content:Buffer.from(value).toString('base64')};}
+  else if(path==='/git/blobs/'+'d'.repeat(40))data={encoding:'base64',content:''};
   else if(path==='/actions/workflows/ci.yml')data={id:10};
   else if(path==='/actions/workflows/10/runs')data={workflow_runs:[]};
   else if(path.endsWith('/check-runs'))data={check_runs:[]};
@@ -242,6 +243,9 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
  assert.ok(reads.includes(ancestor));assert.ok(!reads.includes(main));
  headText=mainText.replace('v1.0.0','v1.0.1');
  const repaired=await client.snapshot(pr,main);assert.equal(repaired.scope.allowed,true);assert.equal(evaluateCandidate(repaired).kind,'refresh');
+ ancestorText='';
+ const emptyAncestor=await client.snapshot(pr,main);assert.equal(emptyAncestor.scope.allowed,true);assert.equal(evaluateCandidate(emptyAncestor).kind,'refresh');
+ ancestorText=original;
  headText=updated.replace('example.com/cli','example.com/other');
  assert.equal((await client.snapshot(pr,main)).scope.allowed,false);
  headText=updated;comparison={status:'ahead',merge_base_commit:{sha:main}};

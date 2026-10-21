@@ -97,7 +97,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       // policy edits while ancestry still needs the bounded branch refresh.
       if(scopeBase!==main)for(let i=0;i<changes.length;i++) {
         const change=changes[i]
-        if(change.status==='modified' && change.before && !evaluateScope([change]).allowed)changes[i]=adoptMainBaseline(change,await content(change.filename,main),evaluateScope)
+        if(change.status==='modified' && !evaluateScope([change]).allowed)changes[i]=adoptMainBaseline(change,await content(change.filename,main),evaluateScope)
       }
       const scope = evaluateScope(changes)
       if (scope.allowed) await client.verifyActionPins(changes.filter((file) => file.filename.startsWith('.github/workflows/')))

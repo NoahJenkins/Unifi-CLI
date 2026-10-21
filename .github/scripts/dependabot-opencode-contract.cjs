@@ -55,20 +55,72 @@ function validateReview(report, expectedFiles) {
   return {report, passed:report.verdict === 'approve' && Object.values(report.assessment).every(a=>a.status==='pass') && !report.findings.some(f=>['critical','high','medium'].includes(f.severity))}
 }
 function retainsImmutableActions(before,after) {
-  // Conservative reference inventory also covers quoted and uncommented pins.
+  // Bind pins to their workflow line and action, including quoted/uncommented refs.
+  // Aggregate counts would let a pinned step trade places with a mutable step.
   const pins=text=>{
-    const counts=new Map()
-    for(const match of text.matchAll(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*["']?([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})(?=[\s"'#]|$)/gm))counts.set(match[1],(counts.get(match[1]) || 0)+1)
-    return counts
+    const positions=new Set()
+    for(const [index,line] of text.split('\n').entries()) {
+      const match=line.match(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*["']?([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})(?=[\s"'#]|$)/)
+      if(match)positions.add(`${index}:${match[1]}`)
+    }
+    return positions
   }
   const previous=pins(before), next=pins(after)
-  return [...previous].every(([action,count])=>(next.get(action) || 0)>=count)
+  return [...previous].every(position=>next.has(position))
 }
 function adoptMainBaseline(change,mainContent,policy) {
   if(!policy || policy([change]).allowed || change.status!=='modified' || typeof mainContent!=='string')return change
   if(change.filename.startsWith('.github/workflows/') && !retainsImmutableActions(change.before,change.after))return change
   const fromMain={...change,before:mainContent}
   return policy([fromMain]).allowed?fromMain:change
+}
+function repairTargets(filename,content) {
+  const targets=new Map()
+  const add=(key,value)=>{if(targets.has(key))throw Error('Ambiguous dependency target');targets.set(key,value)}
+  if(/(^|\/)package\.json$/.test(filename)) {
+    const pkg=JSON.parse(content)
+    for(const group of ['dependencies','devDependencies','optionalDependencies','peerDependencies'])for(const [name,version] of Object.entries(pkg[group] || {}))add(`${group}:${name}`,version)
+    if(pkg.engines?.node)add('engines:node',pkg.engines.node)
+  } else if(filename==='pnpm-workspace.yaml') {
+    let inside=false
+    for(const line of content.split(/\r?\n/)) {
+      if(/^overrides:[ \t]*(?:#.*)?$/.test(line)){inside=true;continue}
+      if(inside && /^\S/.test(line))inside=false
+      if(!inside || !line.trim() || /^[ \t]*#/.test(line))continue
+      const m=line.match(/^  (?:'([^']+)'|"([^"\\]+)"|([^\s:'"]+)):[ \t]*(?:'([^']+)'|"([^"\\]+)"|([^\s#]+))(?:[ \t]+#.*|[ \t]*)$/)
+      if(!m)throw Error('Unsupported override target')
+      add(m[1] || m[2] || m[3],m[4] || m[5] || m[6])
+    }
+  } else if(filename==='go.mod') {
+    for(const m of content.matchAll(/^(go |[ \t]*(?:require )?[^\s]+[ \t]+)(v?\d+\.\d+\.\d+)([ \t]*(?:\/\/ indirect)?)[ \t]*$/gm))add(m[1].trim().replace(/^require /,''),m[2])
+  } else if(filename==='release_pipeline_test.go') {
+    const counts=new Map()
+    for(const m of content.matchAll(/"([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})"/g)) {
+      const n=counts.get(m[1]) || 0;counts.set(m[1],n+1);add(`${m[1]}:${n}`,m[2])
+    }
+  } else if(filename.startsWith('.github/workflows/')) {
+    const {actionPins}=require('./dependabot-controller-policy.cjs');const counts=new Map()
+    for(const pin of actionPins(content)) {
+      const n=counts.get(pin.action) || 0;counts.set(pin.action,n+1)
+      add(`action:${pin.action}:${n}`,{ref:pin.sha || pin.tag,tag:pin.tag || null,pinned:!!pin.sha})
+    }
+    let n=0
+    for(const m of content.matchAll(/^[ \t]*node-version:[ \t]*['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/gm))add(`node:${n++}`,m[1])
+  } else return null
+  return targets
+}
+function retainsRepairTargets(change,mainContent) {
+  try {
+    const head=repairTargets(change.filename,change.before),main=repairTargets(change.filename,mainContent),next=repairTargets(change.filename,change.after)
+    if(!head || !main || !next)return false
+    const equal=(a,b)=>canonical(a ?? null)===canonical(b ?? null)
+    return [...head].every(([key,target])=>{
+      if(equal(target,main.get(key)) || equal(target,next.get(key)))return true
+      // A trusted main SHA may replace the same version's mutable action tag.
+      const candidate=next.get(key)
+      return typeof target==='object' && !target.pinned && candidate?.pinned && target.tag===candidate.tag && equal(candidate,main.get(key))
+    })
+  } catch {return false}
 }
 function scopeChanges(files,snapshot,policy) {
   if(!Array.isArray(snapshot.existingPaths) || snapshot.existingPaths.length>20000 || new Set(snapshot.existingPaths).size!==snapshot.existingPaths.length)throw Error('Complete head inventory is missing')
@@ -78,7 +130,10 @@ function scopeChanges(files,snapshot,policy) {
     const change={filename:f.path,before:snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path]??'',after:f.content,status:existing.has(f.path)?'modified':'added'}
     // Only PR files have authenticated current-main content in the snapshot.
     const mainContent=snapshot.changedFiles?.includes(f.path) && Object.hasOwn(snapshot.baseFiles || {},f.path)?snapshot.baseFiles[f.path]:undefined
-    return adoptMainBaseline(change,mainContent,policy)
+    const adopted=adoptMainBaseline(change,mainContent,policy)
+    // Baseline substitution must not authorize reverting any PR target to main.
+    // Apply this only to repair output, not ancestor-relative reconciliation.
+    return adopted!==change && !retainsRepairTargets(change,mainContent)?change:adopted
   })
 }
 function defaultBranchEvent(event) {return ['workflow_run','status','schedule','workflow_dispatch'].includes(event)}
