@@ -608,3 +608,19 @@ runTest('wildcard Node selectors retain exact targets and repository scope',()=>
   for(const invalid of ['20.x','24.*','24.1.x'])assert.equal(evaluateScope([{filename,status:'modified',before,after:text(invalid)}]).allowed,false,'unsupported selector remains protected');
  }
 });
+
+runTest('commented Node inputs preserve targets and protected comment text',()=>{
+ const {workflowNodeReferences,retainsRepairTargets}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ for(const quote of ['',"'",'"'])for(const [old,next] of [['24.x','26.x'],['24','26'],['24.0.0','24.1.0']])for(const newline of ['\n','\r\n']){
+  const text=version=>`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: ${quote}${version}${quote} # LTS\n`.replace(/\n/g,newline);
+  const before=text(old),after=text(next);
+  const refs=workflowNodeReferences(before);assert.equal(refs.length,1);assert.equal(refs[0].version,old);
+  assert.equal(evaluateScope([{filename,status:'modified',before,after}]).allowed,false);
+  assert.equal(evaluateScope([{filename,status:'modified',before,after:after.replace('# LTS','# changed')}]).allowed,false,'comment edits stay protected');
+  assert.equal(retainsRepairTargets({filename,before:after,after:before},before,before),false,'comments cannot hide rollback');
+  assert.equal(retainsRepairTargets({filename,before:after,after},before,before),true);
+ }
+ const text=value=>`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: ${value}\n`;
+ for(const value of ['24.x#LTS',"'24.x\" # LTS",'"24.x # LTS"'])assert.equal(workflowNodeReferences(text(value)).length,0,'only complete supported YAML scalars are targets');
+});
