@@ -25,8 +25,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- The minimum Go toolchain is 1.26.9 to include the October 2026 standard-library
-  security fixes. CI and release builds use the version declared in `go.mod`.
+- The minimum Go toolchain is 1.26.10 to include the October 2026 standard-library
+  security fixes, including GO-2026-6809 in `crypto/x509`. CI and release builds
+  use the version declared in `go.mod`. The isolated repair validator uses the
+  same patched toolchain in its immutable container image.
 
 - Firewall create now verifies the returned immutable policy ID by reading
   that exact policy and comparing the complete security scope. Schema-v1

@@ -515,3 +515,31 @@ runTest('Node targets retain job identity when main reorders jobs',()=>{
  assert.equal(retainsRepairTargets({...change,before:flow(current),after:flow(candidate)},flow(main),flow(old)),true);
  assert.equal(retainsRepairTargets({...change,before:flow(current),after:flow(main)},flow(main),flow(old)),false,'flow Node target rollback must fail');
 });
+
+runTest('named setup steps retain Node target identity across reordering',()=>{
+ const {retainsRepairTargets}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const step=(name,version)=>`      - name: ${name}\n        uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: ${version}\n`;
+ for(const identity of ['name','id']){
+  const make=(a,b)=>('jobs:\n  ci:\n    steps:\n'+a+b).replaceAll('name:',identity+':');
+  const old=make(step('build','24.0.0'),step('test','26.0.0'));
+  const before=old.replace('24.0.0','24.1.0');
+  const main=make(step('test','26.0.0'),step('build','24.0.0'));
+  const after=main.replace('24.0.0','24.1.0');
+  assert.equal(retainsRepairTargets({filename,before,after},main,old),true,identity);
+  if(SOURCE==='package.json'){const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:before},baseFiles:{[filename]:main},ancestorFiles:{[filename]:old}};assert.equal(evaluateScope(scopeChanges([{path:filename,content:after}],snapshot,evaluateScope)).allowed,true,'real repair policy accepts the reordered candidate')}
+  assert.equal(retainsRepairTargets({filename,before,after:main.replace('26.0.0','24.1.0')},main,old),false,'cannot reassign update');
+ }
+});
+runTest('Node retention cannot substitute unrelated data for setup with input',()=>{
+ const {retainsRepairTargets}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const old=`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: 24.0.0\n`;
+ const before=old.replace('24.0.0','24.1.0');
+ for(const mapping of ['env','other']){
+  const main=old.replace('with:',mapping+':'),after=main.replace('24.0.0','24.1.0');
+  assert.equal(retainsRepairTargets({filename,before,after},main,old),false,mapping);
+ }
+ const main=old.replace('actions/setup-node','example/other-action');
+ assert.equal(retainsRepairTargets({filename,before,after:main.replace('24.0.0','24.1.0')},main,old),false,'different action is not the requested setup target');
+});

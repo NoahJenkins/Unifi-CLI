@@ -57,23 +57,56 @@ function validateReview(report, expectedFiles) {
 }
 function workflowTargets(content, onAction) {
   content=expandWorkflowFlow(content)
-  const targets=new Map(),counts=new Map(),jobs=new Set()
-  let job='',jobsIndent=null,jobIndent=null,fieldIndent=null,stepsIndent=null,stepIndent=null,stepFieldIndent=null,scalarIndent=null
+  const targets=new Map(),counts=new Map(),jobs=new Set(),identities=new Set()
+  let job='',jobsIndent=null,jobIndent=null,fieldIndent=null,stepsIndent=null,stepIndent=null,stepFieldIndent=null,scalarIndent=null,step=null,jobRecord=null
   const mapping=value=>{
     const m=value.match(/^(?:"([a-zA-Z_][\w-]*)"|'([a-zA-Z_][\w-]*)'|([a-zA-Z_][\w-]*)):[ \t]*(.*)$/)
     return m && {name:m[1] || m[2] || m[3],value:m[4]}
   }
-  function action(value,line,index) {
+  const record=()=>({fields:new Set(),withIndent:null,withFieldIndent:null})
+  function field(owner,entry,line,index,indent) {
+    if(owner.fields.has(entry.name))throw Error('Duplicate workflow mapping field')
+    owner.fields.add(entry.name);owner.withIndent=null;owner.withFieldIndent=null
+    if(entry.name==='uses')owner.use={value:entry.value,line,index}
+    if(entry.name==='name' || entry.name==='id')owner[entry.name]=entry.value
+    if(entry.name==='with' && /^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))owner.withIndent=indent
+  }
+  function input(owner,entry,indent) {
+    if(!owner || owner.withIndent===null || indent<=owner.withIndent || !entry)return
+    if(owner.withFieldIndent===null)owner.withFieldIndent=indent
+    if(indent!==owner.withFieldIndent || entry.name!=='node-version')return
+    if(owner.nodeSeen)throw Error('Duplicate Node input')
+    owner.nodeSeen=true
+    const value=entry.value.match(/^['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/)
+    if(value)owner.node=value[1]
+  }
+  function emit(owner,isJob=false) {
+    if(!owner?.use)return
+    const {value,line,index}=owner.use
     const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
     if(!use)throw Error('Unsupported workflow action reference')
     const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
     if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))return;throw Error('Unsupported workflow action reference')}
-    const key=`action:${job}:${ref[1]}`,n=counts.get(key) || 0;counts.set(key,n+1)
+    // Explicit step identity survives reordering. Anonymous occurrences retain
+    // the conservative ordered ancestor alignment used by earlier controllers.
+    const identity=owner.id ? `id:${owner.id}` : owner.name ? `name:${owner.name}` : null
+    const location=isJob?'job':identity && !identity.includes('${{')?`step:${encodeURIComponent(identity)}`:'anonymous'
+    if(location!=='anonymous'){
+      const key=`${job}:${location}`
+      if(identities.has(key))throw Error('Ambiguous workflow step identity')
+      identities.add(key)
+    }
+    const group=`${job}:${location}:${ref[1]}`,key=`action:${group}`,n=counts.get(key) || 0;counts.set(key,n+1)
     const pinned=/^[0-9a-f]{40}$/.test(ref[2]),tag=pinned?use[4]?.trim():ref[2]
     const versionTag=/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null
     targets.set(`${key}:${n}`,{ref:ref[2],tag:versionTag,pinned})
+    // Only the direct with input of setup-node (or a reusable workflow job)
+    // is a Node target. env, nested data and run script text cannot replace it.
+    if(owner.node && (ref[1]==='actions/setup-node' || isJob))targets.set(`node:${group}:${n}`,owner.node)
     onAction?.({key:`${key}:${n}`,index,prefix:line.slice(0,line.length-value.length),action:ref[1],sha:pinned?ref[2]:null,tag:versionTag})
   }
+  const finishStep=()=>{emit(step);step=null}
+  const finishJob=()=>{finishStep();emit(jobRecord,true);jobRecord=null}
   for(const [index,line] of content.split(/\r?\n/).entries()) {
     const indent=line.match(/^[ ]*/)[0].length,trimmed=line.trimStart(),entry=mapping(trimmed)
     if(scalarIndent!==null && (!line.trim() || indent>scalarIndent))continue
@@ -81,48 +114,46 @@ function workflowTargets(content, onAction) {
     if(!line.trim() || /^[ \t]*#/.test(line))continue
     if(/^[ ]*(?:- )?[^#]+:[ \t]*[|>][+-]?[0-9]?[ \t]*(?:#.*)?$/.test(line))scalarIndent=indent
     if(indent===0 && entry?.name==='jobs') {
+      finishJob()
       if(!/^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))throw Error('Unsupported workflow jobs mapping')
       jobsIndent=indent;jobIndent=null;job='';continue
     }
     if(jobsIndent===null)continue
-    if(indent<=jobsIndent){jobsIndent=null;continue}
+    if(indent<=jobsIndent){finishJob();jobsIndent=null;continue}
     if(jobIndent===null)jobIndent=indent
     if(indent===jobIndent) {
+      finishJob()
       if(!entry || !/^(?:[&*][\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))throw Error('Unsupported workflow job declaration')
       job=entry.name;if(jobs.has(job))throw Error('Ambiguous workflow job');jobs.add(job)
-      fieldIndent=null;stepsIndent=null;stepIndent=null;stepFieldIndent=null;continue
+      jobRecord=record();fieldIndent=null;stepsIndent=null;stepIndent=null;stepFieldIndent=null;continue
     }
     if(indent<jobIndent)throw Error('Unsupported workflow job indentation')
-    // Node occurrences belong to their job, just like executable actions.
-    // Use the expanded mapping so flow values and block scalars agree with
-    // action parsing; a reordered job must not inherit another job's target.
-    const node=line.match(/^[ \t]*node-version:[ \t]*['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/)
-    if(node){const key=`node:${job}`,n=counts.get(key) || 0;counts.set(key,n+1);targets.set(`${key}:${n}`,node[1])}
     if(fieldIndent===null && entry)fieldIndent=indent
-    // Only direct job uses and direct step uses execute actions. env/with data
-    // may contain a key named uses and must not consume action occurrences.
     if(indent===fieldIndent && entry) {
-      stepsIndent=null;stepIndent=null;stepFieldIndent=null
-      if(entry.name==='uses')action(entry.value,line,index)
+      finishStep();stepsIndent=null;stepIndent=null;stepFieldIndent=null
+      field(jobRecord,entry,line,index,indent)
       if(entry.name==='steps') {
         if(!/^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value) && entry.value!=='[]')throw Error('Unsupported workflow steps sequence')
         stepsIndent=indent
       }
       continue
     }
-    if(stepsIndent===null || indent<stepsIndent)continue
+    if(stepsIndent===null || indent<stepsIndent){input(jobRecord,entry,indent);continue}
     const item=trimmed.match(/^-(?:[ \t]+(.*))?$/)
     if(item && (stepIndent===null || indent===stepIndent)) {
+      finishStep();step=record()
       stepIndent=indent;const value=item[1] || '',first=mapping(value)
       const bare=!value.trim() || value.trimStart().startsWith('#')
       if(!first && !bare && !/^[&*][\w-]+[ \t]*(?:#.*)?$/.test(value))throw Error('Unsupported workflow step declaration')
       stepFieldIndent=first?indent+trimmed.indexOf(value):null
-      if(first?.name==='uses')action(first.value,line,index)
+      if(first)field(step,first,line,index,stepFieldIndent)
     } else {
       if(stepIndent!==null && stepFieldIndent===null && indent>stepIndent && entry)stepFieldIndent=indent
-      if(stepFieldIndent!==null && indent===stepFieldIndent && entry?.name==='uses')action(entry.value,line,index)
+      if(stepFieldIndent!==null && indent===stepFieldIndent && entry)field(step,entry,line,index,indent)
+      else input(step,entry,indent)
     }
   }
+  finishJob()
   return targets
 }
 // Reference indexes address expandWorkflowFlow(content), not raw source lines.

@@ -155,12 +155,14 @@ The 64-file review limit applies to the entire resulting PR. Validation and publ
 
 Direct repairs retain requested dependency targets relative to the authenticated merge base, including partial grouped updates. Main-baseline adoption also retains targets added only on main, including inserted repeated actions. Both validation and publication enforce these checks. PRs with more than 64 changed files receive a blocked capacity decision before agent reservations; split such updates before retrying.
 
-Workflow Node-version occurrences are grouped by job and use the same unique ancestor-to-main alignment as action references after inserted setup steps. Reordering jobs does not change their target identity. Flow mappings use the same parsed representation as block mappings. Missing or ambiguous ancestor evidence blocks adoption; both requested Node updates and main-only Node targets must be retained.
+Workflow Node-version targets belong to the direct `with` input of their owning setup-node step or reusable-workflow job. Explicit step IDs, or names when no ID exists, preserve identity when jobs or steps are reordered. Anonymous repeated steps require unique ordered ancestor alignment; ambiguous identities block repair. Unrelated environment keys, nested data, and run-script text cannot replace a setup input. Flow mappings use the same parsed representation as block mappings. Missing or ambiguous ancestor evidence blocks adoption; both requested Node updates and main-only Node targets must be retained.
 
-Equal-sized repeated target sets also require ordered ancestor alignment. Duplicate ancestor targets cannot distinguish a deletion followed by insertion, so those conflict repairs require manual resolution instead of positional reassignment.
+Equal-sized anonymous repeated target sets also require ordered ancestor alignment. Duplicate ancestor targets cannot distinguish a deletion followed by insertion, so those conflict repairs require manual resolution instead of positional reassignment.
 
 Target retention includes standalone `.nvmrc` and `.node-version` files where repository scope permits them. Authenticated ancestor data distinguishes PR-requested targets from untouched dependencies changed or removed on main. Requested targets remain fixed even if main already contains them.
 
 Snapshot fallback for an already-published conflict repair requires one authenticated App publication receipt bound to the current PR head and main SHA. It rechecks retained targets against that repair's original parent before allowing main-side policy adoption or branch refresh. Missing, duplicate, stale, or unusable provenance blocks automation and requires manual resolution; it cannot infer original intent from the repaired head alone.
 
 Release-test pin verification masks action lines in the expanded workflow representation. Flow collections before an action cannot suppress its upstream tag-to-SHA check.
+
+The Go 1.26.10 patch and matching pinned validator image address GO-2026-6809. Native smoke, race, coverage, vulnerability scanning, and the YAML fuzz target passed with this toolchain. The updated container manifest digest was verified against the registry; local container execution still requires the Docker daemon.
