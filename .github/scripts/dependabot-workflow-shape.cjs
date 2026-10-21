@@ -12,7 +12,7 @@ function expandWorkflowFlow(content) {
   for(const line of lines){offsets.push(offset);offset+=line.length+1}
   const sourceText=lines.join('\n')
   function parse(source) {
-    let pos=0,nodes=0
+    let pos=0,nodes=0;const protectedComments=[]
     const comment=node=>{
       while(pos<source.length) {
         if(/\s/.test(source[pos])){pos++;continue}
@@ -20,6 +20,7 @@ function expandWorkflowFlow(content) {
         const end=source.indexOf('\n',pos),stop=end<0?source.length:end
         const text=source.slice(pos+1,stop).trim()
         if(node && /^v\d+(?:\.\d+){0,2}$/.test(text))node.comment=text
+        else protectedComments.push(source.slice(pos,stop))
         pos=stop
       }
     }
@@ -66,7 +67,7 @@ function expandWorkflowFlow(content) {
     // A comment after a flow step/job conventionally annotates its uses value.
     while(source[pos]===' ' || source[pos]==='\t')pos++
     if(source[pos]==='#')comment(node)
-    return {node,end}
+    return {node,end,protectedComments}
   }
   function render(node,indent,inherited) {
     const space=' '.repeat(indent)
@@ -91,7 +92,7 @@ function expandWorkflowFlow(content) {
     scalarIndent=blockScalarIndent(line)
     const match=line.match(/^([ ]*)(-\s+|(?:"[\w-]+"|'[\w-]+'|[\w-]+):[ \t]*)([\[{].*)$/)
     if(!match){out.push(line);continue}
-    const source=sourceText.slice(offsets[i]+line.length-match[3].length),{node,end}=parse(source)
+    const source=sourceText.slice(offsets[i]+line.length-match[3].length),{node,end,protectedComments}=parse(source)
     const consumed=source.slice(0,end).split('\n').length-1
     const tail=source.slice(end).split('\n')[0]
     if(tail.trim() && !tail.trimStart().startsWith('#'))throw Error('Unsupported trailing flow content')
@@ -101,6 +102,8 @@ function expandWorkflowFlow(content) {
     } else {
       out.push(match[1]+match[2].trimEnd());out.push(...render(node,indent+2,node.comment))
     }
+    // Preserve non-version comments that are not action tag annotations.
+    out.push(...protectedComments.map(comment=>match[1]+comment))
     i+=consumed;changed=true
   }
   return changed?out.join('\n'):content

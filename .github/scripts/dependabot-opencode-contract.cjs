@@ -107,18 +107,18 @@ function workflowTargets(content, onAction, onNode) {
     }
     if(!owner.use)return
     const {value,line,index}=owner.use
-    const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
+    const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))([ \t]*(?:#[ \t]*(.*))?)$/)
     if(!use)throw Error('Unsupported workflow action reference')
     const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
     if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))return;throw Error('Unsupported workflow action reference')}
     const group=`${job}:${location}:${ref[1]}`,key=`action:${group}`,n=counts.get(key) || 0;counts.set(key,n+1)
-    const pinned=/^[0-9a-f]{40}$/.test(ref[2]),tag=pinned?use[4]?.trim():ref[2]
+    const pinned=/^[0-9a-f]{40}$/.test(ref[2]),tag=pinned?use[5]?.trim():ref[2]
     const versionTag=/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null
     targets.set(`${key}:${n}`,{ref:ref[2],tag:versionTag,pinned})
     // Only the direct with input of setup-node (or a reusable workflow job)
     // is a Node target. env, nested data and run script text cannot replace it.
     if(owner.node && (ref[1]==='actions/setup-node' || isJob)){targets.set(`node:${group}:${n}`,owner.node.version);onNode?.({...owner.node,key:`node:${group}:${n}`})}
-    onAction?.({key:`${key}:${n}`,index,prefix:line.slice(0,line.length-value.length),action:ref[1],sha:pinned?ref[2]:null,tag:versionTag})
+    onAction?.({key:`${key}:${n}`,index,prefix:line.slice(0,line.length-value.length),action:ref[1],sha:pinned?ref[2]:null,tag:versionTag,suffix:JSON.stringify([pinned && versionTag?'version':'literal',pinned && versionTag?use[4].replace(versionTag,'VERSION_TAG'):use[4]])})
   }
   const finishStep=()=>{emit(step);step=null}
   const finishJob=()=>{finishStep();emit(jobRecord,true);jobRecord=null}

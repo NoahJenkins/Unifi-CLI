@@ -624,3 +624,23 @@ runTest('commented Node inputs preserve targets and protected comment text',()=>
  const text=value=>`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: ${value}\n`;
  for(const value of ['24.x#LTS',"'24.x\" # LTS",'"24.x # LTS"'])assert.equal(workflowNodeReferences(text(value)).length,0,'only complete supported YAML scalars are targets');
 });
+
+runTest('action normalization preserves comments except verified version annotations',async()=>{
+ const filename='.github/workflows/ci.yml';
+ const allowed=(before,after)=>evaluateScope([{filename,status:'modified',before,after}]).allowed;
+ for(const quote of ['',"'",'"']){
+  const before=workflow(base).replace(`actions/checkout@${base}`,`${quote}actions/checkout@${base}${quote}`),after=before.replace(base,head);
+  assert.equal(allowed(before,after),true);
+  for(const candidate of [after.replace('# v4.1.0','# deployment rationale'),after.replace('# v4.1.0','# VERSION_TAG'),after.replace(' # v4.1.0',''),before.replace('# v4.1.0','# deployment rationale')])assert.equal(allowed(before,candidate),false,'unrelated comment edits stay protected');
+  const comment=before.replace('# v4.1.0','# deployment rationale');
+  assert.equal(allowed(comment,comment.replace(base,head)),false);
+  assert.equal(allowed(comment,comment.replace('rationale','changed')),false);
+  assert.equal(allowed(before,after.replace('# v4.1.0','# v4.2.0')),true,'supported version annotations remain eligible');
+ }
+ const flow=sha=>`jobs:\n  ci:\n    steps:\n      - { uses: actions/checkout@${sha}, # deployment rationale\n          with: {path: safe} } # v4.1.0\n`;
+ assert.equal(allowed(flow(base),flow(head)),true);
+ assert.equal(allowed(flow(base),flow(head).replace('rationale','changed')),false,'flow comments stay protected');
+ const calls=[];const client=createClient({repo:'o/r'},'read','write',async url=>{calls.push(url);return {ok:true,status:200,json:async()=>({object:{type:'commit',sha:head}})};});
+ await client.verifyActionPins([{filename,before:workflow(base),after:workflow(head).replace('# v4.1.0','# v4.2.0')}]);
+ assert.ok(calls.some(url=>url.endsWith('/git/ref/tags/v4.2.0')),'changed annotation still requires upstream tag proof');
+});

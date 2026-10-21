@@ -172,3 +172,5 @@ UniFi scope permits eligible action-reference updates, but Node-version inputs r
 The shared Node-input parser records major wildcard selectors such as `22.x` and `24.x`, including quoted values and flow mappings. Scope validation still applies each repository's existing Node-version policy. Retention rejects fallback that discards a requested wildcard target; UniFi continues to require manual review for Node-version edits.
 
 Inline YAML comments on supported Node inputs remain part of protected workflow content. Plain and quoted selectors are parsed with matching quotes; scope normalization masks only the version value. Comment changes remain blocked, and retention still rejects target rollback. UniFi continues to block Node-version edits.
+
+Action scope normalization preserves ordinary comment text in block and flow layouts. Complete version annotations on immutable pins remain eligible dependency metadata and require upstream tag verification. Literal comments cannot imitate the normalized version marker. Each repository retains its existing rules for tagged and untagged action references.

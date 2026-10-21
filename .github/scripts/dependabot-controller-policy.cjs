@@ -21,7 +21,7 @@ function workflowScope(before,after) {
  try {
  before=expandWorkflowFlow(before);after=expandWorkflowFlow(after)
  const a=actionPins(before),b=actionPins(after)
- const normalized=text=>{const lines=text.split('\n');for(const pin of actionPins(text))lines[pin.index]=`${pin.prefix}${pin.action}@PIN`;return lines.join('\n')}
+ const normalized=text=>{const lines=text.split('\n');for(const pin of actionPins(text))lines[pin.index]=`${pin.prefix}${pin.action}@PIN${pin.suffix}`;return lines.join('\n')}
  return a.length===b.length && normalized(before)===normalized(after) && a.every((pin,i)=>pin.action===b[i].action && pin.index===b[i].index && (pin.tag===b[i].tag||nondecreasing(pin.tag,b[i].tag)))
  } catch {return false}
 }
