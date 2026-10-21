@@ -130,3 +130,51 @@ a duplicate event cannot repeat a write. The run and attempt are checked again
 before dispatch. Old reservations without these fields remain consumed and block
 repeat recovery for that head. The two-attempt lifetime and daily limits still
 apply. GitHub's accepted, bodyless HTTP 201 rerun response is treated as success.
+
+The scope check compares PR file changes against the authenticated common ancestor of current main and the PR head. This permits bounded refresh when main changed unrelated protected settings. After refresh, the common ancestor must equal current main before merge can proceed. Missing or contradictory comparison evidence blocks the controller.
+
+Each reconciliation reserves at most ten model tasks, matching the claim limit. Excess work waits for another run without consuming a reservation, including when reconciliation crosses UTC midnight. Daily and per-PR limits remain unchanged.
+
+Repair snapshots authorize the PR delta against its authenticated merge base and retain current-main content for conflict repair. Dependency generation runs before the validation checks in a separate secret-free container. The host records the submitted files and generated dependency files before checks, rejects later byte changes, and publishes only those recorded bytes. Both phases share the existing 20-minute execution limit.
+
+For a conflicted file already present in the authenticated PR snapshot, validation and publication may use current-main content as the comparison baseline when the head comparison fails. The same repository file policy must pass against that baseline. This permits preserving main-side settings while retaining dependency updates; it does not authorize new protected edits, unrelated context files, or relaxed action-pin checks.
+The controller applies this same comparison after publication so a repaired head can reach bounded branch refresh and fresh current-base CI. Main-side fallback cannot remove an existing immutable action pin.
+Unchanged generated dependency files are validated separately from the submitted file set. They do not reduce its 64-file capacity; changed output still obeys the existing 64-file and total-byte limits.
+
+When repair output adopts main-side policy, it must retain every dependency target from the authenticated PR head that differs from main. Validation and publication both enforce this rule, including grouped updates. Copying main must not erase an update, remove its dependency, or partially revert a group. A mutable action tag may adopt main's immutable SHA only for the same version; an existing SHA target must remain exact. Ambiguous or conflicting targets fail closed for operator review. This restriction applies to repair output, not the ancestor-relative comparison used during reconciliation.
+
+Immutable workflow pins are matched by job and action occurrence when adopting main-side content. Comments and job settings do not change that identity, while repeated action steps cannot exchange their protection. Scope checks, upstream verification, and both retention checks share one executable-reference parser. It recognizes quoted references, CRLF line endings, anchored job declarations, and steps whose sequence marker is on its own line. Only direct job-level reusable workflow references and executable step references count; environment and input keys named `uses` are data. Reconciliation permits authenticated main-side comparison for modified files even when the merge-base file is empty.
+
+Existing eligibility remains unchanged: scope checks require immutable references with version tags. Parsing more YAML layouts does not permit mutable tags or relax upstream version checks.
+
+Flow-style step and reusable-workflow mappings are expanded as data before executable references are inspected. Protected scalar values stay in the scope comparison. Duplicate keys, malformed collections, excessive nesting, and unsupported syntax block the candidate.
+
+Repair snapshots retain authenticated merge-base file content. When main inserts another occurrence of an action, repair guards use a unique ordered match from that ancestor to main to retain the original PR target. Ambiguous matches, rollback, and assigning the update to the inserted occurrence are rejected. The snapshot byte limit remains unchanged.
+
+The 64-file review limit applies to the entire resulting PR. Validation and publication count original PR files plus newly changed repair or generated files. Unchanged generated files do not consume capacity. An oversized candidate is rejected before tests or publication.
+
+Direct repairs retain requested dependency targets relative to the authenticated merge base, including partial grouped updates. Main-baseline adoption also retains targets added only on main, including inserted repeated actions. Both validation and publication enforce these checks. PRs with more than 64 changed files receive a blocked capacity decision before agent reservations; split such updates before retrying.
+
+Workflow Node-version targets belong to the direct `with` input of their owning setup-node step or reusable-workflow job. Explicit step IDs, or names unique across every step when no ID exists, preserve identity when jobs or steps are reordered. Equivalent quoted names and comment variants share the same identity. Duplicate names are allowed only when all such steps have distinct explicit IDs. Anonymous repeated steps require unique ordered ancestor alignment; ambiguous identities block repair. Unrelated environment keys, nested data, and run-script text cannot replace a setup input. Flow mappings use the same parsed representation as block mappings. Block scalar headers accept either indicator order, such as `|2-` and `|-2`. Script contents remain data; scalar step names do not hide following action fields. Missing or ambiguous ancestor evidence blocks adoption; both requested Node updates and main-only Node targets must be retained.
+
+Equal-sized anonymous repeated target sets also require ordered ancestor alignment. Duplicate ancestor targets cannot distinguish a deletion followed by insertion, so those conflict repairs require manual resolution instead of positional reassignment.
+
+Target retention includes standalone `.nvmrc` and `.node-version` files where repository scope permits them. Authenticated ancestor data distinguishes PR-requested targets from untouched dependencies changed or removed on main. Requested targets remain fixed even if main already contains them.
+
+Snapshot fallback for an already-published conflict repair requires one authenticated App publication receipt bound to the current PR head and main SHA. It rechecks retained targets against that repair's original parent before allowing main-side policy adoption or branch refresh. Missing, duplicate, stale, or unusable provenance blocks automation and requires manual resolution; it cannot infer original intent from the repaired head alone.
+
+Release-test pin verification masks action lines in the expanded workflow representation. Flow collections before an action cannot suppress its upstream tag-to-SHA check.
+
+The Go 1.26.10 patch and matching pinned validator image address GO-2026-6809. Native smoke, race, coverage, vulnerability scanning, and the YAML fuzz target passed with this toolchain. The updated container manifest digest was verified against the registry; local container execution still requires the Docker daemon.
+
+UniFi scope permits eligible action-reference updates, but Node-version inputs remain protected, including direct setup-node inputs. The shared target parser inventories Node inputs for retention during authenticated main-baseline adoption; it does not authorize Node-version edits. Standalone Node version files also remain outside UniFi scope. Environment keys, nested data, script text, and inputs to unrelated actions remain protected workflow content. Tests explicitly reject Node-version edits in block and flow mappings while allowing action-pin updates with unchanged Node inputs.
+
+The shared Node-input parser records major wildcard selectors such as `22.x` and `24.x`, including quoted values and flow mappings. Scope validation still applies each repository's existing Node-version policy. Retention rejects fallback that discards a requested wildcard target; UniFi continues to require manual review for Node-version edits.
+
+Inline YAML comments on supported Node inputs remain part of protected workflow content. Plain and quoted selectors are parsed with matching quotes; scope normalization masks only the version value. Comment changes remain blocked, and retention still rejects target rollback. UniFi continues to block Node-version edits.
+
+Action scope normalization preserves ordinary comment text in block and flow layouts. Complete version annotations on immutable pins remain eligible dependency metadata and require upstream tag verification. Literal comments cannot imitate the normalized version marker. Each repository retains its existing rules for tagged and untagged action references.
+
+Direct repairs preserve the complete dependency target set from the PR head, including untouched dependencies and manifests supplied only as context. They cannot add, remove, move, or change dependency targets. Authenticated main-side adoption remains a separate path.
+
+Flow-comment comparison retains the owning node and position relative to collection separators. Version-like comments on non-action mappings and extra version comments remain protected; only the rendered action annotation can normalize as dependency metadata.

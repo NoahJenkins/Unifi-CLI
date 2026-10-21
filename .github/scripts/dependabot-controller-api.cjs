@@ -2,9 +2,10 @@
 const { GATE, DEPENDABOT_ID, evaluateScope, actionPins, releaseHealth, releasePinsMatch, changedTestPins } = require('./dependabot-controller-policy.cjs')
 const { readLedger, encodeLedger } = require('./dependabot-controller-ledger.cjs')
 
-const { validateReviewEvidence, validateFiles, text, digest, REVIEW, same } = require('./dependabot-opencode-contract.cjs')
+const { retainsRepairTargets, adoptMainBaseline, validateReviewEvidence, validateFiles, text, digest, REVIEW, same } = require('./dependabot-opencode-contract.cjs')
 const { parseArtifactZip, verifyRun, verifyJobs, MAX_ZIP } = require('./dependabot-opencode-publish.cjs')
 const { createHash } = require('node:crypto')
+const { expandWorkflowFlow } = require('./dependabot-workflow-shape.cjs')
 const CLAIM = '<!-- dependabot-opencode-claim:v1 -->'
 
 function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms => new Promise(resolve => setTimeout(resolve,ms))) {
@@ -79,13 +80,36 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       const result = await request(existing ? 'PATCH' : 'POST', existing ? `${root}/check-runs/${existing.id}` : `${root}/check-runs`, body)
       if (result.app?.id !== config.appId || result.head_sha !== pr.head.sha) throw new Error('Unexpected merge-gate publisher or head')
     },
+    async adoptPublishedBaseline(change,pr,main,mainContent) {
+      const adopted=adoptMainBaseline(change,mainContent,evaluateScope,change.before)
+      if(adopted===change)return change
+      // Ancestor contents alone cannot recover a target already removed from
+      // the current head. Bind fallback to the App's published repair receipt
+      // and compare with that repair's immutable, pre-publication parent.
+      const claims=(await client.getClaims()).filter(claim=>claim.published===true && claim.publishAttempted===true && claim.resultId===pr.head.sha && claim.task?.kind==='repair' && claim.task.pr===pr.number && claim.task.prId===pr.node_id && claim.task.base===main && claim.task.head!==pr.head.sha && /^[0-9a-f]{40}$/.test(claim.task.head || '') && claim.origin?.repositoryId===config.repositoryId && claim.origin.workflowSha===main && claim.origin.workflowPath==='.github/workflows/dependabot-auto-merge.yml' && claim.origin.ref==='refs/heads/main')
+      if(claims.length!==1)return change
+      const before=await content(change.filename,claims[0].task.head)
+      return retainsRepairTargets({...change,before},mainContent,change.before)?adopted:change
+    },
     async snapshot(pr, main) {
       const files = await list(`${root}/pulls/${pr.number}/files`)
-      if (files.length !== pr.changed_files || files.length > 100) throw new Error('Incomplete or excessive PR file list')
+      if (files.length !== pr.changed_files || files.length > 64) throw new Error('Incomplete PR file list or 64-file review capacity exceeded')
+      const compare = await request('GET', `${root}/compare/${main}...${pr.head.sha}`)
+      const containsMain = ['ahead', 'identical'].includes(compare.status)
+      const scopeBase = compare.merge_base_commit?.sha
+      if (!['ahead', 'identical', 'behind', 'diverged'].includes(compare.status) || !/^[0-9a-f]{40}$/.test(scopeBase || '') || (containsMain && scopeBase !== main)) throw new Error('Invalid PR merge base evidence')
+      // PR file lists describe the delta from this common ancestor. Current main
+      // may contain unrelated policy edits until a bounded branch refresh lands.
       const changes = []
       for (const file of files) {
         const needText = ['go.mod','release_pipeline_test.go'].includes(file.filename) || file.filename.startsWith('.github/workflows/')
-        changes.push({ ...file, before: needText && file.status === 'modified' ? await content(file.filename, main) : '', after: needText && !['removed', 'renamed'].includes(file.status) ? await content(file.filename, pr.head.sha) : '' })
+        changes.push({ ...file, before: needText && file.status === 'modified' ? await content(file.filename, scopeBase) : '', after: needText && !['removed', 'renamed'].includes(file.status) ? await content(file.filename, pr.head.sha) : '' })
+      }
+      // A published conflict repair can already contain authenticated main-side
+      // policy edits while ancestry still needs the bounded branch refresh.
+      if(scopeBase!==main)for(let i=0;i<changes.length;i++) {
+        const change=changes[i]
+        if(change.status==='modified' && !evaluateScope([change]).allowed)changes[i]=await client.adoptPublishedBaseline(change,pr,main,await content(change.filename,main))
       }
       const scope = evaluateScope(changes)
       if (scope.allowed) await client.verifyActionPins(changes.filter((file) => file.filename.startsWith('.github/workflows/')))
@@ -98,8 +122,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       const statuses = []
       const ciAssociations = Array.isArray(ci?.pull_requests) && ci.pull_requests.length===0 ? await list(`${root}/commits/${pr.head.sha}/pulls`) : []
       const independentReview = await client.getIndependentReview(pr,main,files.map(f=>f.filename),checks)
-      const compare = await request('GET', `${root}/compare/${main}...${pr.head.sha}`)
-      return { pr, mainSha: main, repositoryId: config.repositoryId, scope, containsMain: ['ahead', 'identical'].includes(compare.status), ciWorkflowId: workflow.id, ci, ciAssociations, jobs, checks, statuses, independentReview, releaseHealth:await client.getReleaseHealth() }
+      return { pr, mainSha: main, repositoryId: config.repositoryId, scope, containsMain, ciWorkflowId: workflow.id, ci, ciAssociations, jobs, checks, statuses, independentReview, releaseHealth:await client.getReleaseHealth() }
     },
     async getReleaseHealth() {
       const workflow=await request('GET',`${root}/actions/workflows/release.yml`)
@@ -135,7 +158,8 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       const changedPins=changedTestPins(changed.before,changed.after)
       const tagged=actionPins(workflow)
       if(changedPins.some(pin=>!tagged.some(proof=>proof.action===pin.action&&proof.sha===pin.sha)))throw Error('Changed release test pin has no supported upstream version tag')
-      const lines=workflow.split('\n')
+      // actionPins indexes the expanded workflow. Mask that same representation.
+      const lines=expandWorkflowFlow(workflow).split('\n')
       for(const pin of tagged)if(changedPins.some(change=>change.action===pin.action&&change.sha===pin.sha))lines[pin.index]=''
       await client.verifyActionPins([{before:lines.join('\n'),after:workflow}])
     },
@@ -241,8 +265,15 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       if(pr.node_id!==task.prId || pr.head.sha!==task.head || pr.base.sha!==task.base || await client.getMain()!==task.base)throw Error('Snapshot head/base changed')
       const files=await list(`${root}/pulls/${task.pr}/files`)
       if(files.length!==pr.changed_files || files.length>64 || !files.length)throw Error('Incomplete snapshot file set')
+      const compare=await request('GET',`${root}/compare/${task.base}...${task.head}`)
+      const scopeBase=compare.merge_base_commit?.sha
+      if(!['ahead','identical','behind','diverged'].includes(compare.status) || !/^[0-9a-f]{40}$/.test(scopeBase || '') || (['ahead','identical'].includes(compare.status) && scopeBase!==task.base))throw Error('Invalid repair merge base evidence')
+      // Keep current main available for conflict repair; authorize the PR delta
+      // against its common ancestor, matching GitHub's pull-file list.
       const baseFiles={};const headFiles={};const changes=[]
-      for(const f of files){if(['removed','renamed'].includes(f.status))throw Error('Unsupported changed file');baseFiles[f.filename]=f.status==='added'?'':await content(f.filename,task.base);headFiles[f.filename]=await content(f.filename,task.head);changes.push({...f,before:baseFiles[f.filename],after:headFiles[f.filename]})}
+      for(const f of files){if(['removed','renamed'].includes(f.status))throw Error('Unsupported changed file');baseFiles[f.filename]=f.status==='added'?'':await content(f.filename,task.base);headFiles[f.filename]=await content(f.filename,task.head);changes.push({...f,before:f.status==='added'?'':scopeBase===task.base?baseFiles[f.filename]:await content(f.filename,scopeBase),after:headFiles[f.filename]})}
+      const ancestorFiles=Object.fromEntries(changes.map(change=>[change.filename,change.before]))
+      for(let i=0;i<changes.length;i++)changes[i]=await client.adoptPublishedBaseline(changes[i],pr,task.base,baseFiles[changes[i].filename])
       const scope=evaluateScope(changes);if(!scope.allowed)throw Error(scope.reason)
       await client.verifyActionPins(changes.filter(f=>f.filename.startsWith('.github/workflows/')))
       const contextFiles={};const tree=await request('GET',`${root}/git/trees/${task.head}?recursive=1`)
@@ -263,7 +294,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
         }
         if(state.independentReview)diagnostics.push({review:state.independentReview.report})
       }
-      const result={task,changedFiles:files.map(f=>f.filename),baseFiles,headFiles,contextFiles,diagnostics,existingPaths}
+      const result={task,changedFiles:files.map(f=>f.filename),baseFiles,headFiles,ancestorFiles,contextFiles,diagnostics,existingPaths}
       if(Buffer.byteLength(JSON.stringify(result))>8*1024*1024)throw Error('Snapshot byte limit')
       return result
     },

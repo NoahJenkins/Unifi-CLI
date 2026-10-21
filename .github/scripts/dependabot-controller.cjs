@@ -2,7 +2,7 @@
 const { REQUIRED_CHECKS, GATE, DEPENDABOT_ID, eligiblePr, evaluateCandidate } = require('./dependabot-controller-policy.cjs')
 const { verifyRun } = require('./dependabot-opencode-publish.cjs')
 const { defaultBranchEvent } = require('./dependabot-opencode-contract.cjs')
-const { reserve, validateTask } = require('./dependabot-controller-ledger.cjs')
+const { reserve, validateTask, MAX_TASKS } = require('./dependabot-controller-ledger.cjs')
 
 function protectionAllowsMerge(protection, appId) {
   const checks = protection.required_status_checks?.checks || []
@@ -39,6 +39,7 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
   }
   if (!config.automationEnabled) return stop('blocked', 'Dependabot automation is disabled pending setup.')
   if (!eligiblePr(pr, config.repositoryId)) return stop('blocked', 'Dependabot identity, branch or repository is outside policy.')
+  if (pr.changed_files > 64) return stop('blocked', 'PR exceeds the 64-file review capacity. Split the dependency update before automatic repair or review.')
   if (await client.hasDependabotHead(pr.head.sha, pr.number)) return stop('blocked', 'Multiple Dependabot PRs share this commit. Resolve duplicate heads before automatic merge.')
   const release = async()=>{try{return await client.getReleaseHealth()}catch{return {kind:'blocked',reason:'Release health is unavailable; automatic merges are paused.'}}}
   const health = await release()
@@ -82,6 +83,7 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
     return stop('waiting',`Requested ${decision.kind}; recovery attempt is consumed. Await fresh CI.`)
   }
   if (['repair', 'review'].includes(decision.kind)) {
+    if (tasks.length >= MAX_TASKS) return stop('waiting', 'Task batch is full. Defer to the next reconciliation without consuming a reservation.')
     if (!defaultBranchEvent(config.eventName) || config.workSourceVerified !== true || config.runAttempt !== 1 || config.workflowSha !== main || config.ref !== 'refs/heads/main') return stop('waiting', 'Wait for a controller run from current main.')
     if (!config.agentEnabled) return stop('blocked', `${decision.reason} Agent dispatch is disabled pending credentials and OpenCode settings.`)
     // Fail closed before spending credits if the required gate can be forged or omitted.

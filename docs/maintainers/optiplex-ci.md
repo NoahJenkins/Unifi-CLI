@@ -62,7 +62,7 @@ nor either Tailscale policy label is used. No checks are removed to avoid queues
 - **`dbus`, `dbus-x11`, and `gnome-keyring`**, including `dbus-run-session`
   and `gnome-keyring-daemon`. No desktop is needed. Preserve the isolated
   D-Bus shell and unlocked temporary login collection; native tests must run.
-- Go **1.26.9** from `go.mod`, via pinned setup-go; govulncheck **v1.6.0**.
+- Go **1.26.10** from `go.mod`, via pinned setup-go; govulncheck **v1.6.0**.
   Preserve checkout **v7.0.1** and setup-go **v7.0.0** immutable pins.
 - HTTPS for GitHub checkout/actions/caches, Go modules/toolchains, the Go
   vulnerability database, and approved Ubuntu repositories. Supply writable
@@ -81,7 +81,7 @@ synthetic inputs and follows its output through the real scheduling matrices.
 It covers enabled, disabled, absent, forks, Dependabot forks, malformed values,
 and case-sensitive opt-in. Selector-failure coverage protects hosted fallback
 and required-check execution. `TestCICheckContextsRemainStable` protects names.
-Run repository gates with Go 1.26.9 and validate all workflows with actionlint.
+Run repository gates with Go 1.26.10 and validate all workflows with actionlint.
 Existing tests still protect race mode, native keyring setup, seals and provenance.
 
 On the approved Ubuntu 24.04 x64 canary, execute the Linux Secret Service

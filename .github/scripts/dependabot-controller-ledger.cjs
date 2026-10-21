@@ -1,6 +1,7 @@
 'use strict'
 const { randomUUID } = require('node:crypto')
 const MARKER = '<!-- dependabot-controller-state:v1 -->'
+const MAX_TASKS = 10
 const SHA = /^[0-9a-f]{40}$/
 
 function validateTask(task) {
@@ -52,4 +53,4 @@ function reserve(ledger, task, now) {
   return { ledger: next, reservation }
 }
 
-module.exports = { MARKER, validateTask, validateLedger, encodeLedger, readLedger, reserve }
+module.exports = { MAX_TASKS, MARKER, validateTask, validateLedger, encodeLedger, readLedger, reserve }

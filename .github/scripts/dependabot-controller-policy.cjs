@@ -1,25 +1,12 @@
 'use strict'
+const { expandWorkflowFlow } = require('./dependabot-workflow-shape.cjs')
 // Adapted from noahjenkins.com-v2 d33fbae; preserve the restricted CLI policy.
 const REQUIRED_CHECKS = ['test (ubuntu-latest)', 'test (macos-latest)', 'test (windows-latest)', 'govulncheck', ...['FuzzStrictYAMLConfiguration','FuzzOfficialPaginationJSON','FuzzOfficialPathAndFilterEscaping','FuzzReleaseBundleExtraction','FuzzChecksumManifest','FuzzSBOMSnapshotParsing'].map(x=>`fuzz (${x})`), ...['ubuntu-latest','macos-latest','windows-latest'].map(x=>`native keyring (${x})`)]
 const GATE='Dependabot Merge Gate'; const DEPENDABOT_ID=49699333
+const { workflowActionReferences } = require('./dependabot-opencode-contract.cjs')
 function actionPins(text, includeUntagged = false) {
-  const pins = []; let stepsIndent = null; let scalarIndent = null
-  const lines = text.split('\n')
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]; const indent = line.match(/^[ ]*/)[0].length
-    if (scalarIndent !== null && (!line.trim() || indent > scalarIndent)) continue
-    scalarIndent = null
-    if (/^[ ]*(?:- )?[^#]+:[ \t]*[|>][+-]?[0-9]?[ \t]*(?:#.*)?$/.test(line)) scalarIndent = indent
-    if (/^[ ]*steps:[ \t]*$/.test(line)) { stepsIndent = indent; continue }
-    if (stepsIndent !== null && line.trim() && indent <= stepsIndent) stepsIndent = null
-    const isStep = stepsIndent !== null && ((indent === stepsIndent + 2 && line.trimStart().startsWith('- uses:')) || (indent === stepsIndent + 4 && line.trimStart().startsWith('uses:')))
-    if (!isStep) continue
-    const match = line.match(/^([ ]*-?[ \t]*uses:[ \t]*)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})(?:[ \t]+#[ \t]*(v\d+(?:\.\d+){0,2}))?[ \t]*\r?$/)
-    if (match && (match[4] || includeUntagged)) pins.push({ index, prefix: match[1], action: match[2], sha: match[3], tag: match[4] })
-  }
-  return pins
+  return workflowActionReferences(text).filter(pin=>pin.sha && (pin.tag || includeUntagged))
 }
-
 
 function version(value) {const m=/^v?(\d+)\.(\d+)\.(\d+)$/.exec(value); return m && m.slice(1).map(Number)}
 function nondecreasing(a,b,patchOnly=false) {
@@ -31,9 +18,12 @@ function moduleScope(before,after) {
  return a.normalized===b.normalized && a.versions.length===b.versions.length && a.versions.every((x,i)=>x.prefix===b.versions[i].prefix&&nondecreasing(x.v,b.versions[i].v,x.prefix==='go '))
 }
 function workflowScope(before,after) {
+ try {
+ before=expandWorkflowFlow(before);after=expandWorkflowFlow(after)
  const a=actionPins(before),b=actionPins(after)
- const normalized=text=>{const lines=text.split('\n');for(const pin of actionPins(text))lines[pin.index]=`${pin.prefix}${pin.action}@PIN`;return lines.join('\n')}
+ const normalized=text=>{const lines=text.split('\n');for(const pin of actionPins(text))lines[pin.index]=`${pin.prefix}${pin.action}@PIN${pin.suffix}`;return lines.join('\n')}
  return a.length===b.length && normalized(before)===normalized(after) && a.every((pin,i)=>pin.action===b[i].action && pin.index===b[i].index && (pin.tag===b[i].tag||nondecreasing(pin.tag,b[i].tag)))
+ } catch {return false}
 }
 function testPins(text) {return [...text.matchAll(/"([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})"/g)].map(m=>({action:m[1],sha:m[2]}))}
 function testPinScope(before,after) {
