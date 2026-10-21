@@ -188,3 +188,9 @@ evaluations reuse the new check until completion. This does not reset the recove
 ledger or authorize a merge without current-head validation and independent review.
 
 GitHub can report an older PR base SHA while the target branch has advanced. When the authenticated comparison proves that main is absent from the PR and GitHub marks the PR mergeable and behind, the controller can use its bounded branch-refresh budget. It checks that the observed PR head/base and current main remain unchanged before the write. This exception permits only branch refresh; merge, review, repair dispatch, and CI retry retain exact-current-base requirements.
+
+### Offline search runtime
+
+The isolated worker has no direct internet access. The trusted preparation step downloads ripgrep 15.1.0, verifies its pinned archive SHA-256, and mounts only its executable read-only. A credential-free, network-disabled preflight checks the executable before the Go broker starts. A fake-provider smoke test then verifies the pinned OpenCode runtime can execute its real search tool inside the isolated worker, without Go usage. This lets OpenCode use `grep` and `glob` without attempting an in-session download. Runtime errors report only an allowlisted category and HTTP status; provider bodies, headers, prompts, and credentials are not logged.
+
+A failed worker leaves its reservation consumed. Keep automation paused until the runtime passes verification; do not replay the claim or erase the attempt history.

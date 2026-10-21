@@ -29,7 +29,7 @@ async function run(env=process.env,mode=process.argv[2]) {
   if(!task || !config.agentEnabled || !config.automationEnabled)throw Error('Worker activation/task is missing')
   assertLaunch(task,config)
   const input=JSON.parse(fs.readFileSync(path.join(root,'input.json'),'utf8'));same(input.snapshot.task,task)
-  const artifact=await runAgent(task,{...input,root:path.join(root,'session')},{apiKey:env.OPENCODE_GO_API_KEY,binaryPath:env.OPENCODE_BINARY,session:`ses_${randomBytes(16).toString('hex')}`})
+  const artifact=await runAgent(task,{...input,root:path.join(root,'session')},{apiKey:env.OPENCODE_GO_API_KEY,binaryPath:env.OPENCODE_BINARY,ripgrepPath:env.RIPGREP_BINARY,session:`ses_${randomBytes(16).toString('hex')}`})
   fs.writeFileSync(path.join(root,'result.json'),JSON.stringify(artifact));return
  }
  if(!env.DEPENDABOT_READ_TOKEN)throw Error('Read credential is missing')

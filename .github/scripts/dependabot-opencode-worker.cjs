@@ -26,6 +26,11 @@ function prepareWorkspace(snapshot,root,kind) {
  fs.writeFileSync(path.join(dataRoot,'input.json'),JSON.stringify(info))
  const inputDigest=digest(snapshot);return {dataRoot,configPath:path.join(root,'config.json'),inputDigest}
 }
+function agentError(error) {
+ const name=['APIError','ProviderInitError','ProviderModelNotFoundError','ContextOverflowError','MessageAbortedError','UnknownError'].includes(error?.name)?error.name:'unknown'
+ const status=error?.data?.statusCode
+ return Error(`Agent error (${name}${Number.isInteger(status) && status>=400 && status<=599?`; HTTP ${status}`:''})`)
+}
 function observe(child,kind,timeoutMs) {
  return new Promise((resolve,reject)=>{
   let buffer='',bytes=0,steps=0,output='',sessionId=null,settled=false
@@ -39,7 +44,7 @@ function observe(child,kind,timeoutMs) {
     const line=buffer.slice(0,pos);buffer=buffer.slice(pos+1);if(!line.trim())continue
     try {
      const event=JSON.parse(line)
-     if(event.type==='error')throw Error('Agent error')
+     if(event.type==='error')throw agentError(event.error)
      if(event.sessionID){if(sessionId && sessionId!==event.sessionID)throw Error('Mixed agent sessions');sessionId=event.sessionID}
      if(event.type==='step_start'){steps++;output='';if(steps>(kind==='repair'?24:16))throw Error('Agent step limit')}
      if(event.type==='tool_use' && !['read','glob','grep','list',...(kind==='repair'?['edit','write','apply_patch']:[])].includes(event.part?.tool))throw Error('Denied agent tool')
@@ -54,19 +59,22 @@ function docker(args,options={}) {return execFileSync('docker',args,{encoding:'u
 async function launchIsolated(task,prepared,config,options) {
  const id=`dependabot-${randomBytes(8).toString('hex')}`;const network=`${id}-net`;const broker=`${id}-broker`;const worker=`${id}-worker`
  const token=config.provider['opencode-go'].options.apiKey;const model=task.kind==='repair'?'kimi-k2.7-code':'glm-5.3'
+ if(!options.ripgrepPath)throw Error('Verified ripgrep binary is missing')
  if(!options.apiKey || !options.binaryPath)throw Error('Provider key or verified binary is missing')
  const configDir=path.dirname(prepared.configPath);fs.chmodSync(configDir,0o755)
  function accessible(dir){fs.chmodSync(dir,0o755);for(const name of fs.readdirSync(dir)){const p=path.join(dir,name);if(fs.lstatSync(p).isDirectory())accessible(p);else fs.chmodSync(p,task.kind==='repair'?0o666:0o644)}}
  accessible(prepared.dataRoot)
  if(task.kind==='repair'){const head=path.join(prepared.dataRoot,'head');const writable=dir=>{fs.chmodSync(dir,0o777);for(const n of fs.readdirSync(dir)){const p=path.join(dir,n);if(fs.lstatSync(p).isDirectory())writable(p)}};writable(head)}
  // Container UID 1000 needs curated data; all surrounding trusted files remain read-only.
+ // Verify the offline search executable without credentials or network access.
+ docker(['run','--rm','--platform','linux/amd64','--network','none','--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--user','1000:1000','-v',`${options.ripgrepPath}:/usr/local/bin/rg:ro`,IMAGE,'rg','--version'])
  docker(['network','create','--internal',network])
  try {
   docker(['run','--platform','linux/amd64','-d','--name',broker,'--network','bridge','--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--user','1000:1000','-v',`${path.join(__dirname,'dependabot-opencode-proxy.cjs')}:/broker.cjs:ro`,'-e','GO_API_KEY','-e',`PROXY_TOKEN=${token}`,'-e',`GO_MODEL=${model}`,'-e',`GO_MAX_CALLS=${task.kind==='repair'?24:16}`,'-e',`GO_TIMEOUT_MS=${task.kind==='repair'?1200000:600000}`,'-e',`GO_SESSION=${options.session}`,IMAGE,'node','/broker.cjs'],{env:{PATH:process.env.PATH,GO_API_KEY:options.apiKey}})
   docker(['network','connect','--alias','broker',network,broker])
   // Readiness does not contain credentials; a failure stops without retrying a session.
   for(let i=0;i<40;i++){if(docker(['logs',broker]).includes('Broker ready'))break;if(i===39)throw Error('Broker startup failed');await new Promise(r=>setTimeout(r,250))}
-  const args=['run','--platform','linux/amd64','--name',worker,'--network',network,'--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--user','1000:1000','--memory=2g','--cpus=2','--pids-limit=128','--tmpfs','/tmp:rw,nosuid,nodev,size=256m','--tmpfs','/home/agent:rw,nosuid,nodev,size=512m,uid=1000,gid=1000','-v',`${options.binaryPath}:/usr/local/bin/opencode:ro`,'-v',`${prepared.configPath}:/trusted/config.json:ro`,'-v',`${prepared.dataRoot}:/workspace:${task.kind==='review'?'ro':'rw'}`,'-w','/workspace',...Object.entries(cleanEnv()).filter(([k])=>k!=='PATH').flatMap(([k,v])=>['-e',`${k}=${v}`]),IMAGE,'opencode','run','--agent',task.kind,'--model',`opencode-go/${model}`,'--format','json','--dir','/workspace','Read input.json. Perform the trusted task and return only its required JSON.']
+  const args=['run','--platform','linux/amd64','--name',worker,'--network',network,'--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--user','1000:1000','--memory=2g','--cpus=2','--pids-limit=128','--tmpfs','/tmp:rw,nosuid,nodev,size=256m','--tmpfs','/home/agent:rw,nosuid,nodev,size=512m,uid=1000,gid=1000','-v',`${options.binaryPath}:/usr/local/bin/opencode:ro`,'-v',`${options.ripgrepPath}:/usr/local/bin/rg:ro`,'-v',`${prepared.configPath}:/trusted/config.json:ro`,'-v',`${prepared.dataRoot}:/workspace:${task.kind==='review'?'ro':'rw'}`,'-w','/workspace',...Object.entries(cleanEnv()).filter(([k])=>k!=='PATH').flatMap(([k,v])=>['-e',`${k}=${v}`]),IMAGE,'opencode','run','--agent',task.kind,'--model',`opencode-go/${model}`,'--format','json','--dir','/workspace','Read input.json. Perform the trusted task and return only its required JSON.']
   const child=spawn('docker',args,{env:{PATH:process.env.PATH}})
   const cleanup=()=>{try{docker(['rm','-f',worker,broker])}catch{}try{docker(['network','rm',network])}catch{}}
   return {child,cleanup}
@@ -87,4 +95,4 @@ async function runAgent(task,input,options={}) {
   return validateArtifact(a,{task,origin:input.origin,changedFiles:input.snapshot.changedFiles})
  }finally{cleanup()}
 }
-module.exports={IMAGE,BINARY_SHA,excluded,cleanEnv,agentConfig,prepareWorkspace,observe,runAgent,launchIsolated}
+module.exports={IMAGE,BINARY_SHA,excluded,cleanEnv,agentConfig,prepareWorkspace,agentError,observe,runAgent,launchIsolated}

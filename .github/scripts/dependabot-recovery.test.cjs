@@ -270,3 +270,13 @@ test('release test pin verification cannot skip tag proof after flow expansion',
   assert.ok(requests.every(url=>url.endsWith('/goreleaser/goreleaser-action/git/ref/tags/v7.3.0')));
  }
 });
+
+test('runtime refuses to start without its offline search binary',async()=>{
+ const {launchIsolated,agentConfig}=require('./dependabot-opencode-worker.cjs');
+ await assert.rejects(launchIsolated({kind:"review"},{},agentConfig('review','http://broker:8080/v1','fixture'),{apiKey:'fixture',binaryPath:'/verified/opencode'}),/Verified ripgrep binary is missing/);
+});
+test('runtime errors expose only allowlisted category and HTTP status',()=>{
+ const {agentError}=require('./dependabot-opencode-worker.cjs');
+ assert.equal(agentError({name:'APIError',data:{statusCode:429,message:'secret-token',responseBody:'private prompt',responseHeaders:{authorization:'secret'}}}).message,'Agent error (APIError; HTTP 429)');
+ assert.equal(agentError({name:'private prompt',data:{statusCode:'secret'}}).message,'Agent error (unknown)');
+});
