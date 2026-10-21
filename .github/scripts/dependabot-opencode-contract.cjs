@@ -1,5 +1,5 @@
 'use strict'
-const { expandWorkflowFlow } = require('./dependabot-workflow-shape.cjs')
+const { expandWorkflowFlow, blockScalarIndent } = require('./dependabot-workflow-shape.cjs')
 const { createHash } = require('node:crypto')
 const { validateTask } = require('./dependabot-controller-ledger.cjs')
 const MAX_FILE = 2 * 1024 * 1024; const MAX_TOTAL = 8 * 1024 * 1024
@@ -112,7 +112,7 @@ function workflowTargets(content, onAction) {
     if(scalarIndent!==null && (!line.trim() || indent>scalarIndent))continue
     scalarIndent=null
     if(!line.trim() || /^[ \t]*#/.test(line))continue
-    if(/^[ ]*(?:- )?[^#]+:[ \t]*[|>][+-]?[0-9]?[ \t]*(?:#.*)?$/.test(line))scalarIndent=indent
+    scalarIndent=blockScalarIndent(line)
     if(indent===0 && entry?.name==='jobs') {
       finishJob()
       if(!/^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))throw Error('Unsupported workflow jobs mapping')

@@ -1,4 +1,10 @@
 'use strict'
+// YAML permits either indentation/chomping indicator order. A mapping after
+// a sequence dash starts at the key column, not at the dash's indentation.
+function blockScalarIndent(line) {
+  const match=line.match(/^([ ]*)(-[ \t]+)?[^#]+:[ \t]*[|>](?:[1-9][+-]?|[+-][1-9]?)?[ \t]*(?:#.*)?$/)
+  return match?match[1].length+(match[2]?.length || 0):null
+}
 // Expand flow collections as data, never as code. Keep scalar spelling and
 // mapping order so protected workflow values remain part of scope comparison.
 function expandWorkflowFlow(content) {
@@ -82,7 +88,7 @@ function expandWorkflowFlow(content) {
     const line=lines[i],indent=line.match(/^ */)[0].length
     if(scalarIndent!==null && (!line.trim() || indent>scalarIndent)){out.push(line);continue}
     scalarIndent=null
-    if(/^[ ]*(?:- )?[^#]+:[ \t]*[|>][+-]?[0-9]?[ \t]*(?:#.*)?$/.test(line))scalarIndent=indent
+    scalarIndent=blockScalarIndent(line)
     const match=line.match(/^([ ]*)(-\s+|(?:"[\w-]+"|'[\w-]+'|[\w-]+):[ \t]*)([\[{].*)$/)
     if(!match){out.push(line);continue}
     const source=sourceText.slice(offsets[i]+line.length-match[3].length),{node,end}=parse(source)
@@ -99,4 +105,4 @@ function expandWorkflowFlow(content) {
   }
   return changed?out.join('\n'):content
 }
-module.exports={expandWorkflowFlow}
+module.exports={expandWorkflowFlow,blockScalarIndent}

@@ -543,3 +543,27 @@ runTest('Node retention cannot substitute unrelated data for setup with input',(
  const main=old.replace('actions/setup-node','example/other-action');
  assert.equal(retainsRepairTargets({filename,before,after:main.replace('24.0.0','24.1.0')},main,old),false,'different action is not the requested setup target');
 });
+
+runTest('block scalar indicator order never turns script text into workflow actions',()=>{
+ const {workflowActionReferences}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const {expandWorkflowFlow}=require(PREFIX+'dependabot-workflow-shape.cjs');
+ for(const indicator of ['|2-','>2-','|2+','>2+','|2','>2','|-2','>-2','|+2','>+2']){
+  const before=`jobs:\n  ci:\n    steps:\n      - run: ${indicator}\n          uses: ordinary script data\n          env: {KEY: literal}\n          node-version: 24.0.0\n      - uses: actions/checkout@${base} # v4.1.0\n`;
+  assert.equal(expandWorkflowFlow(before),before,indicator+' must retain script bytes');
+  const refs=workflowActionReferences(before);assert.equal(refs.length,1,indicator);assert.equal(refs[0].action,'actions/checkout');assert.equal(refs[0].sha,base);
+  const filename='.github/workflows/ci.yml',change={filename,status:'modified',before,after:before.replace(base,head)};
+  assert.equal(evaluateScope([change]).allowed,true,indicator+' permits the executable action update');
+  assert.equal(evaluateScope([{...change,after:change.after.replace('ordinary script data','changed script data')}]).allowed,false,indicator+' keeps script contents protected');
+ }
+});
+
+runTest('block scalar step name does not hide the following executable action',()=>{
+ const {workflowActionReferences}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ for(const indicator of ['|','|-','|2-','|-2','>2+']){
+  const before=`jobs:\n  ci:\n    steps:\n      - name: ${indicator}\n          Setup checkout\n        uses: actions/checkout@${base} # v4.1.0\n`;
+  const refs=workflowActionReferences(before);assert.equal(refs.length,1,indicator);assert.equal(refs[0].sha,base);
+  const change={filename:'.github/workflows/ci.yml',status:'modified',before,after:before.replace(base,head)};
+  assert.equal(evaluateScope([change]).allowed,true,indicator);
+  assert.equal(evaluateScope([{...change,after:before.replace(base,'v4.1.0')}]).allowed,false,indicator+' cannot hide a mutable pin');
+ }
+});
