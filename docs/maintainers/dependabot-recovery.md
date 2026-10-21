@@ -154,3 +154,11 @@ Repair snapshots retain authenticated merge-base file content. When main inserts
 The 64-file review limit applies to the entire resulting PR. Validation and publication count original PR files plus newly changed repair or generated files. Unchanged generated files do not consume capacity. An oversized candidate is rejected before tests or publication.
 
 Direct repairs retain requested dependency targets relative to the authenticated merge base, including partial grouped updates. Main-baseline adoption also retains targets added only on main, including inserted repeated actions. Both validation and publication enforce these checks. PRs with more than 64 changed files receive a blocked capacity decision before agent reservations; split such updates before retrying.
+
+Workflow Node-version occurrences use the same unique ancestor-to-main alignment as action references after inserted setup steps. Missing or ambiguous ancestor evidence blocks adoption; both requested Node updates and main-only Node targets must be retained.
+
+Equal-sized repeated target sets also require ordered ancestor alignment. Duplicate ancestor targets cannot distinguish a deletion followed by insertion, so those conflict repairs require manual resolution instead of positional reassignment.
+
+Target retention includes standalone `.nvmrc` and `.node-version` files where repository scope permits them. Authenticated ancestor data distinguishes PR-requested targets from untouched dependencies changed or removed on main. Requested targets remain fixed even if main already contains them.
+
+Snapshot fallback for an already-published conflict repair requires one authenticated App publication receipt bound to the current PR head and main SHA. It rechecks retained targets against that repair's original parent before allowing main-side policy adoption or branch refresh. Missing, duplicate, stale, or unusable provenance blocks automation and requires manual resolution; it cannot infer original intent from the repaired head alone.

@@ -225,7 +225,7 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
   const parsed=new URL(url), path=parsed.pathname.replace('/repos/o/r','');let data;
   if(path==='/pulls/1/files')data=[{filename,status:'modified'}];
   else if(path.startsWith('/compare/'))data=comparison;
-  else if(path==='/contents/'+filename){const ref=parsed.searchParams.get('ref');reads.push(ref);const value=ref===main?mainText:ref===ancestor?ancestorText:ref===head?headText:null;assert.notEqual(value,null);data={sha:'d'.repeat(40),type:'file',size:value.length,encoding:'base64',content:Buffer.from(value).toString('base64')};}
+  else if(path==='/contents/'+filename){const ref=parsed.searchParams.get('ref');reads.push(ref);const value=ref===main?mainText:ref===ancestor?ancestorText:ref===head?headText:ref==='e'.repeat(40)?updated:null;assert.notEqual(value,null);data={sha:'d'.repeat(40),type:'file',size:value.length,encoding:'base64',content:Buffer.from(value).toString('base64')};}
   else if(path==='/git/blobs/'+'d'.repeat(40))data={encoding:'base64',content:''};
   else if(path==='/actions/workflows/ci.yml')data={id:10};
   else if(path==='/actions/workflows/10/runs')data={workflow_runs:[]};
@@ -234,6 +234,7 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
   else throw Error('Unexpected provider route '+path);
   return {ok:true,status:200,json:async()=>data};
  });
+ client.getClaims=async()=>[{published:true,publishAttempted:true,resultId:head,task:{kind:'repair',pr:pr.number,prId:pr.node_id,head:'e'.repeat(40),base:main},origin:{repositoryId:1,workflowSha:main,workflowPath:'.github/workflows/dependabot-auto-merge.yml',ref:'refs/heads/main'}}];
  client.getIndependentReview=async()=>null;
  client.productionState=async()=>({healthy:true,block:null});
  client.getReleaseHealth=async()=>({kind:'ready'});
@@ -244,7 +245,8 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
  headText=mainText.replace('v1.0.0','v1.0.1');
  const repaired=await client.snapshot(pr,main);assert.equal(repaired.scope.allowed,true);assert.equal(evaluateCandidate(repaired).kind,'refresh');
  ancestorText='';
- const emptyAncestor=await client.snapshot(pr,main);assert.equal(emptyAncestor.scope.allowed,true);assert.equal(evaluateCandidate(emptyAncestor).kind,'refresh');
+ // Empty target data cannot prove which prior-parent updates were requested.
+ const emptyAncestor=await client.snapshot(pr,main);assert.equal(emptyAncestor.scope.allowed,false);
  ancestorText=original;
  headText=updated.replace('example.com/cli','example.com/other');
  assert.equal((await client.snapshot(pr,main)).scope.allowed,false);

@@ -25,7 +25,7 @@ runTest('repair snapshot scopes against common ancestor and retains current main
  let comparison={status:'diverged',merge_base_commit:{sha:ancestor}};
  let candidate=workflow(head);
  const reads=[];
- const client=createClient({repo:'o/r'},'read','write',async url=>{
+ const client=createClient({repo:'o/r',repositoryId:1},'read','write',async url=>{
   const u=new URL(url);let data;
   if(u.pathname.endsWith('/pulls/1'))data={number:1,node_id:task.prId,head:{sha:head},base:{sha:base},changed_files:1};
   else if(u.pathname.endsWith('/git/ref/heads/main'))data={object:{sha:base}};
@@ -34,11 +34,12 @@ runTest('repair snapshot scopes against common ancestor and retains current main
   else if(u.pathname.includes('/git/trees/'))data={truncated:false,tree:[{path:filename,type:'blob',mode:'100644',size:100}]};
   else if(u.pathname.includes('/contents/')){
    const ref=u.searchParams.get('ref');reads.push(ref);
-   const content=ref===ancestor?workflow(base):ref===base?workflow(base,'echo main policy'):candidate;
+   const content=ref===ancestor?workflow(base):ref===base?workflow(base,'echo main policy'):ref==='d'.repeat(40)?workflow(head):candidate;
    data={type:'file',size:content.length,encoding:'base64',content:Buffer.from(content).toString('base64')};
   }else throw Error('Unexpected API '+u.pathname);
   return {ok:true,status:200,json:async()=>data};
  });
+ client.getClaims=async()=>[{published:true,publishAttempted:true,resultId:head,task:{...task,head:'d'.repeat(40)},origin}];
  client.verifyActionPins=async()=>{};
  client.snapshot=async()=>({jobs:[],independentReview:null});
  const snapshot=await client.prepareSnapshot(task);
@@ -351,7 +352,7 @@ runTest('main adoption preserves targets absent from the PR including repeated a
   cases.push(['.github/workflows/ci.yml',current,main,main.replace(base,head),ancestor,'d'.repeat(40),old]);
  }
  for(const [filename,before,main,candidate,from,to,original] of cases){
-  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:before},baseFiles:{[filename]:main},ancestorFiles:{[filename]:original ?? before}};
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:before},baseFiles:{[filename]:main},ancestorFiles:{[filename]:original ?? before.replace('1.1.0','1.0.0')}};
   // Isolate retention from each repository's different ecosystem scope rules.
   const policy=changes=>({allowed:changes[0].before===main});
   const allowed=content=>policy(scopeChanges([{path:filename,content}],snapshot,policy)).allowed;
@@ -403,4 +404,97 @@ runTest('direct rollback is rejected before invoking the validation executor',as
   await assert.rejects(()=>validateRepair(task,f.snapshot,artifact,{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{calls++;}}),/preserve.*target/i);
   assert.equal(calls,0);
  }finally{fs.rmSync(f.root,{recursive:true,force:true});}
+});
+
+runTest('main-side Node setup insertions align version targets through the ancestor',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const old=workflow(base)+'      - uses: actions/setup-node@'+base+' # v4.1.0\n        with:\n          node-version: 24.0.0\n';
+ const inserted='      - uses: actions/setup-node@'+ancestor+' # v4.1.0\n        with:\n          node-version: 20.0.0\n';
+ // UniFi scope permits action references, but not Node-version changes.
+ for(const requestedVersion of ['24.0.0']){
+  const current=old.replace(base,head).replace('24.0.0',requestedVersion);
+  const main=old.replace('      - uses: actions/setup-node',inserted+'      - uses: actions/setup-node').replace('echo old','echo trusted main');
+  const candidate=main.replace(base,head).replace('24.0.0',requestedVersion);
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main},ancestorFiles:{[filename]:old}};
+  const allowed=(content,input=snapshot)=>evaluateScope(scopeChanges([{path:filename,content}],input,evaluateScope)).allowed;
+  assert.equal(allowed(candidate),true,'preserve original Node occurrence after insertion');
+  assert.equal(allowed(candidate.replace('20.0.0','22.0.0')),false,'preserve main-only Node target');
+  if(requestedVersion!=='24.0.0')assert.equal(allowed(candidate.replace(requestedVersion,'24.0.0')),false,'preserve requested Node update');
+  assert.equal(allowed(candidate,{...snapshot,ancestorFiles:{}}),false,'missing ancestor must block ambiguous identity');
+  const ambiguous={...snapshot,baseFiles:{[filename]:main.replace('20.0.0','24.0.0')}};
+  assert.equal(allowed(candidate.replace('20.0.0','24.0.0'),ambiguous),false,'repeated equal Node targets need unambiguous identity');
+ }
+});
+
+runTest('equal-sized repeated action sets cannot reassign a requested update',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const step=(name,sha)=>`      - name: ${name}\n        uses: actions/checkout@${sha} # v4.1.0\n`;
+ const old='jobs:\n  ci:\n    steps:\n'+step('removed on main',base)+step('original target',base);
+ const current=old.replace(step('original target',base),step('original target',head));
+ const main='jobs:\n  ci:\n    steps:\n'+step('original target',base)+step('inserted on main',base);
+ const wrong=main.replace(step('inserted on main',base),step('inserted on main',head));
+ const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main},ancestorFiles:{[filename]:old}};
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:wrong}],snapshot,evaluateScope)).allowed,false,'equal counts and duplicate targets cannot prove step identity');
+ const distinctOld=old.replace(step('removed on main',base),step('removed on main',ancestor));
+ const distinctHead=distinctOld.replace(step('original target',base),step('original target',head));
+ const distinctMain=distinctOld+'      - run: echo main\n';
+ const trusted={...snapshot,headFiles:{[filename]:distinctHead},baseFiles:{[filename]:distinctMain},ancestorFiles:{[filename]:distinctOld}};
+ const correct=distinctMain.replace(step('original target',base),step('original target',head));
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:correct}],trusted,evaluateScope)).allowed,true,'distinct ordered ancestor targets remain supported');
+ const reordered='jobs:\n  ci:\n    steps:\n'+step('original target',base)+step('inserted on main',ancestor);
+ const moved={...trusted,baseFiles:{[filename]:reordered}};
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:reordered.replace(ancestor,head)}],moved,evaluateScope)).allowed,false,'equal count reordered targets must not use ordinal identity');
+});
+
+runTest('standalone Node runtime targets cannot be rolled back by direct repairs',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ for(const filename of ['.nvmrc','.node-version'])for(const [current,original] of [['24\n','22\n'],['24.1.0\n','24.0.0\n']]){
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:original},ancestorFiles:{[filename]:original}};
+  const policy=SOURCE!=='package.json'?()=>({allowed:true}):evaluateScope;
+  assert.doesNotThrow(()=>scopeChanges([{path:filename,content:current}],snapshot,policy));
+  const rollback=()=>scopeChanges([{path:filename,content:original}],snapshot,policy);
+  // Some repositories already reject older runtime majors in scope policy.
+  if(policy([{filename,status:'modified',before:current,after:original}]).allowed)assert.throws(rollback,/preserve.*target/i);
+  else assert.equal(policy(rollback()).allowed,false);
+ }
+});
+runTest('main adoption distinguishes requested targets from untouched dependencies',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='package.json';
+ const original={dependencies:{foo:'1.0.0',bar:'1.0.0'}},current={dependencies:{foo:'1.1.0',bar:'1.0.0'}};
+ for(const mainDependencies of [{foo:'1.0.0'},{foo:'1.0.0',bar:'1.2.0'},{foo:'1.1.0',bar:'1.2.0'}]){
+  const main={dependencies:mainDependencies,scripts:{test:'main'}};
+  const candidate={...main,dependencies:{...mainDependencies,foo:'1.1.0'}};
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:JSON.stringify(current)},baseFiles:{[filename]:JSON.stringify(main)},ancestorFiles:{[filename]:JSON.stringify(original)}};
+  const policy=changes=>({allowed:changes[0].before===JSON.stringify(main)});
+  const allowed=value=>policy(scopeChanges([{path:filename,content:JSON.stringify(value)}],snapshot,policy)).allowed;
+  assert.equal(allowed(candidate),true,'adopt trusted main edit to untouched dependency');
+  assert.equal(allowed({...candidate,dependencies:{...candidate.dependencies,foo:'1.0.0'}}),false,'retain requested update even if main already has it');
+  assert.equal(allowed({...candidate,dependencies:{...candidate.dependencies,bar:'1.0.0'}}),false,'do not erase trusted main edit');
+ }
+});
+runTest('snapshot baseline adoption binds requested targets to the published repair parent',async()=>{
+ const filename=SOURCE==='package.json'?'package.json':'go.mod';
+ const original=SOURCE==='package.json'?JSON.stringify({dependencies:{foo:'1.0.0',bar:'1.0.0'}}):'module example\nrequire example/foo v1.0.0\nrequire example/bar v1.0.0\n';
+ const prior=original.replaceAll('1.0.0','1.1.0');
+ const main=SOURCE==='package.json'?JSON.stringify({...JSON.parse(original),scripts:{test:'main'}}):original+'\n// main policy\n';
+ const candidate=SOURCE==='package.json'?JSON.stringify({...JSON.parse(prior),scripts:{test:'main'}}):prior+'\n// main policy\n';
+ const parent='d'.repeat(40),pr={number:1,node_id:task.prId,head:{sha:head}};
+ const receipt={published:true,publishAttempted:true,resultId:head,task:{...task,head:parent},origin:{...origin}};
+ let claims=[receipt],reads=0;
+ const client=createClient({repo:'o/r',repositoryId:1},'read','write',async url=>{
+  const u=new URL(url);assert.equal(u.searchParams.get('ref'),parent);reads++;
+  return {ok:true,status:200,json:async()=>({type:'file',size:prior.length,encoding:'base64',content:Buffer.from(prior).toString('base64')})};
+ });
+ client.getClaims=async()=>claims;
+ const change={filename,status:'modified',before:original,after:candidate};
+ assert.equal(evaluateScope([await client.adoptPublishedBaseline(change,pr,base,main)]).allowed,true);
+ assert.equal(reads,1);
+ assert.equal(evaluateScope([await client.adoptPublishedBaseline({...change,after:candidate.replace('1.1.0','1.0.0')},pr,base,main)]).allowed,false,'partial grouped rollback must fail');
+ assert.equal(evaluateScope([await client.adoptPublishedBaseline({...change,after:main},pr,base,main)]).allowed,false);
+ for(const altered of [[],[receipt,receipt],[{...receipt,published:false}],[{...receipt,resultId:parent}],[{...receipt,task:{...receipt.task,base:parent}}],[{...receipt,task:{...receipt.task,prId:'PR_other'}}],[{...receipt,task:{...receipt.task,head}}]]){
+  claims=altered;assert.equal(evaluateScope([await client.adoptPublishedBaseline(change,pr,base,main)]).allowed,false);
+ }
 });

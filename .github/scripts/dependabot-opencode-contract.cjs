@@ -123,10 +123,10 @@ function workflowTargets(content, onAction) {
 function workflowActionReferences(content) {
   const refs=[];workflowTargets(content,ref=>refs.push(ref));return refs
 }
-function alignWorkflowActions(head,main,ancestor) {
+function alignWorkflowTargets(head,main,ancestor) {
   const groups=targets=>{
     const result=new Map()
-    for(const [key,target] of targets)if(key.startsWith('action:')){
+    for(const [key,target] of targets)if(key.startsWith('action:') || key.startsWith('node:')){
       const group=key.slice(0,key.lastIndexOf(':'));if(!result.has(group))result.set(group,[])
       result.get(group).push({key,target})
     }
@@ -135,8 +135,11 @@ function alignWorkflowActions(head,main,ancestor) {
   const h=groups(head),m=groups(main),a=groups(ancestor || new Map()),aligned=new Map()
   for(const [group,items] of h){
     const baseline=m.get(group) || []
-    if(items.length===baseline.length){items.forEach((item,i)=>aligned.set(item.key,baseline[i].key));continue}
+    if(items.length===baseline.length && (items.length<=1 || head===main)){items.forEach((item,i)=>aligned.set(item.key,baseline[i].key));continue}
     const original=a.get(group)
+    // Equal counts do not prove identity after a deletion plus insertion.
+    // Duplicate ancestor targets cannot distinguish those replacement steps.
+    if(original && items.length===baseline.length && new Set(original.map(item=>canonical(item.target))).size!==original.length)return null
     if(!original || original.length!==items.length || baseline.length<items.length || (original.length+1)*(baseline.length+1)>250000)return null
     // Find a unique, ordered embedding of the authenticated ancestor in main.
     // Equal-looking insertions are ambiguous and cannot move a PR's target.
@@ -156,7 +159,7 @@ function alignWorkflowActions(head,main,ancestor) {
 }
 function retainsImmutableActions(before,after,mainContent,ancestorContent) {
   const previous=workflowTargets(before),next=workflowTargets(after),main=workflowTargets(mainContent)
-  const alignment=alignWorkflowActions(previous,main,workflowTargets(ancestorContent ?? before))
+  const alignment=alignWorkflowTargets(previous,main,workflowTargets(ancestorContent ?? before))
   return alignment!==null && [...previous].every(([key,target])=>!target.pinned || next.get(alignment.get(key))?.pinned)
 }
 function adoptMainBaseline(change,mainContent,policy,ancestorContent) {
@@ -175,6 +178,10 @@ function repairTargets(filename,content) {
     const pkg=JSON.parse(content)
     for(const group of ['dependencies','devDependencies','optionalDependencies','peerDependencies'])for(const [name,version] of Object.entries(pkg[group] || {}))add(`${group}:${name}`,version)
     if(pkg.engines?.node)add('engines:node',pkg.engines.node)
+  } else if(['.nvmrc','.node-version'].includes(filename)) {
+    const version=content.trim()
+    if(!/^v?\d+(?:\.\d+){0,2}$/.test(version))throw Error('Unsupported standalone Node target')
+    add('runtime:node',version)
   } else if(filename==='pnpm-workspace.yaml') {
     let inside=false
     for(const line of content.split(/\r?\n/)) {
@@ -204,13 +211,16 @@ function retainsRepairTargets(change,mainContent,ancestorContent,adoptingMain=tr
     const head=repairTargets(change.filename,change.before),main=repairTargets(change.filename,mainContent),next=repairTargets(change.filename,change.after)
     if(!head || !main || !next)return !adoptingMain && !head && !main && !next
     const equal=(a,b)=>canonical(a ?? null)===canonical(b ?? null)
-    const alignment=alignWorkflowActions(head,adoptingMain?main:head,typeof ancestorContent==='string'?repairTargets(change.filename,ancestorContent):null)
+    const ancestor=typeof ancestorContent==='string'?repairTargets(change.filename,ancestorContent):null
+    const alignment=alignWorkflowTargets(head,adoptingMain?main:head,ancestor)
     if(alignment===null)return false
-    const mappedHead=new Set([...head.keys()].map(key=>key.startsWith('action:')?alignment.get(key):key))
+    const mappedHead=new Set([...head.keys()].map(key=>alignment.get(key) ?? key))
     if(adoptingMain && [...main].some(([key,target])=>!mappedHead.has(key) && !equal(target,next.get(key))))return false
     return [...head].every(([originalKey,target])=>{
-      const key=originalKey.startsWith('action:')?alignment.get(originalKey):originalKey
-      if(equal(target,main.get(key)) || equal(target,next.get(key)))return true
+      const key=alignment.get(originalKey) ?? originalKey
+      const requested=ancestor && !equal(target,ancestor.get(originalKey))
+      if(adoptingMain && ancestor && !requested && !equal(target,main.get(key)))return equal(next.get(key),main.get(key))
+      if((!requested && equal(target,main.get(key))) || equal(target,next.get(key)))return true
       // A trusted main SHA may replace the same version's mutable action tag.
       const candidate=next.get(key)
       return typeof target==='object' && !target.pinned && candidate?.pinned && target.tag===candidate.tag && equal(candidate,main.get(key))
@@ -276,4 +286,4 @@ function validateReviewEvidence(check, context) {
     return {task:raw.task,origin:raw.origin,digest:raw.digest,report,passed}
   } catch { return null }
 }
-module.exports = { validateRepairCapacity, workflowActionReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
+module.exports = { retainsRepairTargets, validateRepairCapacity, workflowActionReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
