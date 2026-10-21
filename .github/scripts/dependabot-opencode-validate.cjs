@@ -14,7 +14,7 @@ async function validateRepair(task,snapshot,artifact,options) {
  validateArtifact(artifact,{task,origin:options.origin,changedFiles:snapshot.changedFiles})
  if(task.kind==='review')return {artifact,checks:{inputDigest:artifact.digest,outputDigest:artifact.digest,success:true}}
  const files=artifact.result.files
- const changes=scopeChanges(files,snapshot)
+ const changes=scopeChanges(files,snapshot,evaluateRepairScope)
  const scope=evaluateRepairScope(changes);if(!scope.allowed)throw Error(scope.reason)
  if(!options.root || !options.image)throw Error('Validation container input is missing')
  rejectLinks(options.root)
@@ -46,7 +46,11 @@ async function validateRepair(task,snapshot,artifact,options) {
  unchanged(files.filter(f=>!GENERATED.includes(f.path)),'dependency generation')
  const paths=[...new Set([...files.map(f=>f.path),...GENERATED])]
  const baseline=paths.map(readFile)
- validateFiles(baseline)
+ // An unchanged generated file is validation evidence, not an extra repair entry.
+ const submitted=new Set(files.map(f=>f.path))
+ validateFiles(baseline.filter(f=>submitted.has(f.path)))
+ const generated=baseline.filter(f=>!submitted.has(f.path))
+ if(generated.length)validateFiles(generated)
  await run(COMMAND)
  unchanged(baseline,'validation')
  const validated=baseline.filter(f=>f.content!==(snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path]))

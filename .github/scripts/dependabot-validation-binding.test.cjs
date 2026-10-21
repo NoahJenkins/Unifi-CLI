@@ -45,6 +45,8 @@ runTest('repair snapshot scopes against common ancestor and retains current main
  assert.ok(reads.includes(ancestor));
  assert.equal(snapshot.baseFiles[filename],workflow(base,'echo main policy'));
  assert.equal(snapshot.headFiles[filename],workflow(head));
+ candidate=workflow(head,'echo main policy');
+ assert.equal((await client.prepareSnapshot(task)).headFiles[filename],candidate);
  candidate=workflow(head,'echo unsafe PR command');
  await assert.rejects(()=>client.prepareSnapshot(task),/Protected|unsupported/i);
  candidate=workflow(head);
@@ -83,4 +85,54 @@ runTest('validator rejects submitted source changes during generation or validat
    }}),/changed during|mutated/i);
   }finally{fs.rmSync(f.root,{recursive:true,force:true});}
  }
+});
+
+function mainAdoptionFixture(){
+ const f=fixture();
+ const main=SOURCE==='package.json'?JSON.stringify({...JSON.parse(SOURCE_BEFORE),scripts:{test:'trusted-main-test'}}):SOURCE_BEFORE+'\n// trusted main assertion\n';
+ const after=SOURCE==='package.json'?JSON.stringify({...JSON.parse(SOURCE_AFTER),scripts:{test:'trusted-main-test'}}):SOURCE_AFTER+'\n// trusted main assertion\n';
+ f.snapshot.baseFiles={[SOURCE]:main};f.snapshot.task=task;
+ f.artifact=sealArtifact({...f.artifact,result:{files:[{path:SOURCE,content:after}]}});
+ return {...f,main,after};
+}
+runTest('validator accepts approved dependency changes while preserving authenticated main policy',async()=>{
+ const f=mainAdoptionFixture();
+ try{
+  const result=await validateRepair(task,f.snapshot,f.artifact,{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{}});
+  assert.equal(result.artifact.result.files.find(file=>file.path===SOURCE).content,f.after);
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
+});
+runTest('main-side fallback cannot authorize new protected edits or unrelated base content',async()=>{
+ const f=mainAdoptionFixture();
+ try{
+  const bad=SOURCE==='package.json'?f.after.replace('trusted-main-test','evil-command'):f.after.replace('trusted main assertion','removed assertion');
+  await assert.rejects(()=>validateRepair(task,f.snapshot,sealArtifact({...f.artifact,result:{files:[{path:SOURCE,content:bad}]}}),{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{}}),/Protected|unsupported/i);
+  for(const snapshot of [{...f.snapshot,baseFiles:{}},{...f.snapshot,changedFiles:[LOCK]}]){
+   await assert.rejects(()=>validateRepair(task,snapshot,f.artifact,{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{}}),/Protected|unsupported/i);
+  }
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
+});
+runTest('publisher independently authorizes main-side adoption and rejects policy changes',async()=>{
+ const f=mainAdoptionFixture();
+ const {digest}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const {agentConfig}=require(PREFIX+'dependabot-opencode-worker.cjs');
+ const {publishResult}=require(PREFIX+'dependabot-opencode-publish.cjs');
+ try{
+  let artifact=sealArtifact({...f.artifact,agent:{...f.artifact.agent,inputDigest:digest(f.snapshot),configDigest:digest(agentConfig('repair','http://broker:8080/v1','EPHEMERAL'))}});
+  const claim={id:1,task,origin:{...origin}};delete claim.origin.jobId;
+  const pr={number:task.pr,node_id:task.prId,state:'open',draft:false,user:{id:49699333,type:'Bot'},head:{sha:head,ref:SOURCE==='package.json'?'dependabot/npm_and_yarn/x':'dependabot/go_modules/x',repo:{id:1}},base:{sha:base,ref:'main',repo:{id:1}}};
+  const config={eventName:'schedule',repositoryId:1,workflowSha:base,ref:'refs/heads/main',runAttempt:1,runId:10};
+  let writes=0;
+  const client={getClaims:async()=>[claim],getPr:async()=>pr,getMain:async()=>base,
+   getRun:async()=>({id:10,event:'schedule',repository:{id:1},run_attempt:1,head_branch:'main',head_sha:base,path:origin.workflowPath}),
+   getJobs:async()=>[{id:20,name:`OpenCode worker (${task.nonce})`,status:'completed',conclusion:'success'},{id:21,name:`OpenCode validation (${task.nonce})`,status:'completed',conclusion:'success'}],
+   prepareSnapshot:async()=>f.snapshot,getArtifact:async()=>({artifact,checks:{inputDigest:artifact.digest,outputDigest:artifact.digest,success:true}}),getWorkerArtifact:async()=>artifact,
+   verifyActionPins:async()=>{},verifyRepairPins:async()=>{},markClaim:async()=>{},commitFiles:async(_pr,files)=>{writes++;assert.equal(files[0].content,f.after);return {id:'commit'};}};
+  assert.deepEqual(await publishResult(client,config,task,1,origin),{kind:'repair',id:'commit'});
+  assert.equal(writes,1);
+  const bad=SOURCE==='package.json'?f.after.replace('trusted-main-test','evil-command'):f.after.replace('trusted main assertion','removed assertion');
+  artifact=sealArtifact({...artifact,result:{files:[{path:SOURCE,content:bad}]}});
+  await assert.rejects(()=>publishResult(client,config,task,1,origin),/Protected|unsupported/i);
+  assert.equal(writes,1);
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
 });

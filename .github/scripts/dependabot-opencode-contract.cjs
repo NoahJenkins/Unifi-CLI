@@ -54,11 +54,32 @@ function validateReview(report, expectedFiles) {
   if (Buffer.byteLength(canonical(report)) > 48000) throw new Error('Review check content limit')
   return {report, passed:report.verdict === 'approve' && Object.values(report.assessment).every(a=>a.status==='pass') && !report.findings.some(f=>['critical','high','medium'].includes(f.severity))}
 }
-function scopeChanges(files,snapshot) {
+function retainsImmutableActions(before,after) {
+  // Conservative reference inventory also covers quoted and uncommented pins.
+  const pins=text=>{
+    const counts=new Map()
+    for(const match of text.matchAll(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*["']?([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})(?=[\s"'#]|$)/gm))counts.set(match[1],(counts.get(match[1]) || 0)+1)
+    return counts
+  }
+  const previous=pins(before), next=pins(after)
+  return [...previous].every(([action,count])=>(next.get(action) || 0)>=count)
+}
+function adoptMainBaseline(change,mainContent,policy) {
+  if(!policy || policy([change]).allowed || change.status!=='modified' || typeof mainContent!=='string')return change
+  if(change.filename.startsWith('.github/workflows/') && !retainsImmutableActions(change.before,change.after))return change
+  const fromMain={...change,before:mainContent}
+  return policy([fromMain]).allowed?fromMain:change
+}
+function scopeChanges(files,snapshot,policy) {
   if(!Array.isArray(snapshot.existingPaths) || snapshot.existingPaths.length>20000 || new Set(snapshot.existingPaths).size!==snapshot.existingPaths.length)throw Error('Complete head inventory is missing')
   snapshot.existingPaths.forEach(path)
   const existing=new Set(snapshot.existingPaths)
-  return files.map(f=>({filename:f.path,before:snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path]??'',after:f.content,status:existing.has(f.path)?'modified':'added'}))
+  return files.map(f=>{
+    const change={filename:f.path,before:snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path]??'',after:f.content,status:existing.has(f.path)?'modified':'added'}
+    // Only PR files have authenticated current-main content in the snapshot.
+    const mainContent=snapshot.changedFiles?.includes(f.path) && Object.hasOwn(snapshot.baseFiles || {},f.path)?snapshot.baseFiles[f.path]:undefined
+    return adoptMainBaseline(change,mainContent,policy)
+  })
 }
 function defaultBranchEvent(event) {return ['workflow_run','status','schedule','workflow_dispatch'].includes(event)}
 function sealArtifact(value) { const {digest:ignored,...payload} = value; return {...payload,digest:digest(payload)} }
@@ -93,4 +114,4 @@ function validateReviewEvidence(check, context) {
     return {task:raw.task,origin:raw.origin,digest:raw.digest,report,passed}
   } catch { return null }
 }
-module.exports = { MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
+module.exports = { MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }

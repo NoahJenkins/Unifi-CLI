@@ -216,7 +216,7 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
  const filename='go.mod';
  const original='module example.com/cli\n\ngo 1.26.9\n\nrequire example.com/dep v1.0.0\n';
  const updated=original.replace('v1.0.0','v1.0.1');
- const mainText=original.replace('1.26.9','1.26.10');
+ const mainText=original.replace('1.26.9','1.26.10')+'// trusted main policy\n';
  const pr={id:1,node_id:'PR_one',number:1,changed_files:1,head:{sha:head,ref:'dependabot/go_modules/group',repo:{id:1}},base:{sha:main,ref:'main',repo:{id:1}},user:{id:49699333,type:'Bot',login:'dependabot[bot]'},body:'Bumps next from 16.0.0 to 16.0.1',title:'Bump next from 16.0.0 to 16.0.1',state:'open',draft:false,mergeable:true,mergeable_state:'behind'};
  let comparison={status:'diverged',merge_base_commit:{sha:ancestor}};
  let headText=updated;
@@ -240,6 +240,8 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
  assert.equal(state.scope.allowed,true);
  assert.equal(evaluateCandidate(state).kind,'refresh');
  assert.ok(reads.includes(ancestor));assert.ok(!reads.includes(main));
+ headText=mainText.replace('v1.0.0','v1.0.1');
+ const repaired=await client.snapshot(pr,main);assert.equal(repaired.scope.allowed,true);assert.equal(evaluateCandidate(repaired).kind,'refresh');
  headText=updated.replace('example.com/cli','example.com/other');
  assert.equal((await client.snapshot(pr,main)).scope.allowed,false);
  headText=updated;comparison={status:'ahead',merge_base_commit:{sha:main}};
