@@ -179,11 +179,24 @@ jobs:
           curl --fail --location --silent --show-error https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-linux-x64-baseline.tar.gz -o "$RUNNER_TEMP/opencode-bin/runtime.tar.gz"
           echo '6334d70db3990721ea454357e9cf2573c8685524ad7769af9d52cbffb7008438  '"$RUNNER_TEMP/opencode-bin/runtime.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/opencode-bin/runtime.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+      - name: Install verified offline search runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz -o "$RUNNER_TEMP/opencode-bin/ripgrep.tar.gz"
+          echo '1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599  '"$RUNNER_TEMP/opencode-bin/ripgrep.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/opencode-bin/ripgrep.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+      - name: Verify isolated runtime search without provider credentials
+        run: node trusted/.github/scripts/dependabot-opencode-smoke.cjs
+        env:
+          OPENCODE_BINARY: ${{ runner.temp }}/opencode-bin/opencode
+          RIPGREP_BINARY: ${{ runner.temp }}/opencode-bin/ripgrep-15.1.0-x86_64-unknown-linux-musl/rg
       - name: Run isolated bounded Go session
         run: node trusted/.github/scripts/dependabot-controller-run.cjs worker
         env:
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           OPENCODE_BINARY: ${{ runner.temp }}/opencode-bin/opencode
+          RIPGREP_BINARY: ${{ runner.temp }}/opencode-bin/ripgrep-15.1.0-x86_64-unknown-linux-musl/rg
       - name: Upload wrapper-owned data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
