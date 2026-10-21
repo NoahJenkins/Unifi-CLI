@@ -186,3 +186,5 @@ App-owned check for the same commit. GitHub retains an existing conclusion when
 a completed check is patched, so reusing it can leave task claims blocked. Pending
 evaluations reuse the new check until completion. This does not reset the recovery
 ledger or authorize a merge without current-head validation and independent review.
+
+GitHub can report an older PR base SHA while the target branch has advanced. When the authenticated comparison proves that main is absent from the PR and GitHub marks the PR mergeable and behind, the controller can use its bounded branch-refresh budget. It checks that the observed PR head/base and current main remain unchanged before the write. This exception permits only branch refresh; merge, review, repair dispatch, and CI retry retain exact-current-base requirements.
