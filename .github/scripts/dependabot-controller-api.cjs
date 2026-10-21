@@ -81,7 +81,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
     },
     async snapshot(pr, main) {
       const files = await list(`${root}/pulls/${pr.number}/files`)
-      if (files.length !== pr.changed_files || files.length > 100) throw new Error('Incomplete or excessive PR file list')
+      if (files.length !== pr.changed_files || files.length > 64) throw new Error('Incomplete PR file list or 64-file review capacity exceeded')
       const compare = await request('GET', `${root}/compare/${main}...${pr.head.sha}`)
       const containsMain = ['ahead', 'identical'].includes(compare.status)
       const scopeBase = compare.merge_base_commit?.sha

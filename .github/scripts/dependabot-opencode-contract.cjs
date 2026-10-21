@@ -199,13 +199,15 @@ function repairTargets(filename,content) {
   } else return null
   return targets
 }
-function retainsRepairTargets(change,mainContent,ancestorContent) {
+function retainsRepairTargets(change,mainContent,ancestorContent,adoptingMain=true) {
   try {
     const head=repairTargets(change.filename,change.before),main=repairTargets(change.filename,mainContent),next=repairTargets(change.filename,change.after)
-    if(!head || !main || !next)return false
+    if(!head || !main || !next)return !adoptingMain && !head && !main && !next
     const equal=(a,b)=>canonical(a ?? null)===canonical(b ?? null)
-    const alignment=alignWorkflowActions(head,main,typeof ancestorContent==='string'?repairTargets(change.filename,ancestorContent):null)
+    const alignment=alignWorkflowActions(head,adoptingMain?main:head,typeof ancestorContent==='string'?repairTargets(change.filename,ancestorContent):null)
     if(alignment===null)return false
+    const mappedHead=new Set([...head.keys()].map(key=>key.startsWith('action:')?alignment.get(key):key))
+    if(adoptingMain && [...main].some(([key,target])=>!mappedHead.has(key) && !equal(target,next.get(key))))return false
     return [...head].every(([originalKey,target])=>{
       const key=originalKey.startsWith('action:')?alignment.get(originalKey):originalKey
       if(equal(target,main.get(key)) || equal(target,next.get(key)))return true
@@ -232,6 +234,10 @@ function scopeChanges(files,snapshot,policy) {
     const mainContent=snapshot.changedFiles?.includes(f.path) && Object.hasOwn(snapshot.baseFiles || {},f.path)?snapshot.baseFiles[f.path]:undefined
     const ancestorContent=snapshot.changedFiles?.includes(f.path)?snapshot.ancestorFiles?.[f.path]:undefined
     const adopted=adoptMainBaseline(change,mainContent,policy,ancestorContent)
+    // Direct repairs must also preserve updates relative to the authenticated
+    // ancestor, even when current main already contains those targets.
+    const originalContent=ancestorContent ?? mainContent
+    if(adopted===change && policy?.([change]).allowed && typeof originalContent==='string' && !retainsRepairTargets(change,originalContent,undefined,false))throw Error('Repair must preserve every requested dependency target')
     // Baseline substitution must not authorize reverting any PR target to main.
     // Apply this only to repair output, not ancestor-relative reconciliation.
     return adopted!==change && !retainsRepairTargets(change,mainContent,ancestorContent)?change:adopted

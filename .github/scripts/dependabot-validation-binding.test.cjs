@@ -147,6 +147,10 @@ runTest('publisher independently authorizes main-side adoption and rejects polic
   artifact=sealArtifact({...artifact,result:{files:[{path:SOURCE,content:f.main}]}});
   await assert.rejects(()=>publishResult(client,config,task,1,origin),/Protected|unsupported/i);
   assert.equal(writes,1);
+  f.snapshot.headFiles[SOURCE]=SOURCE_AFTER;f.snapshot.baseFiles[SOURCE]=SOURCE_BEFORE;f.snapshot.ancestorFiles={[SOURCE]:SOURCE_BEFORE};
+  artifact=sealArtifact({...artifact,agent:{...artifact.agent,inputDigest:digest(f.snapshot)},result:{files:[{path:SOURCE,content:SOURCE_BEFORE}]}});
+  await assert.rejects(()=>publishResult(client,config,task,1,origin),/preserve.*target/i);
+  assert.equal(writes,1);
  }finally{fs.rmSync(f.root,{recursive:true,force:true});}
 });
 
@@ -331,5 +335,72 @@ runTest('repair and generated output cannot exceed the PR-wide review capacity',
  try{
   await assert.rejects(()=>validateRepair(task,f.snapshot,f.artifact,{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{executions++;fs.writeFileSync(path.join(f.root,LOCK),'generated change');}}),/review capacity/i);
   assert.equal(executions,1);
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
+});
+
+runTest('main adoption preserves targets absent from the PR including repeated action insertions',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const old=workflow(base),current=workflow(head);
+ const cases=[
+  ['package.json','{"dependencies":{"example":"1.1.0"}}','{"dependencies":{"example":"1.0.0","extra":"2.0.0"},"scripts":{"test":"main"}}','{"dependencies":{"example":"1.1.0","extra":"2.0.0"},"scripts":{"test":"main"}}','2.0.0','2.1.0'],
+  ['pnpm-workspace.yaml',"overrides:\n  example: '1.1.0'\n","# main\noverrides:\n  example: '1.0.0'\n  extra: '2.0.0'\n","# main\noverrides:\n  example: '1.1.0'\n  extra: '2.0.0'\n",'2.0.0','2.1.0'],
+  ['go.mod','module example\nrequire example/foo v1.1.0\n','module example\n// main\nrequire example/foo v1.0.0\nrequire example/extra v2.0.0\n','module example\n// main\nrequire example/foo v1.1.0\nrequire example/extra v2.0.0\n','v2.0.0','v2.1.0'],
+ ];
+ for(const action of ['actions/checkout','actions/setup-node']){
+  const main=old.replace('    steps:\n','    steps:\n      - uses: '+action+'@'+ancestor+' # v4.1.0\n').replace('echo old','echo main');
+  cases.push(['.github/workflows/ci.yml',current,main,main.replace(base,head),ancestor,'d'.repeat(40),old]);
+ }
+ for(const [filename,before,main,candidate,from,to,original] of cases){
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:before},baseFiles:{[filename]:main},ancestorFiles:{[filename]:original ?? before}};
+  // Isolate retention from each repository's different ecosystem scope rules.
+  const policy=changes=>({allowed:changes[0].before===main});
+  const allowed=content=>policy(scopeChanges([{path:filename,content}],snapshot,policy)).allowed;
+  assert.equal(allowed(candidate),true,filename);
+  assert.equal(allowed(candidate.replace(from,to)),false,filename+' must retain main-only target');
+ }
+});
+runTest('direct repairs retain every requested dependency target before validation',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const cases=[
+  ['package.json','{"dependencies":{"foo":"1.0.0","bar":"1.0.0"}}','{"dependencies":{"foo":"1.1.0","bar":"1.1.0"}}','{"dependencies":{"foo":"1.0.0","bar":"1.1.0"}}'],
+  ['go.mod','module example\nrequire example/foo v1.0.0\nrequire example/bar v1.0.0\n','module example\nrequire example/foo v1.1.0\nrequire example/bar v1.1.0\n','module example\nrequire example/foo v1.0.0\nrequire example/bar v1.1.0\n'],
+  ['.github/workflows/ci.yml',workflow(base),workflow(head),workflow(base)],
+ ];
+ for(const [filename,original,before,after] of cases){
+  // Main can already contain the requested target; ancestor still binds intent.
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:before},baseFiles:{[filename]:before},ancestorFiles:{[filename]:original}};
+  const policy=()=>({allowed:true});
+  assert.doesNotThrow(()=>scopeChanges([{path:filename,content:before}],snapshot,policy));
+  assert.throws(()=>scopeChanges([{path:filename,content:after}],snapshot,policy),/preserve.*target/i);
+ }
+});
+runTest('oversized PRs are blocked before reading the ledger or reserving agent work',async()=>{
+ const {reconcileOne}=require(PREFIX+'dependabot-controller.cjs');
+ const {DEPENDABOT_ID}=require(PREFIX+'dependabot-controller-policy.cjs');
+ for(const count of [65,100]){
+  const pr={number:1,node_id:'PR_one',state:'open',draft:false,user:{id:DEPENDABOT_ID,type:'Bot'},head:{sha:head,ref:'dependabot/github_actions/group',repo:{id:1}},base:{sha:base,ref:'main',repo:{id:1}},changed_files:count,auto_merge:{}};
+  const gates=[],tasks=[],state={};let cancelled=0;
+  const client={getPr:async()=>pr,setGate:async(p,kind,reason)=>gates.push({kind,reason}),disableMerge:async()=>{cancelled++;},hasDependabotHead:async()=>false,getMain:async()=>{throw Error('Must stop before snapshot or reservations');}};
+  const result=await reconcileOne(client,{automationEnabled:true,repositoryId:1},1,state,tasks);
+  assert.equal(result.kind,'blocked');assert.match(result.reason,/64.*file|file.*64/i);
+  assert.equal(cancelled,1);assert.deepEqual(state,{});assert.deepEqual(tasks,[]);
+  assert.equal(gates.at(-1).kind,'blocked');
+ }
+});
+runTest('snapshot rejects file sets beyond the same 64-file review capacity',async()=>{
+ const files=Array.from({length:65},(_,i)=>({filename:`file-${i}`,status:'modified'}));let calls=0;
+ const client=createClient({repo:'o/r'},'read','write',async()=>{calls++;if(calls>1)throw Error('Must stop before comparison or file downloads');return {ok:true,status:200,json:async()=>files};});
+ await assert.rejects(()=>client.snapshot({number:1,changed_files:65,head:{sha:head}},base),/64.*file|file.*64/i);
+ assert.equal(calls,1);
+});
+
+runTest('direct rollback is rejected before invoking the validation executor',async()=>{
+ const f=fixture();let calls=0;
+ try{
+  f.snapshot.headFiles[SOURCE]=SOURCE_AFTER;f.snapshot.baseFiles={[SOURCE]:SOURCE_BEFORE};f.snapshot.ancestorFiles={[SOURCE]:SOURCE_BEFORE};
+  const artifact=sealArtifact({...f.artifact,result:{files:[{path:SOURCE,content:SOURCE_BEFORE}]}});
+  assert.equal(evaluateScope([{filename:SOURCE,status:'modified',before:SOURCE_AFTER,after:SOURCE_BEFORE}]).allowed,true);
+  await assert.rejects(()=>validateRepair(task,f.snapshot,artifact,{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{calls++;}}),/preserve.*target/i);
+  assert.equal(calls,0);
  }finally{fs.rmSync(f.root,{recursive:true,force:true});}
 });
