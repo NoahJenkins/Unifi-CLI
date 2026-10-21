@@ -568,11 +568,14 @@ runTest('block scalar step name does not hide the following executable action',(
  }
 });
 
-runTest('scope normalizes Node versions only in executable setup inputs',()=>{
+runTest('UniFi scope preserves Node inputs while allowing action pin updates',()=>{
  const filename='.github/workflows/ci.yml';
  const actual=`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: 24.0.0\n`;
  const allowed=before=>evaluateScope([{filename,status:'modified',before,after:before.replace('24.0.0','24.1.0')}]).allowed;
- if(SOURCE==='package.json')assert.equal(allowed(actual),true);
+ for(const before of [actual,actual.replace('with:\n          node-version: 24.0.0','with: {node-version: 24.0.0}')]) {
+  assert.equal(allowed(before),false,'Node-version edits require manual review in UniFi');
+  assert.equal(evaluateScope([{filename,status:'modified',before,after:before.replace(base,head)}]).allowed,true,'action pins remain eligible with unchanged Node input');
+ }
  for(const before of [actual.replace('with:','env:'),actual.replace('actions/setup-node','example/other-action'),actual.replace('          node-version:','          data:\n            node-version:'),`jobs:\n  ci:\n    env:\n      node-version: 24.0.0\n    steps:\n      - run: echo ok\n`,`jobs:\n  ci:\n    steps:\n      - run: |\n          node-version: 24.0.0\n`])assert.equal(allowed(before),false,'unrelated Node data remains protected');
 });
 runTest('duplicate names involving run steps cannot reassign setup targets',()=>{
