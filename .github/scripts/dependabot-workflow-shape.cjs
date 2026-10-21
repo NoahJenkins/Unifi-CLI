@@ -13,14 +13,19 @@ function expandWorkflowFlow(content) {
   const sourceText=lines.join('\n')
   function parse(source) {
     let pos=0,nodes=0;const protectedComments=[]
-    const comment=node=>{
+    const comment=(node,location,inlineOnly=false)=>{
+      const begin=pos
       while(pos<source.length) {
-        if(/\s/.test(source[pos])){pos++;continue}
+        if(/\s/.test(source[pos])){if(inlineOnly && source[pos]==='\n')break;pos++;continue}
         if(source[pos]!=='#')break
         const end=source.indexOf('\n',pos),stop=end<0?source.length:end
         const text=source.slice(pos+1,stop).trim()
-        if(node && /^v\d+(?:\.\d+){0,2}$/.test(text))node.comment=text
-        else protectedComments.push(source.slice(pos,stop))
+        const annotates=node && (node.kind==='scalar' || (node.kind==='map' && node.items.some(item=>item.key.replace(/^['"]|['"]$/g,'')==='uses' && item.value.kind==='scalar' && !item.value.comment)))
+        const version=annotates && !node.comment && /^v\d+(?:\.\d+){0,2}$/.test(text)
+        if(version)node.comment=text
+        // Keep structural ownership and separator position, not just comment
+        // text. Only rendered version annotations can mask their version.
+        protectedComments.push([location,source.slice(begin,pos).includes('\n'),version?'version':'literal',version?source.slice(pos,stop).replace(text,'VERSION_TAG'):source.slice(pos,stop)])
         pos=stop
       }
     }
@@ -33,11 +38,11 @@ function expandWorkflowFlow(content) {
       }
       throw Error('Unterminated flow scalar')
     }
-    function value(depth) {
+    function value(depth,location) {
       if(depth>32 || ++nodes>10000)throw Error('Workflow flow collection limit')
-      comment();const start=pos,ch=source[pos]
+      comment(null,[...location,'before']);const start=pos,ch=source[pos]
       if(ch==='{' || ch==='[') {
-        pos++;const map=ch==='{',end=map?'}':']',items=[],keys=new Set();comment()
+        pos++;const map=ch==='{',end=map?'}':']',items=[],keys=new Set();comment(null,[...location,'open'])
         while(source[pos]!==end) {
           if(pos>=source.length)throw Error('Unterminated workflow flow collection')
           let key
@@ -46,14 +51,14 @@ function expandWorkflowFlow(content) {
             if(source[pos]==='"'||source[pos]==="'")key=quoted()
             else{while(pos<source.length && !/[:,{}\[\]\n]/.test(source[pos]))pos++;key=source.slice(begin,pos).trim()}
             if(!/^(?:[a-zA-Z_][\w-]*|"[a-zA-Z_][\w-]*"|'[a-zA-Z_][\w-]*')$/.test(key))throw Error('Unsupported flow mapping key')
-            comment();if(source[pos++]!==':')throw Error('Missing flow mapping colon')
+            comment(null,[...location,items.length,'key']);if(source[pos++]!==':')throw Error('Missing flow mapping colon')
             const identity=key.replace(/^['"]|['"]$/g,'')
             if(keys.has(identity))throw Error('Duplicate flow mapping key');keys.add(identity)
           }
-          const child=value(depth+1);items.push(map?{key,value:child}:child);comment(child)
+          const childLocation=[...location,items.length],child=value(depth+1,childLocation);items.push(map?{key,value:child}:child);comment(child,[...childLocation,'value'])
           if(source[pos]===end)break
           if(source[pos++]!==',')throw Error('Missing flow collection separator')
-          comment(child)
+          comment(child,[...childLocation,'separator'])
         }
         pos++;return {kind:map?'map':'seq',items}
       }
@@ -63,10 +68,10 @@ function expandWorkflowFlow(content) {
       if(!raw)throw Error('Empty or unsupported flow scalar')
       return {kind:'scalar',raw}
     }
-    const node=value(0),end=pos
+    const node=value(0,[]),end=pos
     // A comment after a flow step/job conventionally annotates its uses value.
     while(source[pos]===' ' || source[pos]==='\t')pos++
-    if(source[pos]==='#')comment(node)
+    if(source[pos]==='#')comment(node,['end'],true)
     return {node,end,protectedComments}
   }
   function render(node,indent,inherited) {
@@ -102,8 +107,9 @@ function expandWorkflowFlow(content) {
     } else {
       out.push(match[1]+match[2].trimEnd());out.push(...render(node,indent+2,node.comment))
     }
-    // Preserve non-version comments that are not action tag annotations.
-    out.push(...protectedComments.map(comment=>match[1]+comment))
+    // These internal comparison records cannot be forged by file bytes: the
+    // content boundary rejects NUL. The workflow scanner treats them as comments.
+    out.push(...protectedComments.map(comment=>match[1]+'#\0flow-comment '+JSON.stringify(comment)))
     i+=consumed;changed=true
   }
   return changed?out.join('\n'):content

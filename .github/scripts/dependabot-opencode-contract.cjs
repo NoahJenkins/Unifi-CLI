@@ -264,6 +264,9 @@ function retainsRepairTargets(change,mainContent,ancestorContent,adoptingMain=tr
     const head=repairTargets(change.filename,change.before),main=repairTargets(change.filename,mainContent),next=repairTargets(change.filename,change.after)
     if(!head || !main || !next)return !adoptingMain && !head && !main && !next
     const equal=(a,b)=>canonical(a ?? null)===canonical(b ?? null)
+    // Direct repairs may fix source/lockfiles, but cannot change the PR's
+    // dependency inventory, including targets the dependency update left alone.
+    if(!adoptingMain)return head.size===next.size && [...head].every(([key,target])=>next.has(key) && equal(target,next.get(key)))
     const ancestor=typeof ancestorContent==='string'?repairTargets(change.filename,ancestorContent):null
     const alignment=alignWorkflowTargets(head,adoptingMain?main:head,ancestor)
     if(alignment===null)return false
@@ -299,7 +302,7 @@ function scopeChanges(files,snapshot,policy) {
     const adopted=adoptMainBaseline(change,mainContent,policy,ancestorContent)
     // Direct repairs must also preserve updates relative to the authenticated
     // ancestor, even when current main already contains those targets.
-    const originalContent=ancestorContent ?? mainContent
+    const originalContent=ancestorContent ?? mainContent ?? change.before
     if(adopted===change && policy?.([change]).allowed && typeof originalContent==='string' && !retainsRepairTargets(change,originalContent,undefined,false))throw Error('Repair must preserve every requested dependency target')
     // Baseline substitution must not authorize reverting any PR target to main.
     // Apply this only to repair output, not ancestor-relative reconciliation.

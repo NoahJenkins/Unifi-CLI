@@ -174,3 +174,7 @@ The shared Node-input parser records major wildcard selectors such as `22.x` and
 Inline YAML comments on supported Node inputs remain part of protected workflow content. Plain and quoted selectors are parsed with matching quotes; scope normalization masks only the version value. Comment changes remain blocked, and retention still rejects target rollback. UniFi continues to block Node-version edits.
 
 Action scope normalization preserves ordinary comment text in block and flow layouts. Complete version annotations on immutable pins remain eligible dependency metadata and require upstream tag verification. Literal comments cannot imitate the normalized version marker. Each repository retains its existing rules for tagged and untagged action references.
+
+Direct repairs preserve the complete dependency target set from the PR head, including untouched dependencies and manifests supplied only as context. They cannot add, remove, move, or change dependency targets. Authenticated main-side adoption remains a separate path.
+
+Flow-comment comparison retains the owning node and position relative to collection separators. Version-like comments on non-action mappings and extra version comments remain protected; only the rendered action annotation can normalize as dependency metadata.

@@ -58,7 +58,8 @@ runTest('repair snapshot scopes against common ancestor and retains current main
 });
 function fixture(){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'validation-binding-'));
- const before=SOURCE_BEFORE, after=SOURCE_AFTER;
+ // The PR already requests this target; repair regenerates its lockfile.
+ const before=SOURCE_AFTER, after=SOURCE_AFTER;
  fs.writeFileSync(path.join(root,'go.mod'),'module example.com/cli\n\ngo 1.26.9\n');
  const snapshot={changedFiles:[SOURCE],existingPaths:[SOURCE,LOCK],headFiles:{[SOURCE]:before,[LOCK]:'old lock'}};
  fs.writeFileSync(path.join(root,SOURCE),before);fs.writeFileSync(path.join(root,LOCK),'old lock');
@@ -73,7 +74,7 @@ runTest('validator publishes the bytes checked after dependency generation',asyn
   }});
   assert.equal(commands.length,2);
   assert.ok(!commands[1].includes(GENERATE));
-  assert.equal(result.artifact.result.files.find(file=>file.path===SOURCE).content,f.after);
+  assert.equal(fs.readFileSync(path.join(f.root,SOURCE),'utf8'),f.after);
   assert.equal(result.artifact.result.files.find(file=>file.path===LOCK).content,'generated lock');
  }finally{fs.rmSync(f.root,{recursive:true,force:true});}
 });
@@ -643,4 +644,47 @@ runTest('action normalization preserves comments except verified version annotat
  const calls=[];const client=createClient({repo:'o/r'},'read','write',async url=>{calls.push(url);return {ok:true,status:200,json:async()=>({object:{type:'commit',sha:head}})};});
  await client.verifyActionPins([{filename,before:workflow(base),after:workflow(head).replace('# v4.1.0','# v4.2.0')}]);
  assert.ok(calls.some(url=>url.endsWith('/git/ref/tags/v4.2.0')),'changed annotation still requires upstream tag proof');
+});
+
+runTest('direct repairs preserve untouched targets and the complete target key set',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const original=JSON.stringify({dependencies:{foo:'1.0.0',bar:'2.0.0'}});
+ const before=original.replace('1.0.0','1.1.0');
+ const cases=[
+  before.replace('2.0.0','2.1.0'),
+  JSON.stringify({dependencies:{foo:'1.1.0'}}),
+  JSON.stringify({dependencies:{foo:'1.1.0',bar:'2.0.0',extra:'1.0.0'}}),
+  JSON.stringify({dependencies:{foo:'1.1.0'},devDependencies:{bar:'2.0.0'}}),
+ ];
+ const snapshot={changedFiles:['package.json'],existingPaths:['package.json'],headFiles:{'package.json':before},baseFiles:{'package.json':original},ancestorFiles:{'package.json':original}};
+ const policy=()=>({allowed:true});
+ assert.doesNotThrow(()=>scopeChanges([{path:'package.json',content:before}],snapshot,policy));
+ for(const content of cases)assert.throws(()=>scopeChanges([{path:'package.json',content}],snapshot,policy),/preserve.*target/i);
+ const context={...snapshot,changedFiles:['pnpm-lock.yaml'],headFiles:{},contextFiles:{'package.json':before},baseFiles:{},ancestorFiles:{}};
+ for(const content of cases)assert.throws(()=>scopeChanges([{path:'package.json',content}],context,policy),/preserve.*target/i);
+});
+
+runTest('flow comments retain their owner, placement, and non-action version text',()=>{
+ const filename='.github/workflows/ci.yml';
+ const allowed=(before,after)=>evaluateScope([{filename,status:'modified',before,after}]).allowed;
+ const wrap=step=>`jobs:\n  ci:\n    steps:\n      - ${step}\n`;
+ const cases=[
+  [wrap(`{uses: actions/checkout@${base}, # rationale\n        with: {path: safe}} # v4.1.0`),wrap(`{uses: actions/checkout@${head},\n        with: {path: safe}} # rationale\n        # v4.1.0`)],
+  [wrap(`{name: Setup, # rationale\n        uses: actions/checkout@${base}} # v4.1.0`),wrap(`{name: Setup,\n        uses: actions/checkout@${head} # rationale\n        } # v4.1.0`)],
+  [workflow(base)+'      - {run: echo safe} # v99\n',workflow(head)+'      - {run: echo safe} # v100\n'],
+  [wrap(`{uses: actions/checkout@${base}, with: {path: safe} # v99\n        } # v4.1.0`),wrap(`{uses: actions/checkout@${head}, with: {path: safe} # v100\n        } # v4.1.0`)],
+ ];
+ for(const [before,after] of cases){
+  assert.equal(allowed(before,before.replaceAll(base,head)),true,'unchanged comments permit action updates');
+  assert.equal(allowed(before,after),false,'comment changes or reassociation stay protected');
+ }
+ for(const comment of ['v99','rationale']){
+  const before=workflow(base)+`  other:\n    steps:\n      - {run: echo safe} # ${comment}\n`;
+  assert.equal(allowed(before,before.replace(base,head).replace(` # ${comment}`,'')),false,'non-action flow comment cannot disappear');
+ }
+ const duplicate=wrap(`{uses: actions/checkout@${base} # v4.1.0\n        } # v99`);
+ assert.equal(allowed(duplicate,duplicate.replace(base,head)),true);
+ assert.equal(allowed(duplicate,duplicate.replace(base,head).replace('v99','v100')),false,'a second version comment is not action metadata');
+ const annotated=wrap(`{uses: actions/checkout@${base}} # v4.1.0`);
+ assert.equal(allowed(annotated,annotated.replace(base,head).replace('v4.1.0','v4.2.0')),true,'real action annotations still normalize');
 });
