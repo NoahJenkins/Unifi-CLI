@@ -54,23 +54,25 @@ function validateReview(report, expectedFiles) {
   if (Buffer.byteLength(canonical(report)) > 48000) throw new Error('Review check content limit')
   return {report, passed:report.verdict === 'approve' && Object.values(report.assessment).every(a=>a.status==='pass') && !report.findings.some(f=>['critical','high','medium'].includes(f.severity))}
 }
-function workflowTargets(content) {
+function workflowTargets(content, onAction) {
   const targets=new Map(),counts=new Map(),jobs=new Set()
   let job='',jobsIndent=null,jobIndent=null,fieldIndent=null,stepsIndent=null,stepIndent=null,stepFieldIndent=null,scalarIndent=null
   const mapping=value=>{
     const m=value.match(/^(?:"([a-zA-Z_][\w-]*)"|'([a-zA-Z_][\w-]*)'|([a-zA-Z_][\w-]*)):[ \t]*(.*)$/)
     return m && {name:m[1] || m[2] || m[3],value:m[4]}
   }
-  function action(value) {
+  function action(value,line,index) {
     const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
     if(!use)throw Error('Unsupported workflow action reference')
     const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
     if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))return;throw Error('Unsupported workflow action reference')}
     const key=`action:${job}:${ref[1]}`,n=counts.get(key) || 0;counts.set(key,n+1)
     const pinned=/^[0-9a-f]{40}$/.test(ref[2]),tag=pinned?use[4]?.trim():ref[2]
-    targets.set(`${key}:${n}`,{ref:ref[2],tag:/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null,pinned})
+    const versionTag=/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null
+    targets.set(`${key}:${n}`,{ref:ref[2],tag:versionTag,pinned})
+    onAction?.({key:`${key}:${n}`,index,prefix:line.slice(0,line.length-value.length),action:ref[1],sha:pinned?ref[2]:null,tag:versionTag})
   }
-  for(const line of content.split(/\r?\n/)) {
+  for(const [index,line] of content.split(/\r?\n/).entries()) {
     const indent=line.match(/^[ ]*/)[0].length,trimmed=line.trimStart(),entry=mapping(trimmed)
     if(scalarIndent!==null && (!line.trim() || indent>scalarIndent))continue
     scalarIndent=null
@@ -94,7 +96,7 @@ function workflowTargets(content) {
     // may contain a key named uses and must not consume action occurrences.
     if(indent===fieldIndent && entry) {
       stepsIndent=null;stepIndent=null;stepFieldIndent=null
-      if(entry.name==='uses')action(entry.value)
+      if(entry.name==='uses')action(entry.value,line,index)
       if(entry.name==='steps') {
         if(!/^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value) && entry.value!=='[]')throw Error('Unsupported workflow steps sequence')
         stepsIndent=indent
@@ -102,15 +104,22 @@ function workflowTargets(content) {
       continue
     }
     if(stepsIndent===null || indent<stepsIndent)continue
-    const item=trimmed.match(/^-[ \t]+(.*)$/)
+    const item=trimmed.match(/^-(?:[ \t]+(.*))?$/)
     if(item && (stepIndent===null || indent===stepIndent)) {
-      stepIndent=indent;stepFieldIndent=indent+trimmed.indexOf(item[1]);const first=mapping(item[1])
-      if(!first && !/^[&*][\w-]+[ \t]*(?:#.*)?$/.test(item[1]))throw Error('Unsupported workflow step declaration')
-      if(!first)stepFieldIndent=indent+2
-      if(first?.name==='uses')action(first.value)
-    } else if(stepFieldIndent!==null && indent===stepFieldIndent && entry?.name==='uses')action(entry.value)
+      stepIndent=indent;const value=item[1] || '',first=mapping(value)
+      const bare=!value.trim() || value.trimStart().startsWith('#')
+      if(!first && !bare && !/^[&*][\w-]+[ \t]*(?:#.*)?$/.test(value))throw Error('Unsupported workflow step declaration')
+      stepFieldIndent=first?indent+trimmed.indexOf(value):null
+      if(first?.name==='uses')action(first.value,line,index)
+    } else {
+      if(stepIndent!==null && stepFieldIndent===null && indent>stepIndent && entry)stepFieldIndent=indent
+      if(stepFieldIndent!==null && indent===stepFieldIndent && entry?.name==='uses')action(entry.value,line,index)
+    }
   }
   return targets
+}
+function workflowActionReferences(content) {
+  const refs=[];workflowTargets(content,ref=>refs.push(ref));return refs
 }
 function retainsImmutableActions(before,after) {
   // Count all occurrences, including mutable refs, within each job and action.
@@ -215,4 +224,4 @@ function validateReviewEvidence(check, context) {
     return {task:raw.task,origin:raw.origin,digest:raw.digest,report,passed}
   } catch { return null }
 }
-module.exports = { MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
+module.exports = { workflowActionReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }

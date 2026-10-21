@@ -203,13 +203,14 @@ runTest('immutable step identity is job scoped and ignores run script text',()=>
 runTest('main adoption accepts CRLF quoted and uncommented action references',()=>{
  const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
  const filename='.github/workflows/ci.yml';
+ const policy=changes=>({allowed:changes.every(c=>c.before.replace(/[a-f0-9]{40}/g,'PIN')===c.after.replace(/[a-f0-9]{40}/g,'PIN'))});
  for(const uses of [`actions/checkout@${head}`,`"actions/checkout@${head}"`,`'actions/checkout@${head}'`,`actions/checkout@${head} # v4.1.0`]) {
   const current='jobs:\n  ci:\n    steps:\n      - uses: '+uses+'\n      - run: echo old\n';
-  const main=current.replace('echo old','echo trusted main').replaceAll('\n','\r\n');
+  const main=current.replace(head,base).replace('echo old','echo trusted main').replaceAll('\n','\r\n');
   const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main}};
-  assert.equal(evaluateScope(scopeChanges([{path:filename,content:main}],snapshot,evaluateScope)).allowed,true);
+  assert.equal(policy(scopeChanges([{path:filename,content:main.replaceAll(base,head)}],snapshot,policy)).allowed,true);
   const reverted=main.replaceAll(head,base);
-  assert.equal(evaluateScope(scopeChanges([{path:filename,content:reverted}],snapshot,evaluateScope)).allowed,false);
+  assert.equal(policy(scopeChanges([{path:filename,content:reverted}],snapshot,policy)).allowed,false);
  }
 });
 
@@ -232,4 +233,40 @@ runTest('environment and input keys named uses are not executable action referen
   assert.equal(evaluateScope(scopeChanges([{path:filename,content:main.replaceAll('uses: actions/checkout@'+base+' # v4.1.0','uses: actions/checkout@'+head+' # v4.1.0')}],snapshot,evaluateScope)).allowed,true);
   assert.equal(evaluateScope(scopeChanges([{path:filename,content:main}],snapshot,evaluateScope)).allowed,false);
  }
+});
+
+runTest('bare sequence steps retain immutable dependency targets during main adoption',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ for(const marker of ['-', '- # executable step']) {
+  const current=workflow(head).replace('- uses:',marker+'\n        uses:');
+  const main=current.replace(head,base).replace('echo old','echo trusted main');
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main}};
+  // Isolate the target-retention guard from scope normalization.
+  const policy=changes=>({allowed:changes[0].before===main});
+  assert.equal(policy(scopeChanges([{path:filename,content:main}],snapshot,policy)).allowed,false);
+ }
+});
+runTest('scope and upstream verification use executable references in every supported layout',async()=>{
+ const filename='.github/workflows/ci.yml';
+ const forms=[
+  sha=>workflow(sha).replace('actions/checkout@'+sha,'"actions/checkout@'+sha+'"'),
+  sha=>workflow(sha).replace('- uses:', '-\n        uses:'),
+  sha=>`jobs:\n  reuse:\n    uses: org/repo/.github/workflows/build.yml@${sha} # v4.1.0\n`,
+  sha=>workflow(sha).replaceAll('\n','\r\n'),
+ ];
+ for(const form of forms){
+  const before=form(base),after=form(head),change={filename,status:'modified',before,after};
+  assert.equal(evaluateScope([change]).allowed,true);
+  const reads=[];
+  const client=createClient({repo:'o/r'},'read','write',async url=>{
+   reads.push(new URL(url).pathname);
+   return {ok:true,status:200,json:async()=>({object:{type:'commit',sha:head}})};
+  });
+  await client.verifyActionPins([change]);
+  assert.equal(reads.length,1);assert.match(reads[0],/\/git\/ref\/tags\/v4\.1\.0$/);
+  assert.equal(evaluateScope([{...change,after:after.replace(head,'v4.1.0')}]).allowed,false);
+ }
+ const before=workflow(base)+'        with:\n          uses: ordinary input\n';
+ assert.equal(evaluateScope([{filename,status:'modified',before,after:before.replace('ordinary input','changed input')}]).allowed,false);
 });
