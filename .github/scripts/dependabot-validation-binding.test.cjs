@@ -567,3 +567,25 @@ runTest('block scalar step name does not hide the following executable action',(
   assert.equal(evaluateScope([{...change,after:before.replace(base,'v4.1.0')}]).allowed,false,indicator+' cannot hide a mutable pin');
  }
 });
+
+runTest('scope normalizes Node versions only in executable setup inputs',()=>{
+ const filename='.github/workflows/ci.yml';
+ const actual=`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: 24.0.0\n`;
+ const allowed=before=>evaluateScope([{filename,status:'modified',before,after:before.replace('24.0.0','24.1.0')}]).allowed;
+ if(SOURCE==='package.json')assert.equal(allowed(actual),true);
+ for(const before of [actual.replace('with:','env:'),actual.replace('actions/setup-node','example/other-action'),actual.replace('          node-version:','          data:\n            node-version:'),`jobs:\n  ci:\n    env:\n      node-version: 24.0.0\n    steps:\n      - run: echo ok\n`,`jobs:\n  ci:\n    steps:\n      - run: |\n          node-version: 24.0.0\n`])assert.equal(allowed(before),false,'unrelated Node data remains protected');
+});
+runTest('duplicate names involving run steps cannot reassign setup targets',()=>{
+ const {retainsRepairTargets}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const setup=`      - name: Build\n        uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: 24.0.0\n`;
+ const run='      - name: Build\n        run: echo ok\n';
+ for(const swap of [false,true])for(const label of ['Build',"'Build'",'"Build"','Build # display label']){
+  const namedRun=run.replace('name: Build','name: '+label);
+  const old='jobs:\n  ci:\n    steps:\n'+(swap?namedRun+setup:setup+namedRun);
+  const before=old.replace('24.0.0','24.1.0'),main='jobs:\n  ci:\n    steps:\n'+(swap?setup+namedRun:namedRun+setup),after=main.replace('24.0.0','24.1.0');
+  assert.equal(retainsRepairTargets({filename,before,after},main,old),false,'name must be unique across every step');
+ }
+ const old='jobs:\n  ci:\n    steps:\n'+setup.replace('- name:','- id: setup\n        name:')+run.replace('- name:','- id: script\n        name:');
+ assert.equal(retainsRepairTargets({filename,before:old.replace('24.0.0','24.1.0'),after:old.replace('24.0.0','24.1.0')},old,old),true,'unique IDs remain stronger than duplicate names');
+});

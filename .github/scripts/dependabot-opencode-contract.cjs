@@ -55,38 +55,47 @@ function validateReview(report, expectedFiles) {
   if (Buffer.byteLength(canonical(report)) > 48000) throw new Error('Review check content limit')
   return {report, passed:report.verdict === 'approve' && Object.values(report.assessment).every(a=>a.status==='pass') && !report.findings.some(f=>['critical','high','medium'].includes(f.severity))}
 }
-function workflowTargets(content, onAction) {
+function workflowTargets(content, onAction, onNode) {
   content=expandWorkflowFlow(content)
-  const targets=new Map(),counts=new Map(),jobs=new Set(),identities=new Set()
+  const targets=new Map(),counts=new Map(),jobs=new Set(),identities=new Set(),names=new Map()
   let job='',jobsIndent=null,jobIndent=null,fieldIndent=null,stepsIndent=null,stepIndent=null,stepFieldIndent=null,scalarIndent=null,step=null,jobRecord=null
   const mapping=value=>{
     const m=value.match(/^(?:"([a-zA-Z_][\w-]*)"|'([a-zA-Z_][\w-]*)'|([a-zA-Z_][\w-]*)):[ \t]*(.*)$/)
     return m && {name:m[1] || m[2] || m[3],value:m[4]}
+  }
+  const identityScalar=value=>{
+    const double=value.match(/^("(?:[^"\\]|\\.)*")[ \t]*(?:#.*)?$/)
+    const single=value.match(/^'((?:[^']|'')*)'[ \t]*(?:#.*)?$/)
+    const decoded=double?JSON.parse(double[1]):single?single[1].replace(/''/g,"'"):value.replace(/[ \t]+#.*$/,'').trim()
+    // Dynamic and block-scalar names cannot supply a proven static identity.
+    return !decoded || (!double && !single && /^[|>&*!\[{]/.test(decoded)) || decoded.includes('${{') ? undefined : decoded
   }
   const record=()=>({fields:new Set(),withIndent:null,withFieldIndent:null})
   function field(owner,entry,line,index,indent) {
     if(owner.fields.has(entry.name))throw Error('Duplicate workflow mapping field')
     owner.fields.add(entry.name);owner.withIndent=null;owner.withFieldIndent=null
     if(entry.name==='uses')owner.use={value:entry.value,line,index}
-    if(entry.name==='name' || entry.name==='id')owner[entry.name]=entry.value
+    if(entry.name==='name' || entry.name==='id')owner[entry.name]=identityScalar(entry.value)
     if(entry.name==='with' && /^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))owner.withIndent=indent
   }
-  function input(owner,entry,indent) {
+  function input(owner,entry,indent,line,index) {
     if(!owner || owner.withIndent===null || indent<=owner.withIndent || !entry)return
     if(owner.withFieldIndent===null)owner.withFieldIndent=indent
     if(indent!==owner.withFieldIndent || entry.name!=='node-version')return
     if(owner.nodeSeen)throw Error('Duplicate Node input')
     owner.nodeSeen=true
     const value=entry.value.match(/^['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/)
-    if(value)owner.node=value[1]
+    if(value)owner.node={version:value[1],index,prefix:line.slice(0,line.length-entry.value.length)}
   }
   function emit(owner,isJob=false) {
-    if(!owner?.use)return
-    const {value,line,index}=owner.use
-    const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
-    if(!use)throw Error('Unsupported workflow action reference')
-    const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
-    if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))return;throw Error('Unsupported workflow action reference')}
+    if(!owner)return
+    // A name is usable only when unique across every step, including run and
+    // local-action steps. Distinct explicit IDs remain the stronger identity.
+    if(!isJob && owner.name){
+      const key=`${job}:${owner.name}`,previous=names.get(key)
+      if(previous!==undefined && (!previous || !owner.id))throw Error('Ambiguous workflow step name')
+      names.set(key,!!owner.id)
+    }
     // Explicit step identity survives reordering. Anonymous occurrences retain
     // the conservative ordered ancestor alignment used by earlier controllers.
     const identity=owner.id ? `id:${owner.id}` : owner.name ? `name:${owner.name}` : null
@@ -96,13 +105,19 @@ function workflowTargets(content, onAction) {
       if(identities.has(key))throw Error('Ambiguous workflow step identity')
       identities.add(key)
     }
+    if(!owner.use)return
+    const {value,line,index}=owner.use
+    const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
+    if(!use)throw Error('Unsupported workflow action reference')
+    const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
+    if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))return;throw Error('Unsupported workflow action reference')}
     const group=`${job}:${location}:${ref[1]}`,key=`action:${group}`,n=counts.get(key) || 0;counts.set(key,n+1)
     const pinned=/^[0-9a-f]{40}$/.test(ref[2]),tag=pinned?use[4]?.trim():ref[2]
     const versionTag=/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null
     targets.set(`${key}:${n}`,{ref:ref[2],tag:versionTag,pinned})
     // Only the direct with input of setup-node (or a reusable workflow job)
     // is a Node target. env, nested data and run script text cannot replace it.
-    if(owner.node && (ref[1]==='actions/setup-node' || isJob))targets.set(`node:${group}:${n}`,owner.node)
+    if(owner.node && (ref[1]==='actions/setup-node' || isJob)){targets.set(`node:${group}:${n}`,owner.node.version);onNode?.({...owner.node,key:`node:${group}:${n}`})}
     onAction?.({key:`${key}:${n}`,index,prefix:line.slice(0,line.length-value.length),action:ref[1],sha:pinned?ref[2]:null,tag:versionTag})
   }
   const finishStep=()=>{emit(step);step=null}
@@ -138,7 +153,7 @@ function workflowTargets(content, onAction) {
       }
       continue
     }
-    if(stepsIndent===null || indent<stepsIndent){input(jobRecord,entry,indent);continue}
+    if(stepsIndent===null || indent<stepsIndent){input(jobRecord,entry,indent,line,index);continue}
     const item=trimmed.match(/^-(?:[ \t]+(.*))?$/)
     if(item && (stepIndent===null || indent===stepIndent)) {
       finishStep();step=record()
@@ -150,7 +165,7 @@ function workflowTargets(content, onAction) {
     } else {
       if(stepIndent!==null && stepFieldIndent===null && indent>stepIndent && entry)stepFieldIndent=indent
       if(stepFieldIndent!==null && indent===stepFieldIndent && entry)field(step,entry,line,index,indent)
-      else input(step,entry,indent)
+      else input(step,entry,indent,line,index)
     }
   }
   finishJob()
@@ -159,6 +174,9 @@ function workflowTargets(content, onAction) {
 // Reference indexes address expandWorkflowFlow(content), not raw source lines.
 function workflowActionReferences(content) {
   const refs=[];workflowTargets(content,ref=>refs.push(ref));return refs
+}
+function workflowNodeReferences(content) {
+  const refs=[];workflowTargets(content,undefined,ref=>refs.push(ref));return refs
 }
 function alignWorkflowTargets(head,main,ancestor) {
   const groups=targets=>{
@@ -321,4 +339,4 @@ function validateReviewEvidence(check, context) {
     return {task:raw.task,origin:raw.origin,digest:raw.digest,report,passed}
   } catch { return null }
 }
-module.exports = { retainsRepairTargets, validateRepairCapacity, workflowActionReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
+module.exports = { retainsRepairTargets, validateRepairCapacity, workflowActionReferences, workflowNodeReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
