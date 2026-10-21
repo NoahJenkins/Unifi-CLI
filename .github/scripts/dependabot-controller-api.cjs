@@ -74,8 +74,11 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
     },
     getGate: async (pr) => (await checksFor(pr.head.sha)).filter((check) => check.name === GATE && check.app?.id === config.appId).sort((a, b) => b.id - a.id)[0],
     async setGate(pr, kind, reason) {
-      const existing = await client.getGate(pr)
+      let existing = await client.getGate(pr)
       const completed = ['success', 'blocked'].includes(kind)
+      // GitHub retains the conclusion when a completed check is patched.
+      // Start a fresh lifecycle so task claims observe a truly pending gate.
+      if (!completed && existing?.status === 'completed') existing = undefined
       const body = { name: GATE, ...(existing ? {} : { head_sha: pr.head.sha }), status: completed ? 'completed' : 'in_progress', ...(completed ? { conclusion: kind === 'success' ? 'success' : 'action_required' } : {}), output: { title: `Dependabot: ${kind}`, summary: reason.slice(0, 2000) } }
       const result = await request(existing ? 'PATCH' : 'POST', existing ? `${root}/check-runs/${existing.id}` : `${root}/check-runs`, body)
       if (result.app?.id !== config.appId || result.head_sha !== pr.head.sha) throw new Error('Unexpected merge-gate publisher or head')
