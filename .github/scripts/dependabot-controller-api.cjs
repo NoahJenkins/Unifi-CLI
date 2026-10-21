@@ -259,6 +259,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       // against its common ancestor, matching GitHub's pull-file list.
       const baseFiles={};const headFiles={};const changes=[]
       for(const f of files){if(['removed','renamed'].includes(f.status))throw Error('Unsupported changed file');baseFiles[f.filename]=f.status==='added'?'':await content(f.filename,task.base);headFiles[f.filename]=await content(f.filename,task.head);changes.push({...f,before:f.status==='added'?'':scopeBase===task.base?baseFiles[f.filename]:await content(f.filename,scopeBase),after:headFiles[f.filename]})}
+      const ancestorFiles=Object.fromEntries(changes.map(change=>[change.filename,change.before]))
       for(let i=0;i<changes.length;i++)changes[i]=adoptMainBaseline(changes[i],baseFiles[changes[i].filename],evaluateScope)
       const scope=evaluateScope(changes);if(!scope.allowed)throw Error(scope.reason)
       await client.verifyActionPins(changes.filter(f=>f.filename.startsWith('.github/workflows/')))
@@ -280,7 +281,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
         }
         if(state.independentReview)diagnostics.push({review:state.independentReview.report})
       }
-      const result={task,changedFiles:files.map(f=>f.filename),baseFiles,headFiles,contextFiles,diagnostics,existingPaths}
+      const result={task,changedFiles:files.map(f=>f.filename),baseFiles,headFiles,ancestorFiles,contextFiles,diagnostics,existingPaths}
       if(Buffer.byteLength(JSON.stringify(result))>8*1024*1024)throw Error('Snapshot byte limit')
       return result
     },

@@ -1,6 +1,6 @@
 'use strict'
 const fs=require('node:fs');const path=require('node:path');const {randomBytes}=require('node:crypto');const {execFileSync}=require('node:child_process')
-const {validateArtifact,validateFiles,sealArtifact,scopeChanges}=require('./dependabot-opencode-contract.cjs')
+const {validateArtifact,validateFiles,validateRepairCapacity,sealArtifact,scopeChanges}=require('./dependabot-opencode-contract.cjs')
 const {evaluateRepairScope}=require('./dependabot-controller-policy.cjs')
 const PREPARE_COMMAND='go mod tidy'
 const GENERATED=['go.mod','go.sum']
@@ -51,6 +51,7 @@ async function validateRepair(task,snapshot,artifact,options) {
  validateFiles(baseline.filter(f=>submitted.has(f.path)))
  const generated=baseline.filter(f=>!submitted.has(f.path))
  if(generated.length)validateFiles(generated)
+ validateRepairCapacity(baseline,snapshot)
  await run(COMMAND)
  unchanged(baseline,'validation')
  const validated=baseline.filter(f=>f.content!==(snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path]))

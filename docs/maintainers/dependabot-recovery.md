@@ -146,3 +146,9 @@ When repair output adopts main-side policy, it must retain every dependency targ
 Immutable workflow pins are matched by job and action occurrence when adopting main-side content. Comments and job settings do not change that identity, while repeated action steps cannot exchange their protection. Scope checks, upstream verification, and both retention checks share one executable-reference parser. It recognizes quoted references, CRLF line endings, anchored job declarations, and steps whose sequence marker is on its own line. Only direct job-level reusable workflow references and executable step references count; environment and input keys named `uses` are data. Reconciliation permits authenticated main-side comparison for modified files even when the merge-base file is empty.
 
 Existing eligibility remains unchanged: scope checks require immutable references with version tags. Parsing more YAML layouts does not permit mutable tags or relax upstream version checks.
+
+Flow-style step and reusable-workflow mappings are expanded as data before executable references are inspected. Protected scalar values stay in the scope comparison. Duplicate keys, malformed collections, excessive nesting, and unsupported syntax block the candidate.
+
+Repair snapshots retain authenticated merge-base file content. When main inserts another occurrence of an action, repair guards use a unique ordered match from that ancestor to main to retain the original PR target. Ambiguous matches, rollback, and assigning the update to the inserted occurrence are rejected. The snapshot byte limit remains unchanged.
+
+The 64-file review limit applies to the entire resulting PR. Validation and publication count original PR files plus newly changed repair or generated files. Unchanged generated files do not consume capacity. An oversized candidate is rejected before tests or publication.

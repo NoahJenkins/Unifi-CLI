@@ -45,6 +45,7 @@ runTest('repair snapshot scopes against common ancestor and retains current main
  assert.ok(reads.includes(ancestor));
  assert.equal(snapshot.baseFiles[filename],workflow(base,'echo main policy'));
  assert.equal(snapshot.headFiles[filename],workflow(head));
+ assert.equal(snapshot.ancestorFiles[filename],workflow(base));
  candidate=workflow(head,'echo main policy');
  assert.equal((await client.prepareSnapshot(task)).headFiles[filename],candidate);
  candidate=workflow(head,'echo unsafe PR command');
@@ -269,4 +270,66 @@ runTest('scope and upstream verification use executable references in every supp
  }
  const before=workflow(base)+'        with:\n          uses: ordinary input\n';
  assert.equal(evaluateScope([{filename,status:'modified',before,after:before.replace('ordinary input','changed input')}]).allowed,false);
+});
+
+runTest('flow executable mappings retain references and protected configuration',async()=>{
+ const filename='.github/workflows/ci.yml';
+ const forms=[sha=>`jobs:\n  ci:\n    steps:\n      - { uses: actions/checkout@${sha}, with: { uses: input, path: 'a,b' } } # v4.1.0\n`,
+ sha=>`jobs:\n  reuse: { uses: org/repo/.github/workflows/build.yml@${sha}, with: { value: safe } } # v4.1.0\n`,
+ sha=>`jobs:\n  ci:\n    steps: [\n      { uses: actions/checkout@${sha} }, # v4.1.0\n      { run: 'echo safe' }\n    ]\n`];
+ for(const form of forms){
+  const before=form(base),after=form(head),change={filename,status:'modified',before,after};
+  assert.equal(evaluateScope([change]).allowed,true);
+  assert.equal(evaluateScope([{...change,after:after.replace(head,'v4.1.0')}]).allowed,false);
+  assert.equal(evaluateScope([{...change,after:after.replace('safe','changed').replace('input','changed')}]).allowed,false);
+  const calls=[];const client=createClient({repo:'o/r'},'read','write',async url=>{calls.push(url);return {ok:true,status:200,json:async()=>({object:{type:'commit',sha:head}})};});
+  await client.verifyActionPins([change]);assert.equal(calls.length,1);
+ }
+});
+runTest('main-side action insertions align through the authenticated ancestor',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml',old=workflow(base),current=workflow(head);
+ const inserted='      - uses: actions/checkout@'+ancestor+' # v4.1.0\n';
+ const main=old.replace('    steps:\n','    steps:\n'+inserted).replace('echo old','echo trusted main');
+ const candidate=main.replace(base,head);
+ const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main},ancestorFiles:{[filename]:old}};
+ const allowed=content=>evaluateScope(scopeChanges([{path:filename,content}],snapshot,evaluateScope)).allowed;
+ assert.equal(allowed(candidate),true);
+ assert.equal(allowed(main),false);
+ assert.equal(allowed(main.replace(ancestor,head)),false);
+ const atTarget={...snapshot,baseFiles:{[filename]:main.replace(ancestor,head)}};
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:atTarget.baseFiles[filename]}],atTarget,evaluateScope)).allowed,false);
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:atTarget.baseFiles[filename].replace(base,head)}],atTarget,evaluateScope)).allowed,true);
+ const ambiguous={...snapshot,baseFiles:{[filename]:main.replace(ancestor,base)}};
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:candidate.replace(ancestor,base)}],ambiguous,evaluateScope)).allowed,false);
+});
+
+runTest('flow parsing retains data scalars and fails closed on ambiguous syntax',()=>{
+ const {expandWorkflowFlow}=require(PREFIX+'dependabot-workflow-shape.cjs');
+ const {adoptMainBaseline}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const before=`jobs: { ci: { steps: [{ uses: actions/checkout@${base}, with: { text: 'a,b:#{}', quote: 'it''s safe' } }] } } # v4.1.0\n`;
+ const expanded=expandWorkflowFlow(before);
+ assert.ok(expanded.includes("text: 'a,b:#{}'"));assert.ok(expanded.includes("quote: 'it''s safe'"));
+ const script='jobs:\n  ci:\n    steps:\n      - run: |\n          value: {not: yaml}\n';
+ assert.equal(expandWorkflowFlow(script),script);
+ for(const invalid of ['jobs:\n  ci:\n    steps:\n      - {uses: a/b@v1, uses: c/d@v2}\n','jobs:\n  ci:\n    steps:\n      - {uses: a/b@v1\n']){
+  const change={filename,status:'modified',before:workflow(head),after:invalid};
+  assert.equal(evaluateScope([change]).allowed,false);
+  assert.deepEqual(adoptMainBaseline(change,invalid,evaluateScope),change);
+ }
+});
+
+runTest('repair and generated output cannot exceed the PR-wide review capacity',async()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const f=fixture();
+ const original=[SOURCE,...Array.from({length:63},(_,i)=>`existing${i}.json`)];
+ f.snapshot.changedFiles=original;
+ const extra={path:'extra.json',content:'{}'};
+ assert.throws(()=>scopeChanges([extra],f.snapshot,evaluateScope),/review capacity/i);
+ let executions=0;
+ try{
+  await assert.rejects(()=>validateRepair(task,f.snapshot,f.artifact,{origin,root:f.root,image:'fixture',cleanup:()=>{},execute:()=>{executions++;fs.writeFileSync(path.join(f.root,LOCK),'generated change');}}),/review capacity/i);
+  assert.equal(executions,1);
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
 });

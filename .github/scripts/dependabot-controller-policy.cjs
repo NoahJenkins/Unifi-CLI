@@ -1,4 +1,5 @@
 'use strict'
+const { expandWorkflowFlow } = require('./dependabot-workflow-shape.cjs')
 // Adapted from noahjenkins.com-v2 d33fbae; preserve the restricted CLI policy.
 const REQUIRED_CHECKS = ['test (ubuntu-latest)', 'test (macos-latest)', 'test (windows-latest)', 'govulncheck', ...['FuzzStrictYAMLConfiguration','FuzzOfficialPaginationJSON','FuzzOfficialPathAndFilterEscaping','FuzzReleaseBundleExtraction','FuzzChecksumManifest','FuzzSBOMSnapshotParsing'].map(x=>`fuzz (${x})`), ...['ubuntu-latest','macos-latest','windows-latest'].map(x=>`native keyring (${x})`)]
 const GATE='Dependabot Merge Gate'; const DEPENDABOT_ID=49699333
@@ -17,9 +18,12 @@ function moduleScope(before,after) {
  return a.normalized===b.normalized && a.versions.length===b.versions.length && a.versions.every((x,i)=>x.prefix===b.versions[i].prefix&&nondecreasing(x.v,b.versions[i].v,x.prefix==='go '))
 }
 function workflowScope(before,after) {
+ try {
+ before=expandWorkflowFlow(before);after=expandWorkflowFlow(after)
  const a=actionPins(before),b=actionPins(after)
  const normalized=text=>{const lines=text.split('\n');for(const pin of actionPins(text))lines[pin.index]=`${pin.prefix}${pin.action}@PIN`;return lines.join('\n')}
  return a.length===b.length && normalized(before)===normalized(after) && a.every((pin,i)=>pin.action===b[i].action && pin.index===b[i].index && (pin.tag===b[i].tag||nondecreasing(pin.tag,b[i].tag)))
+ } catch {return false}
 }
 function testPins(text) {return [...text.matchAll(/"([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})"/g)].map(m=>({action:m[1],sha:m[2]}))}
 function testPinScope(before,after) {

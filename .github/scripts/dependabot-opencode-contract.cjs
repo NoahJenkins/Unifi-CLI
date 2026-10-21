@@ -1,4 +1,5 @@
 'use strict'
+const { expandWorkflowFlow } = require('./dependabot-workflow-shape.cjs')
 const { createHash } = require('node:crypto')
 const { validateTask } = require('./dependabot-controller-ledger.cjs')
 const MAX_FILE = 2 * 1024 * 1024; const MAX_TOTAL = 8 * 1024 * 1024
@@ -55,6 +56,7 @@ function validateReview(report, expectedFiles) {
   return {report, passed:report.verdict === 'approve' && Object.values(report.assessment).every(a=>a.status==='pass') && !report.findings.some(f=>['critical','high','medium'].includes(f.severity))}
 }
 function workflowTargets(content, onAction) {
+  content=expandWorkflowFlow(content)
   const targets=new Map(),counts=new Map(),jobs=new Set()
   let job='',jobsIndent=null,jobIndent=null,fieldIndent=null,stepsIndent=null,stepIndent=null,stepFieldIndent=null,scalarIndent=null
   const mapping=value=>{
@@ -121,17 +123,50 @@ function workflowTargets(content, onAction) {
 function workflowActionReferences(content) {
   const refs=[];workflowTargets(content,ref=>refs.push(ref));return refs
 }
-function retainsImmutableActions(before,after) {
-  // Count all occurrences, including mutable refs, within each job and action.
-  // Comments/settings cannot move a step; repeated uses cannot trade protection.
-  const previous=workflowTargets(before),next=workflowTargets(after)
-  return [...previous].every(([key,target])=>!target.pinned || next.get(key)?.pinned)
+function alignWorkflowActions(head,main,ancestor) {
+  const groups=targets=>{
+    const result=new Map()
+    for(const [key,target] of targets)if(key.startsWith('action:')){
+      const group=key.slice(0,key.lastIndexOf(':'));if(!result.has(group))result.set(group,[])
+      result.get(group).push({key,target})
+    }
+    return result
+  }
+  const h=groups(head),m=groups(main),a=groups(ancestor || new Map()),aligned=new Map()
+  for(const [group,items] of h){
+    const baseline=m.get(group) || []
+    if(items.length===baseline.length){items.forEach((item,i)=>aligned.set(item.key,baseline[i].key));continue}
+    const original=a.get(group)
+    if(!original || original.length!==items.length || baseline.length<items.length || (original.length+1)*(baseline.length+1)>250000)return null
+    // Find a unique, ordered embedding of the authenticated ancestor in main.
+    // Equal-looking insertions are ambiguous and cannot move a PR's target.
+    const rows=Array.from({length:original.length+1},()=>new Uint8Array(baseline.length+1))
+    rows[original.length].fill(1)
+    const equal=(i,j)=>canonical(original[i].target)===canonical(baseline[j].target)
+    for(let i=original.length-1;i>=0;i--)for(let j=baseline.length-1;j>=0;j--)rows[i][j]=Math.min(2,rows[i][j+1]+(equal(i,j)?rows[i+1][j+1]:0))
+    if(rows[0][0]!==1)return null
+    let j=0
+    for(let i=0;i<items.length;i++){
+      while(j<baseline.length && !(equal(i,j)&&rows[i+1][j+1]))j++
+      if(j===baseline.length)return null
+      aligned.set(items[i].key,baseline[j++].key)
+    }
+  }
+  return aligned
 }
-function adoptMainBaseline(change,mainContent,policy) {
+function retainsImmutableActions(before,after,mainContent,ancestorContent) {
+  const previous=workflowTargets(before),next=workflowTargets(after),main=workflowTargets(mainContent)
+  const alignment=alignWorkflowActions(previous,main,workflowTargets(ancestorContent ?? before))
+  return alignment!==null && [...previous].every(([key,target])=>!target.pinned || next.get(alignment.get(key))?.pinned)
+}
+function adoptMainBaseline(change,mainContent,policy,ancestorContent) {
   if(!policy || policy([change]).allowed || change.status!=='modified' || typeof mainContent!=='string')return change
-  if(change.filename.startsWith('.github/workflows/') && !retainsImmutableActions(change.before,change.after))return change
-  const fromMain={...change,before:mainContent}
-  return policy([fromMain]).allowed?fromMain:change
+  // Unsupported or ambiguous YAML must block this candidate, not abort a batch.
+  try {
+    if(change.filename.startsWith('.github/workflows/') && !retainsImmutableActions(change.before,change.after,mainContent,ancestorContent))return change
+    const fromMain={...change,before:mainContent}
+    return policy([fromMain]).allowed?fromMain:change
+  } catch {return change}
 }
 function repairTargets(filename,content) {
   const targets=new Map()
@@ -164,12 +199,15 @@ function repairTargets(filename,content) {
   } else return null
   return targets
 }
-function retainsRepairTargets(change,mainContent) {
+function retainsRepairTargets(change,mainContent,ancestorContent) {
   try {
     const head=repairTargets(change.filename,change.before),main=repairTargets(change.filename,mainContent),next=repairTargets(change.filename,change.after)
     if(!head || !main || !next)return false
     const equal=(a,b)=>canonical(a ?? null)===canonical(b ?? null)
-    return [...head].every(([key,target])=>{
+    const alignment=alignWorkflowActions(head,main,typeof ancestorContent==='string'?repairTargets(change.filename,ancestorContent):null)
+    if(alignment===null)return false
+    return [...head].every(([originalKey,target])=>{
+      const key=originalKey.startsWith('action:')?alignment.get(originalKey):originalKey
       if(equal(target,main.get(key)) || equal(target,next.get(key)))return true
       // A trusted main SHA may replace the same version's mutable action tag.
       const candidate=next.get(key)
@@ -177,7 +215,14 @@ function retainsRepairTargets(change,mainContent) {
     })
   } catch {return false}
 }
+function validateRepairCapacity(files,snapshot) {
+  if(!Array.isArray(snapshot.changedFiles) || !snapshot.changedFiles.length || snapshot.changedFiles.length>64 || new Set(snapshot.changedFiles).size!==snapshot.changedFiles.length)throw Error('Complete PR file inventory is missing or exceeds review capacity')
+  snapshot.changedFiles.forEach(path)
+  const changed=files.filter(f=>f.content!==(snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path])).map(f=>f.path)
+  if(new Set([...snapshot.changedFiles,...changed]).size>64)throw Error('Repair file count exceeds PR-wide review capacity')
+}
 function scopeChanges(files,snapshot,policy) {
+  if(files.length)validateRepairCapacity(files,snapshot)
   if(!Array.isArray(snapshot.existingPaths) || snapshot.existingPaths.length>20000 || new Set(snapshot.existingPaths).size!==snapshot.existingPaths.length)throw Error('Complete head inventory is missing')
   snapshot.existingPaths.forEach(path)
   const existing=new Set(snapshot.existingPaths)
@@ -185,10 +230,11 @@ function scopeChanges(files,snapshot,policy) {
     const change={filename:f.path,before:snapshot.headFiles[f.path]??snapshot.contextFiles?.[f.path]??'',after:f.content,status:existing.has(f.path)?'modified':'added'}
     // Only PR files have authenticated current-main content in the snapshot.
     const mainContent=snapshot.changedFiles?.includes(f.path) && Object.hasOwn(snapshot.baseFiles || {},f.path)?snapshot.baseFiles[f.path]:undefined
-    const adopted=adoptMainBaseline(change,mainContent,policy)
+    const ancestorContent=snapshot.changedFiles?.includes(f.path)?snapshot.ancestorFiles?.[f.path]:undefined
+    const adopted=adoptMainBaseline(change,mainContent,policy,ancestorContent)
     // Baseline substitution must not authorize reverting any PR target to main.
     // Apply this only to repair output, not ancestor-relative reconciliation.
-    return adopted!==change && !retainsRepairTargets(change,mainContent)?change:adopted
+    return adopted!==change && !retainsRepairTargets(change,mainContent,ancestorContent)?change:adopted
   })
 }
 function defaultBranchEvent(event) {return ['workflow_run','status','schedule','workflow_dispatch'].includes(event)}
@@ -224,4 +270,4 @@ function validateReviewEvidence(check, context) {
     return {task:raw.task,origin:raw.origin,digest:raw.digest,report,passed}
   } catch { return null }
 }
-module.exports = { workflowActionReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
+module.exports = { validateRepairCapacity, workflowActionReferences, MAX_FILE, MAX_TOTAL, REVIEW, scopeChanges, adoptMainBaseline, defaultBranchEvent, canonical, digest, same, path, text, validateFiles, validateReview, sealArtifact, validateArtifact, validateReviewEvidence }
