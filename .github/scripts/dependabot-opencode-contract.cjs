@@ -93,6 +93,11 @@ function workflowTargets(content, onAction) {
       fieldIndent=null;stepsIndent=null;stepIndent=null;stepFieldIndent=null;continue
     }
     if(indent<jobIndent)throw Error('Unsupported workflow job indentation')
+    // Node occurrences belong to their job, just like executable actions.
+    // Use the expanded mapping so flow values and block scalars agree with
+    // action parsing; a reordered job must not inherit another job's target.
+    const node=line.match(/^[ \t]*node-version:[ \t]*['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/)
+    if(node){const key=`node:${job}`,n=counts.get(key) || 0;counts.set(key,n+1);targets.set(`${key}:${n}`,node[1])}
     if(fieldIndent===null && entry)fieldIndent=indent
     // Only direct job uses and direct step uses execute actions. env/with data
     // may contain a key named uses and must not consume action occurrences.
@@ -120,6 +125,7 @@ function workflowTargets(content, onAction) {
   }
   return targets
 }
+// Reference indexes address expandWorkflowFlow(content), not raw source lines.
 function workflowActionReferences(content) {
   const refs=[];workflowTargets(content,ref=>refs.push(ref));return refs
 }
@@ -201,8 +207,6 @@ function repairTargets(filename,content) {
     }
   } else if(filename.startsWith('.github/workflows/')) {
     for(const [key,target] of workflowTargets(content))add(key,target)
-    let n=0
-    for(const m of content.matchAll(/^[ \t]*node-version:[ \t]*['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/gm))add(`node:${n++}`,m[1])
   } else return null
   return targets
 }

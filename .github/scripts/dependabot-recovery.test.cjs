@@ -256,3 +256,17 @@ test('snapshot scopes the PR delta at its merge base before bounded refresh', as
   comparison=invalid;await assert.rejects(()=>client.snapshot(pr,main),/merge base/i);
  }
 });
+
+test('release test pin verification cannot skip tag proof after flow expansion',async()=>{
+ const old=`"goreleaser/goreleaser-action@${sha}"`,after=old.replace(sha,next);
+ for(const prefix of ['on: {push: {branches: [main]}}\n','env: {FIRST: one, SECOND: two}\n']){
+  const wf=prefix+workflow(next);
+  const changes=[file('release_pipeline_test.go',old,after),file('.github/workflows/release.yml','',wf)];
+  let upstream=sha;const requests=[];
+  const client=createClient({repo:'owner/repo'},'read','write',async url=>{requests.push(url);return {ok:true,status:200,json:async()=>({object:{type:'commit',sha:upstream}})}});
+  await assert.rejects(client.verifyRepairPins(changes,next),/official upstream version tag/);
+  assert.equal(requests.length,1);
+  upstream=next;await client.verifyRepairPins(changes,next);assert.equal(requests.length,2);
+  assert.ok(requests.every(url=>url.endsWith('/goreleaser/goreleaser-action/git/ref/tags/v7.3.0')));
+ }
+});

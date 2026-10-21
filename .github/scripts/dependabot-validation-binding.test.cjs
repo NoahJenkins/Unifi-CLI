@@ -498,3 +498,20 @@ runTest('snapshot baseline adoption binds requested targets to the published rep
   claims=altered;assert.equal(evaluateScope([await client.adoptPublishedBaseline(change,pr,base,main)]).allowed,false);
  }
 });
+
+runTest('Node targets retain job identity when main reorders jobs',()=>{
+ const {retainsRepairTargets}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const job=(name,version)=>`  ${name}:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with:\n          node-version: ${version}\n`;
+ const old='jobs:\n'+job('build','24.0.0')+job('test','26.0.0');
+ const current=old.replace('24.0.0','24.1.0');
+ const main='jobs:\n'+job('test','26.0.0')+job('build','24.0.0');
+ const candidate=main.replace('24.0.0','24.1.0');
+ const change={filename,status:'modified',before:current,after:candidate};
+ assert.equal(retainsRepairTargets(change,main,old),true,'job order does not change target identity');
+ assert.equal(retainsRepairTargets({...change,after:main},main,old),false,'requested Node update must remain');
+ assert.equal(retainsRepairTargets({...change,after:main.replace('26.0.0','24.1.0')},main,old),false,'requested update cannot move to another job');
+ const flow=text=>text.replace(/with:\n          node-version: ([0-9.]+)/g,'with: {node-version: $1}');
+ assert.equal(retainsRepairTargets({...change,before:flow(current),after:flow(candidate)},flow(main),flow(old)),true);
+ assert.equal(retainsRepairTargets({...change,before:flow(current),after:flow(main)},flow(main),flow(old)),false,'flow Node target rollback must fail');
+});

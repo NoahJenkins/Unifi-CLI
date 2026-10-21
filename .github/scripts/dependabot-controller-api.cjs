@@ -5,6 +5,7 @@ const { readLedger, encodeLedger } = require('./dependabot-controller-ledger.cjs
 const { retainsRepairTargets, adoptMainBaseline, validateReviewEvidence, validateFiles, text, digest, REVIEW, same } = require('./dependabot-opencode-contract.cjs')
 const { parseArtifactZip, verifyRun, verifyJobs, MAX_ZIP } = require('./dependabot-opencode-publish.cjs')
 const { createHash } = require('node:crypto')
+const { expandWorkflowFlow } = require('./dependabot-workflow-shape.cjs')
 const CLAIM = '<!-- dependabot-opencode-claim:v1 -->'
 
 function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms => new Promise(resolve => setTimeout(resolve,ms))) {
@@ -157,7 +158,8 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
       const changedPins=changedTestPins(changed.before,changed.after)
       const tagged=actionPins(workflow)
       if(changedPins.some(pin=>!tagged.some(proof=>proof.action===pin.action&&proof.sha===pin.sha)))throw Error('Changed release test pin has no supported upstream version tag')
-      const lines=workflow.split('\n')
+      // actionPins indexes the expanded workflow. Mask that same representation.
+      const lines=expandWorkflowFlow(workflow).split('\n')
       for(const pin of tagged)if(changedPins.some(change=>change.action===pin.action&&change.sha===pin.sha))lines[pin.index]=''
       await client.verifyActionPins([{before:lines.join('\n'),after:workflow}])
     },
