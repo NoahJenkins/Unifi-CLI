@@ -168,3 +168,34 @@ runTest('main baseline adoption cannot move immutable pins between repeated acti
  const change={filename,status:'modified',before:current,after:main};
  assert.equal(evaluateScope([adoptMainBaseline(change,main,evaluateScope)]).allowed,false);
 });
+
+runTest('main-side comments and job settings do not change immutable step identity',()=>{
+ const {adoptMainBaseline}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const current=workflow(head);
+ for(const line of ['    # trusted main comment\n','    timeout-minutes: 10\n']) {
+  const main=workflow(base).replace('    steps:',line+'    steps:');
+  const candidate=main.replace(base,head);
+  assert.equal(evaluateScope([adoptMainBaseline({filename,status:'modified',before:current,after:candidate},main,evaluateScope)]).allowed,true);
+ }
+});
+runTest('main-side fallback cannot erase quoted or uncommented immutable targets',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ for(const uses of [`actions/checkout@${head}`,`"actions/checkout@${head}"`,`'actions/checkout@${head}'`]) {
+  const current='jobs:\n  ci:\n    steps:\n      - uses: '+uses+'\n      - run: echo old\n';
+  const main=current.replaceAll(head,base).replace('echo old','echo trusted main');
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main}};
+  assert.equal(evaluateScope(scopeChanges([{path:filename,content:main}],snapshot,evaluateScope)).allowed,false);
+ }
+});
+
+runTest('immutable step identity is job scoped and ignores run script text',()=>{
+ const {adoptMainBaseline}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const build=workflow(head).replace('  ci:','  build:');
+ const checks=workflow(head).replace('  ci:','  checks:').replace('jobs:\n','');
+ const current=build+checks;
+ const main='jobs:\n'+checks+'  build:\n    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@'+head+' # v4.1.0\n      - run: |\n          uses: actions/fake@'+base+'\n';
+ assert.equal(evaluateScope([adoptMainBaseline({filename,status:'modified',before:current,after:main},main,evaluateScope)]).allowed,true);
+});

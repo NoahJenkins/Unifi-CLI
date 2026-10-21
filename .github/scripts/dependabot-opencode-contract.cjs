@@ -54,19 +54,39 @@ function validateReview(report, expectedFiles) {
   if (Buffer.byteLength(canonical(report)) > 48000) throw new Error('Review check content limit')
   return {report, passed:report.verdict === 'approve' && Object.values(report.assessment).every(a=>a.status==='pass') && !report.findings.some(f=>['critical','high','medium'].includes(f.severity))}
 }
-function retainsImmutableActions(before,after) {
-  // Bind pins to their workflow line and action, including quoted/uncommented refs.
-  // Aggregate counts would let a pinned step trade places with a mutable step.
-  const pins=text=>{
-    const positions=new Set()
-    for(const [index,line] of text.split('\n').entries()) {
-      const match=line.match(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*["']?([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([0-9a-f]{40})(?=[\s"'#]|$)/)
-      if(match)positions.add(`${index}:${match[1]}`)
+function workflowTargets(content) {
+  const targets=new Map(),counts=new Map(),jobs=new Set()
+  let job='',jobsIndent=null,jobIndent=null,scalarIndent=null
+  for(const line of content.split('\n')) {
+    const indent=line.match(/^[ ]*/)[0].length
+    if(scalarIndent!==null && (!line.trim() || indent>scalarIndent))continue
+    scalarIndent=null
+    if(!line.trim() || /^[ \t]*#/.test(line))continue
+    if(/^[ ]*(?:- )?[^#]+:[ \t]*[|>][+-]?[0-9]?[ \t]*(?:#.*)?$/.test(line))scalarIndent=indent
+    if(/^jobs:[ \t]*(?:#.*)?$/.test(line)){jobsIndent=indent;jobIndent=null;job='';continue}
+    if(jobsIndent!==null) {
+      if(indent<=jobsIndent){jobsIndent=null;job='';jobIndent=null}
+      else if(jobIndent===null || indent===jobIndent) {
+        const name=line.match(/^[ ]*(?:"([a-zA-Z_][\w-]*)"|'([a-zA-Z_][\w-]*)'|([a-zA-Z_][\w-]*)):[ \t]*(?:#.*)?$/)
+        if(name){job=name[1] || name[2] || name[3];jobIndent=indent;if(jobs.has(job))throw Error('Ambiguous workflow job');jobs.add(job)}
+      }
     }
-    return positions
+    const use=line.match(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
+    if(!use){if(/^[ \t]*(?:-[ \t]*)?uses:/.test(line))throw Error('Unsupported workflow action reference');continue}
+    const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
+    if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))continue;throw Error('Unsupported workflow action reference')}
+    const key=`action:${job}:${ref[1]}`,n=counts.get(key) || 0;counts.set(key,n+1)
+    const pinned=/^[0-9a-f]{40}$/.test(ref[2])
+    const tag=pinned?use[4]?.trim():ref[2]
+    targets.set(`${key}:${n}`,{ref:ref[2],tag:/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null,pinned})
   }
-  const previous=pins(before), next=pins(after)
-  return [...previous].every(position=>next.has(position))
+  return targets
+}
+function retainsImmutableActions(before,after) {
+  // Count all occurrences, including mutable refs, within each job and action.
+  // Comments/settings cannot move a step; repeated uses cannot trade protection.
+  const previous=workflowTargets(before),next=workflowTargets(after)
+  return [...previous].every(([key,target])=>!target.pinned || next.get(key)?.pinned)
 }
 function adoptMainBaseline(change,mainContent,policy) {
   if(!policy || policy([change]).allowed || change.status!=='modified' || typeof mainContent!=='string')return change
@@ -99,11 +119,7 @@ function repairTargets(filename,content) {
       const n=counts.get(m[1]) || 0;counts.set(m[1],n+1);add(`${m[1]}:${n}`,m[2])
     }
   } else if(filename.startsWith('.github/workflows/')) {
-    const {actionPins}=require('./dependabot-controller-policy.cjs');const counts=new Map()
-    for(const pin of actionPins(content)) {
-      const n=counts.get(pin.action) || 0;counts.set(pin.action,n+1)
-      add(`action:${pin.action}:${n}`,{ref:pin.sha || pin.tag,tag:pin.tag || null,pinned:!!pin.sha})
-    }
+    for(const [key,target] of workflowTargets(content))add(key,target)
     let n=0
     for(const m of content.matchAll(/^[ \t]*node-version:[ \t]*['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/gm))add(`node:${n++}`,m[1])
   } else return null
