@@ -56,29 +56,59 @@ function validateReview(report, expectedFiles) {
 }
 function workflowTargets(content) {
   const targets=new Map(),counts=new Map(),jobs=new Set()
-  let job='',jobsIndent=null,jobIndent=null,scalarIndent=null
-  for(const line of content.split('\n')) {
-    const indent=line.match(/^[ ]*/)[0].length
+  let job='',jobsIndent=null,jobIndent=null,fieldIndent=null,stepsIndent=null,stepIndent=null,stepFieldIndent=null,scalarIndent=null
+  const mapping=value=>{
+    const m=value.match(/^(?:"([a-zA-Z_][\w-]*)"|'([a-zA-Z_][\w-]*)'|([a-zA-Z_][\w-]*)):[ \t]*(.*)$/)
+    return m && {name:m[1] || m[2] || m[3],value:m[4]}
+  }
+  function action(value) {
+    const use=value.match(/^(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
+    if(!use)throw Error('Unsupported workflow action reference')
+    const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
+    if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))return;throw Error('Unsupported workflow action reference')}
+    const key=`action:${job}:${ref[1]}`,n=counts.get(key) || 0;counts.set(key,n+1)
+    const pinned=/^[0-9a-f]{40}$/.test(ref[2]),tag=pinned?use[4]?.trim():ref[2]
+    targets.set(`${key}:${n}`,{ref:ref[2],tag:/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null,pinned})
+  }
+  for(const line of content.split(/\r?\n/)) {
+    const indent=line.match(/^[ ]*/)[0].length,trimmed=line.trimStart(),entry=mapping(trimmed)
     if(scalarIndent!==null && (!line.trim() || indent>scalarIndent))continue
     scalarIndent=null
     if(!line.trim() || /^[ \t]*#/.test(line))continue
     if(/^[ ]*(?:- )?[^#]+:[ \t]*[|>][+-]?[0-9]?[ \t]*(?:#.*)?$/.test(line))scalarIndent=indent
-    if(/^jobs:[ \t]*(?:#.*)?$/.test(line)){jobsIndent=indent;jobIndent=null;job='';continue}
-    if(jobsIndent!==null) {
-      if(indent<=jobsIndent){jobsIndent=null;job='';jobIndent=null}
-      else if(jobIndent===null || indent===jobIndent) {
-        const name=line.match(/^[ ]*(?:"([a-zA-Z_][\w-]*)"|'([a-zA-Z_][\w-]*)'|([a-zA-Z_][\w-]*)):[ \t]*(?:#.*)?$/)
-        if(name){job=name[1] || name[2] || name[3];jobIndent=indent;if(jobs.has(job))throw Error('Ambiguous workflow job');jobs.add(job)}
-      }
+    if(indent===0 && entry?.name==='jobs') {
+      if(!/^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))throw Error('Unsupported workflow jobs mapping')
+      jobsIndent=indent;jobIndent=null;job='';continue
     }
-    const use=line.match(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))[ \t]*(?:#[ \t]*(.*))?$/)
-    if(!use){if(/^[ \t]*(?:-[ \t]*)?uses:/.test(line))throw Error('Unsupported workflow action reference');continue}
-    const ref=(use[1] || use[2] || use[3]).match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+)@([a-zA-Z0-9_./-]+)$/)
-    if(!ref){if(/^(?:\.\/|docker:\/\/)/.test(use[1] || use[2] || use[3]))continue;throw Error('Unsupported workflow action reference')}
-    const key=`action:${job}:${ref[1]}`,n=counts.get(key) || 0;counts.set(key,n+1)
-    const pinned=/^[0-9a-f]{40}$/.test(ref[2])
-    const tag=pinned?use[4]?.trim():ref[2]
-    targets.set(`${key}:${n}`,{ref:ref[2],tag:/^v\d+(?:\.\d+){0,2}$/.test(tag || '')?tag:null,pinned})
+    if(jobsIndent===null)continue
+    if(indent<=jobsIndent){jobsIndent=null;continue}
+    if(jobIndent===null)jobIndent=indent
+    if(indent===jobIndent) {
+      if(!entry || !/^(?:[&*][\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value))throw Error('Unsupported workflow job declaration')
+      job=entry.name;if(jobs.has(job))throw Error('Ambiguous workflow job');jobs.add(job)
+      fieldIndent=null;stepsIndent=null;stepIndent=null;stepFieldIndent=null;continue
+    }
+    if(indent<jobIndent)throw Error('Unsupported workflow job indentation')
+    if(fieldIndent===null && entry)fieldIndent=indent
+    // Only direct job uses and direct step uses execute actions. env/with data
+    // may contain a key named uses and must not consume action occurrences.
+    if(indent===fieldIndent && entry) {
+      stepsIndent=null;stepIndent=null;stepFieldIndent=null
+      if(entry.name==='uses')action(entry.value)
+      if(entry.name==='steps') {
+        if(!/^(?:&[\w-]+[ \t]*)?(?:#.*)?$/.test(entry.value) && entry.value!=='[]')throw Error('Unsupported workflow steps sequence')
+        stepsIndent=indent
+      }
+      continue
+    }
+    if(stepsIndent===null || indent<stepsIndent)continue
+    const item=trimmed.match(/^-[ \t]+(.*)$/)
+    if(item && (stepIndent===null || indent===stepIndent)) {
+      stepIndent=indent;stepFieldIndent=indent+trimmed.indexOf(item[1]);const first=mapping(item[1])
+      if(!first && !/^[&*][\w-]+[ \t]*(?:#.*)?$/.test(item[1]))throw Error('Unsupported workflow step declaration')
+      if(!first)stepFieldIndent=indent+2
+      if(first?.name==='uses')action(first.value)
+    } else if(stepFieldIndent!==null && indent===stepFieldIndent && entry?.name==='uses')action(entry.value)
   }
   return targets
 }

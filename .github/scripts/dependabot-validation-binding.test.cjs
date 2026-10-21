@@ -199,3 +199,37 @@ runTest('immutable step identity is job scoped and ignores run script text',()=>
  const main='jobs:\n'+checks+'  build:\n    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@'+head+' # v4.1.0\n      - run: |\n          uses: actions/fake@'+base+'\n';
  assert.equal(evaluateScope([adoptMainBaseline({filename,status:'modified',before:current,after:main},main,evaluateScope)]).allowed,true);
 });
+
+runTest('main adoption accepts CRLF quoted and uncommented action references',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ for(const uses of [`actions/checkout@${head}`,`"actions/checkout@${head}"`,`'actions/checkout@${head}'`,`actions/checkout@${head} # v4.1.0`]) {
+  const current='jobs:\n  ci:\n    steps:\n      - uses: '+uses+'\n      - run: echo old\n';
+  const main=current.replace('echo old','echo trusted main').replaceAll('\n','\r\n');
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main}};
+  assert.equal(evaluateScope(scopeChanges([{path:filename,content:main}],snapshot,evaluateScope)).allowed,true);
+  const reverted=main.replaceAll(head,base);
+  assert.equal(evaluateScope(scopeChanges([{path:filename,content:reverted}],snapshot,evaluateScope)).allowed,false);
+ }
+});
+
+runTest('main adoption recognizes anchored job declarations without treating nested keys as jobs',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ const current=workflow(head).replace('  ci:','  test: &base_job')+workflow(head).replace('jobs:\n','').replace('  ci:','  lint: &lint_job');
+ const main=current.replaceAll('echo old','echo trusted main').replaceAll(head,base);
+ const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main}};
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:main.replaceAll('uses: actions/checkout@'+base+' # v4.1.0','uses: actions/checkout@'+head+' # v4.1.0')}],snapshot,evaluateScope)).allowed,true);
+ assert.equal(evaluateScope(scopeChanges([{path:filename,content:main}],snapshot,evaluateScope)).allowed,false);
+});
+runTest('environment and input keys named uses are not executable action references',()=>{
+ const {scopeChanges}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ for(const value of ['ordinary input',`actions/checkout@${base}`]) {
+  const current='jobs:\n  ci:\n    env:\n      uses: '+value+'\n    steps:\n      - uses: actions/checkout@'+head+' # v4.1.0\n        with:\n          uses: '+value+'\n      - run: echo old\n';
+  const main=current.replace('echo old','echo trusted main').replace(head,base);
+  const snapshot={changedFiles:[filename],existingPaths:[filename],headFiles:{[filename]:current},baseFiles:{[filename]:main}};
+  assert.equal(evaluateScope(scopeChanges([{path:filename,content:main.replaceAll('uses: actions/checkout@'+base+' # v4.1.0','uses: actions/checkout@'+head+' # v4.1.0')}],snapshot,evaluateScope)).allowed,true);
+  assert.equal(evaluateScope(scopeChanges([{path:filename,content:main}],snapshot,evaluateScope)).allowed,false);
+ }
+});
