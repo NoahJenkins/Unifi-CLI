@@ -84,7 +84,7 @@ function workflowTargets(content, onAction, onNode) {
     if(indent!==owner.withFieldIndent || entry.name!=='node-version')return
     if(owner.nodeSeen)throw Error('Duplicate Node input')
     owner.nodeSeen=true
-    const value=entry.value.match(/^['"]?([0-9]+(?:\.[0-9]+\.[0-9]+)?)['"]?[ \t]*$/)
+    const value=entry.value.match(/^['"]?([0-9]+(?:\.[0-9]+\.[0-9]+|\.x)?)['"]?[ \t]*$/)
     if(value)owner.node={version:value[1],index,prefix:line.slice(0,line.length-entry.value.length)}
   }
   function emit(owner,isJob=false) {

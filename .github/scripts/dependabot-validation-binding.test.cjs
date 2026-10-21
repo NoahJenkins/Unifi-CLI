@@ -592,3 +592,19 @@ runTest('duplicate names involving run steps cannot reassign setup targets',()=>
  const old='jobs:\n  ci:\n    steps:\n'+setup.replace('- name:','- id: setup\n        name:')+run.replace('- name:','- id: script\n        name:');
  assert.equal(retainsRepairTargets({filename,before:old.replace('24.0.0','24.1.0'),after:old.replace('24.0.0','24.1.0')},old,old),true,'unique IDs remain stronger than duplicate names');
 });
+
+runTest('wildcard Node selectors retain exact targets and repository scope',()=>{
+ const {workflowNodeReferences,retainsRepairTargets}=require(PREFIX+'dependabot-opencode-contract.cjs');
+ const filename='.github/workflows/ci.yml';
+ for(const quote of ['',"'",'"'])for(const flow of [false,true]){
+  const input=version=>quote+version+quote;
+  const text=version=>`jobs:\n  ci:\n    steps:\n      - uses: actions/setup-node@${base} # v4.1.0\n        with: ${flow?`{node-version: ${input(version)}}`:`\n          node-version: ${input(version)}`}\n`;
+  const before=text('24.x'),after=text('26.x'),main=before.replace('    steps:','    timeout-minutes: 10\n    steps:');
+  assert.equal(workflowNodeReferences(text('22.x'))[0]?.version,'22.x');
+  assert.equal(workflowNodeReferences(before)[0]?.version,'24.x');
+  assert.equal(evaluateScope([{filename,status:'modified',before,after}]).allowed,false,'repository eligibility remains unchanged');
+  assert.equal(retainsRepairTargets({filename,before:after,after:main.replace('24.x','26.x')},main,before),true,'retain the requested wildcard selector with main settings');
+  assert.equal(retainsRepairTargets({filename,before:after,after:main},main,before),false,'cannot roll back the requested wildcard selector');
+  for(const invalid of ['20.x','24.*','24.1.x'])assert.equal(evaluateScope([{filename,status:'modified',before,after:text(invalid)}]).allowed,false,'unsupported selector remains protected');
+ }
+});
