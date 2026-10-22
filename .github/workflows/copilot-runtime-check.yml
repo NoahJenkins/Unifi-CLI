@@ -1,0 +1,45 @@
+name: Copilot runtime check
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/**'
+      - '.github/workflows/copilot-runtime-check.yml'
+      - '.github/workflows/dependabot*.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-runtime:
+    name: Copilot offline runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Check adapter
+        run: node --check .github/scripts/copilot-runtime.cjs
+      - name: Download and verify pinned Copilot CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/copilot-bin"
+          curl --fail --location --proto '=https' --silent --show-error https://github.com/github/copilot-cli/releases/download/v1.0.85/copilot-linux-x64.tar.gz -o "$RUNNER_TEMP/copilot-bin/runtime.tar.gz"
+          echo '6f235cea897645eef67e8f480e36a15b5d9c9f7a6165ebc9b6b1c28afc8bcdda  '"$RUNNER_TEMP/copilot-bin/runtime.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/copilot-bin/runtime.tar.gz" -C "$RUNNER_TEMP/copilot-bin"
+      - name: Exercise real CLI and curated tools without network or credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 --network none --cap-drop=ALL \
+            --security-opt=no-new-privileges --read-only --user 1000:1000 \
+            --memory=2g --cpus=2 --pids-limit=128 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000 \
+            -v "$RUNNER_TEMP/copilot-bin/copilot:/usr/local/bin/copilot:ro" \
+            -v "$GITHUB_WORKSPACE/.github/scripts:/trusted:ro" \
+            -e COPILOT_BINARY=/usr/local/bin/copilot \
+            node:24-bookworm-slim@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd \
+            node /trusted/copilot-smoke.cjs

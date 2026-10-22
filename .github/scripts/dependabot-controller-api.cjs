@@ -241,7 +241,7 @@ function createClient(config, readToken, writeToken, fetcher = fetch, pause = ms
     getWorkerArtifact: async(task,runId)=>client.getArtifact(await client.findArtifact(runId,`worker-${task.nonce}`),{runId,name:`worker-${task.nonce}`,head:task.base}),
     async commitFiles(pr,files) {
       validateFiles(files)
-      const input={branch:{repositoryNameWithOwner:config.repo,branchName:pr.head.ref},expectedHeadOid:pr.head.sha,message:{headline:'fix: repair Dependabot validation with OpenCode'},fileChanges:{additions:files.map(f=>({path:f.path,contents:Buffer.from(f.content).toString('base64')}))}}
+      const input={branch:{repositoryNameWithOwner:config.repo,branchName:pr.head.ref},expectedHeadOid:pr.head.sha,message:{headline:'fix: repair Dependabot validation with Copilot'},fileChanges:{additions:files.map(f=>({path:f.path,contents:Buffer.from(f.content).toString('base64')}))}}
       const result=await request('POST','/graphql',{query:'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }',variables:{input}})
       const id=result.data?.createCommitOnBranch?.commit?.oid;if(!/^[0-9a-f]{40}$/.test(id))throw Error('Atomic commit result is missing');return {id}
     },

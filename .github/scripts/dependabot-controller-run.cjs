@@ -29,7 +29,7 @@ async function run(env=process.env,mode=process.argv[2]) {
   if(!task || !config.agentEnabled || !config.automationEnabled)throw Error('Worker activation/task is missing')
   assertLaunch(task,config)
   const input=JSON.parse(fs.readFileSync(path.join(root,'input.json'),'utf8'));same(input.snapshot.task,task)
-  const artifact=await runAgent(task,{...input,root:path.join(root,'session')},{apiKey:env.OPENCODE_GO_API_KEY,binaryPath:env.OPENCODE_BINARY,ripgrepPath:env.RIPGREP_BINARY,session:`ses_${randomBytes(16).toString('hex')}`})
+  const artifact=await runAgent(task,{...input,root:path.join(root,'session')},{apiKey:env.COPILOT_GITHUB_TOKEN,binaryPath:env.COPILOT_BINARY,session:`ses_${randomBytes(16).toString('hex')}`})
   fs.writeFileSync(path.join(root,'result.json'),JSON.stringify(artifact));return
  }
  if(!env.DEPENDABOT_READ_TOKEN)throw Error('Read credential is missing')
@@ -55,7 +55,7 @@ async function run(env=process.env,mode=process.argv[2]) {
   same(claims[0].task,task)
   const origin={...claims[0].origin,jobId:0};same({...origin,jobId:0},{repositoryId:config.repositoryId,workflowPath:'.github/workflows/dependabot-auto-merge.yml',workflowSha:config.workflowSha,ref:config.ref,runId:config.runId,runAttempt:1,jobId:0})
   verifyRun(await client.getRun(config.runId),origin,config)
-  const jobs=(await client.getJobs(config.runId)).filter(j=>j.name===`OpenCode worker (${task.nonce})`)
+  const jobs=(await client.getJobs(config.runId)).filter(j=>j.name===`Copilot worker (${task.nonce})`)
   if(jobs.length!==1 || jobs[0].status!=='in_progress')throw Error('Worker job identity is missing');origin.jobId=jobs[0].id
   const snapshot=await client.prepareSnapshot(task);fs.mkdirSync(root,{recursive:true});fs.writeFileSync(path.join(root,'input.json'),JSON.stringify({snapshot,origin}));return
  }
