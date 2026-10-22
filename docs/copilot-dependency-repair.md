@@ -31,7 +31,9 @@ Its only model-visible tool is `curated-read_data`: bounded list, read and liter
 search of an exported input snapshot. The model has no shell, GitHub, network,
 write, skill or subagent tools. No repository plugins, hooks, MCP configuration,
 Git credentials or App credentials are mounted. A fresh temporary home prevents
-saved sessions and local configuration from changing policy.
+saved sessions and local configuration from changing policy. Only the pinned CLI's
+bundled native-addon cache has an executable temporary mount; data and other
+temporary mounts remain non-executable.
 
 The CLI itself needs network access to GitHub Copilot and holds the Copilot
 credential. The curated tool exposes no process environment, arbitrary paths,

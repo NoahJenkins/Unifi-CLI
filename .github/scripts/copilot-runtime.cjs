@@ -81,7 +81,9 @@ async function launchIsolated(task,prepared,config,options) {
  // The curated input is read-only. No GitHub write token or repository code is mounted.
  const args=['run','--platform','linux/amd64','--name',id,'--network','bridge','--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--user','1000:1000','--memory=2g','--cpus=2','--pids-limit=128',
   '--tmpfs','/tmp:rw,nosuid,nodev,size=128m,uid=1000,gid=1000','--tmpfs','/home/agent:rw,nosuid,nodev,size=512m,uid=1000,gid=1000',
-  '-v',`${options.binaryPath}:/usr/local/bin/copilot:ro`,'-v',`${path.join(__dirname,'copilot-data.cjs')}:/trusted/copilot-data.cjs:ro`,
+  // Copilot's pinned bundle loads native addons here. Keep every other temporary mount non-executable.
+  '--tmpfs','/home/agent/.cache/copilot:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000',
+  '-v',`${options.binaryPath}:/usr/local/bin/copilot:ro`,'--mount','type=bind,source=/etc/ssl/certs/ca-certificates.crt,target=/etc/ssl/certs/ca-certificates.crt,readonly','-v',`${path.join(__dirname,'copilot-data.cjs')}:/trusted/copilot-data.cjs:ro`,
   '-v',`${prepared.dataRoot}:/data:ro`,'-v',`${outputDir}:/output:rw`,
   ...Object.entries(cleanEnv()).flatMap(([k,v])=>['-e',`${k}=${v}`]),'-e','COPILOT_GITHUB_TOKEN',IMAGE,'copilot',...cliArgs(config)]
  const child=spawn('docker',args,{env:{PATH:process.env.PATH,COPILOT_GITHUB_TOKEN:options.apiKey}})

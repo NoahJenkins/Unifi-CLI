@@ -5,7 +5,7 @@ const {spawn}=require('node:child_process'),{policy,cliArgs,cleanEnv,observe,sum
 async function smoke(binary=process.env.COPILOT_BINARY) {
  if(!binary)throw Error('Verified Copilot binary is missing')
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'copilot-smoke-'))
- let requests=0,searchCompleted=false,child
+ let requests=0,searchCompleted=false,child,diagnostic='',events=''
  const server=http.createServer(async(req,res)=>{
   try {
    if(++requests>6)throw Error('Request limit')
@@ -23,18 +23,20 @@ async function smoke(binary=process.env.COPILOT_BINARY) {
   for(const name of ['data','work','home'])fs.mkdirSync(path.join(root,name))
   fs.writeFileSync(path.join(root,'data','input.json'),'{"marker":"offline-search-marker"}')
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
-  const usage=path.join(root,'usage.json')
+  const usage=path.join(root,'usage.json'),home=process.env.COPILOT_SMOKE_HOME || path.join(root,'home')
   child=spawn(binary,cliArgs(policy('review','Search the curated data for offline-search-marker, then return JSON {"ok":true}.'),{work:path.join(root,'work'),data:path.join(root,'data'),server:path.join(__dirname,'copilot-data.cjs'),usage}),{
-   env:{...cleanEnv(path.join(root,'home')),PATH:process.env.PATH,COPILOT_OFFLINE:'true',COPILOT_PROVIDER_BASE_URL:`http://127.0.0.1:${server.address().port}/v1`,COPILOT_PROVIDER_TYPE:'openai',COPILOT_PROVIDER_WIRE_API:'completions'},
+   env:{...cleanEnv(home),PATH:process.env.PATH,COPILOT_OFFLINE:'true',COPILOT_PROVIDER_BASE_URL:`http://127.0.0.1:${server.address().port}/v1`,COPILOT_PROVIDER_TYPE:'openai',COPILOT_PROVIDER_WIRE_API:'completions'},
   })
-  let events=''
+  // This process has only synthetic input and no credentials. Retain bounded startup diagnostics.
+  child.stderr.on('data',chunk=>{if(diagnostic.length<2000)diagnostic+=chunk.toString('utf8')})
   child.stdout.on('data',chunk=>{events+=chunk;if(events.length>1024*1024)child.kill('SIGKILL')})
   const value=await observe(child,'review',60000)
   searchCompleted=events.split('\n').filter(Boolean).map(line=>JSON.parse(line)).some(e=>e.type==='tool.execution_complete' && e.data?.success===true && e.data?.result?.content?.includes('offline-search-marker'))
   if(!value.result.ok || !searchCompleted || requests!==2)throw Error('Offline Copilot tool verification failed')
   summarizeUsage(JSON.parse(fs.readFileSync(usage,'utf8')))
   console.log('Offline Copilot curated search passed (no credits used)')
- }finally {child?.kill('SIGKILL');await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true})}
+ }catch(error){console.error(`Offline check: ${error.message}; local requests: ${requests}`);if(diagnostic)console.error(diagnostic.slice(0,2000));if(events)console.error(events.slice(-2000));throw error}
+ finally {child?.kill('SIGKILL');await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true})}
 }
 if(require.main===module)smoke().catch(()=>{console.error('Offline Copilot curated search failed');process.exitCode=1})
 module.exports={smoke}

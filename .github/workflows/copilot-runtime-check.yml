@@ -38,8 +38,11 @@ jobs:
             --security-opt=no-new-privileges --read-only --user 1000:1000 \
             --memory=2g --cpus=2 --pids-limit=128 \
             --tmpfs /tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000 \
+            --tmpfs /home/agent:rw,nosuid,nodev,size=128m,uid=1000,gid=1000 \
+            --tmpfs /home/agent/.cache/copilot:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000 \
             -v "$RUNNER_TEMP/copilot-bin/copilot:/usr/local/bin/copilot:ro" \
+            --mount type=bind,source=/etc/ssl/certs/ca-certificates.crt,target=/etc/ssl/certs/ca-certificates.crt,readonly \
             -v "$GITHUB_WORKSPACE/.github/scripts:/trusted:ro" \
-            -e COPILOT_BINARY=/usr/local/bin/copilot \
+            -e COPILOT_BINARY=/usr/local/bin/copilot -e COPILOT_SMOKE_HOME=/home/agent \
             node:24-bookworm-slim@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd \
             node /trusted/copilot-smoke.cjs
