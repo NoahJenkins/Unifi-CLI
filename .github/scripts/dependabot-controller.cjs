@@ -89,7 +89,7 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
   if (['repair', 'review'].includes(decision.kind)) {
     if (tasks.length >= MAX_TASKS) return stop('waiting', 'Task batch is full. Defer to the next reconciliation without consuming a reservation.')
     if (!defaultBranchEvent(config.eventName) || config.workSourceVerified !== true || config.runAttempt !== 1 || config.workflowSha !== main || config.ref !== 'refs/heads/main') return stop('waiting', 'Wait for a controller run from current main.')
-    if (!config.agentEnabled) return stop('blocked', `${decision.reason} Agent dispatch is disabled pending credentials and OpenCode settings.`)
+    if (!config.agentEnabled) return stop('blocked', `${decision.reason} Agent dispatch is disabled pending credentials and Copilot settings.`)
     // Fail closed before spending credits if the required gate can be forged or omitted.
     if (!protectionAllowsMerge(await client.getProtection(), config.appId)) return stop('blocked', 'Configure the App-bound required gate before agent dispatch.')
     if (!state.ledger) {
@@ -106,7 +106,7 @@ async function reconcileOne(client, config, number, state, tasks, evaluate = eva
     await client.saveLedger(next.ledger, state)
     state.ledger = next.ledger
     tasks.push(next.reservation)
-    await client.setGate(pr, 'waiting', `Reserved ${decision.kind} for this head. Await OpenCode, then fresh checks and review.`)
+    await client.setGate(pr, 'waiting', `Reserved ${decision.kind} for this head. Await Copilot, then fresh checks and review.`)
     return decision
   }
   return stop(decision.kind === 'blocked' ? 'blocked' : 'waiting', decision.reason)
