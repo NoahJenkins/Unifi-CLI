@@ -84,3 +84,28 @@ test('assistant payloads can omit model while model-call events still enforce th
   const bad=JSON.parse(JSON.stringify(events));mutate(bad);await assert.rejects(session(bad),/model|message/i)
  }
 })
+
+test('review inputs must fit two complete passes within the existing tool budgets',()=>{
+ const {assertReviewCapacity}=require('./copilot-data.cjs')
+ const small=new Map([['input.json','{}'],['base/lock','a'.repeat(100000)],['head/lock','b'.repeat(100000)]])
+ assert.doesNotThrow(()=>assertReviewCapacity(small,[...small.keys()]))
+ const large=new Map([['base/lock','a'.repeat(400000)],['head/lock','b'.repeat(400000)]])
+ assert.throws(()=>assertReviewCapacity(large,[...large.keys()]),/review.*budget/i)
+ const escaped=new Map([['input.json','\\'.repeat(400000)]])
+ assert.throws(()=>assertReviewCapacity(escaped,[...escaped.keys()]),/review.*budget/i)
+ const many=new Map(Array.from({length:49},(_,i)=>['file-'+i,'small']))
+ assert.throws(()=>assertReviewCapacity(many,[...many.keys()]),/review.*budget/i)
+ assert.throws(()=>assertReviewCapacity(small,['missing']),/review.*budget/i)
+})
+
+test('oversized changed-file review evidence is rejected before the model launcher',async()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path')
+ const {runAgent}=require('./dependabot-opencode-worker.cjs')
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'copilot-review-budget-'))
+ const task={kind:'review'},snapshot={task,existingPaths:['pnpm-lock.yaml'],changedFiles:['pnpm-lock.yaml'],baseFiles:{'pnpm-lock.yaml':'a'.repeat(400000)},headFiles:{'pnpm-lock.yaml':'b'.repeat(400000)}}
+ let launched=false
+ try {
+  await assert.rejects(runAgent(task,{snapshot,root},{launcher:()=>{launched=true;throw Error('Unexpected model launch')}}),/review.*budget/i)
+  assert.equal(launched,false)
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
+})

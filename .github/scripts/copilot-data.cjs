@@ -41,6 +41,22 @@ function service(files) {
   return encoded
  }
 }
+// Admission must fit complete mandatory reads, including JSON escaping and response
+// metadata, with one additional full pass left for searches or repeated reads.
+function assertReviewCapacity(files,required) {
+ try {
+  if(!Array.isArray(required) || !required.length)throw Error('Missing review inputs')
+  const call=service(files)
+  for(let pass=0;pass<2;pass++) {
+   call({operation:'list'})
+   for(const file of new Set(required)) {
+    const value=files.get(file)
+    if(typeof value!=='string')throw Error('Missing review file')
+    for(let offset=0;offset<Math.max(1,value.length);offset+=12000)call({operation:'read',file,offset,length:12000})
+   }
+  }
+ }catch {throw Error('Review input exceeds the curated tool coverage budget')}
+}
 function main(root) {
  const call=service(load(root));let received=0
  const input=readline.createInterface({input:process.stdin})
@@ -60,4 +76,4 @@ function main(root) {
  })
 }
 if(require.main===module){try{main(process.argv[2])}catch{process.exitCode=1}}
-module.exports={load,service}
+module.exports={load,service,assertReviewCapacity}

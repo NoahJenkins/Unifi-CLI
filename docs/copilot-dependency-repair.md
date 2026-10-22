@@ -66,3 +66,14 @@ Deployment of this configuration and activation are separate steps. Before
 activation, verify the secret, model entitlement, paid-overage setting and a
 controlled exact-head repair/review canary. Enable one repository first. Existing
 paused flags and consumed reservations must not be reset to manufacture a pass.
+
+## Review input admission
+
+Before starting a paid review, the trusted adapter checks that a file listing
+and all mandatory input reads fit within the curated tool call and output
+budgets, including JSON escaping and response metadata. It reserves capacity
+for a second complete pass. The four snapshot controllers include every changed
+base/head file; Metriks includes the complete diff and required diagnostic files.
+Optional source context is read as needed. Oversized reviews stop before model
+launch and cannot publish an approval. Existing durable reservations remain
+consumed; the input check does not increase spending or attempt limits.
