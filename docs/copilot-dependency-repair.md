@@ -59,8 +59,8 @@ Do not delete the former provider secret until no separate workflow needs it.
 
 `copilot-smoke.cjs` runs the pinned real CLI against a local fake provider in
 Copilot offline mode. It verifies the exact tool allowlist and a completed real
-curated search. No GitHub authentication or paid model access is used by that
-check. CI runs it inside the same pinned Linux image with networking disabled.
+curated read, including complete delivery of a result larger than 20 KiB.
+No GitHub authentication or paid model access is used by that check. CI runs it inside the same pinned Linux image with networking disabled.
 
 Deployment of this configuration and activation are separate steps. Before
 activation, verify the secret, model entitlement, paid-overage setting and a
