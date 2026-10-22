@@ -10,7 +10,7 @@ function policy(kind,prompt) {
  return {runtimeVersion:VERSION,provider:'github-copilot',model:MODEL,kind,maxAiCredits:30,maxCalls:kind==='repair'?24:16,timeoutMs:kind==='repair'?1200000:600000,tools:['curated-read_data'],prompt}
 }
 function cleanEnv(home='/home/agent') {
- return {PATH:'/usr/local/bin:/usr/bin:/bin',HOME:home,COPILOT_HOME:home+'/.copilot',CI:'true',NO_COLOR:'1'}
+ return {PATH:'/usr/local/bin:/usr/bin:/bin',HOME:home,COPILOT_HOME:home+'/.copilot',CI:'true',NO_COLOR:'1',COPILOT_LARGE_OUTPUT_THRESHOLD_BYTES:'65536'}
 }
 function cliArgs(config,{work='/tmp',server='/trusted/copilot-data.cjs',data='/data',usage='/output/usage.json',session=randomUUID()}={}) {
  const mcp={mcpServers:{curated:{type:'local',command:'node',args:[server,data],tools:['read_data']}}}

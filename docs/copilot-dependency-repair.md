@@ -77,3 +77,9 @@ base/head file; Metriks includes the complete diff and required diagnostic files
 Optional source context is read as needed. Oversized reviews stop before model
 launch and cannot publish an approval. Existing durable reservations remain
 consumed; the input check does not increase spending or attempt limits.
+
+The CLI direct-output threshold is explicitly set to 65,536 UTF-8 bytes,
+matching the curated service response limit. This prevents valid tool results
+from being replaced with inaccessible temporary-file previews. The offline
+runtime check requires the full multibyte payload and its trailing marker to
+reach the fake provider in a response larger than the CLI default of 20 KiB.
