@@ -50,7 +50,7 @@ function observe(child,kind,timeoutMs) {
      }
      if(event.type==='tool.execution_start' && data.toolName!=='curated-read_data')throw Error('Denied agent tool')
      if(event.type==='assistant.message') {
-      if(data.model!==MODEL || (data.toolRequests || []).some(t=>t.name!=='curated-read_data'))throw Error('Untrusted Copilot message')
+      if((data.model!==undefined && data.model!==MODEL) || (data.toolRequests || []).some(t=>t.name!=='curated-read_data'))throw Error('Untrusted Copilot message')
       if(typeof data.content!=='string')throw Error('Invalid Copilot message content')
       if(data.chunkIndex!==undefined || data.chunkCount!==undefined) {
        if(!Number.isInteger(data.chunkCount) || data.chunkCount<1 || data.chunkCount>64 || !Number.isInteger(data.chunkIndex) || data.chunkIndex<0)throw Error('Invalid Copilot message chunks')

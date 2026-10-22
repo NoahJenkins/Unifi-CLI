@@ -75,3 +75,12 @@ test('session errors retain safe categories and HTTP status without private payl
   assert.equal(error.message,'Agent error (rate_limit; HTTP 429)');return true
  })
 })
+test('assistant payloads can omit model while model-call events still enforce the pinned model',async()=>{
+ const events=[{type:'model.call_start',data:{model:'gpt-6-luna'}},
+  {type:'assistant.message',data:{content:'{"ok":true}'}},
+  {type:'result',exitCode:0,sessionId:'12345678-1234-1234-1234-123456789abc'}]
+ assert.equal((await session(events)).result.ok,true)
+ for(const mutate of [e=>{e[0].data.model='gpt-6-astra'},e=>{e[1].data.model='gpt-6-astra'},e=>{delete e[0].data.model}]) {
+  const bad=JSON.parse(JSON.stringify(events));mutate(bad);await assert.rejects(session(bad),/model|message/i)
+ }
+})
