@@ -21,13 +21,14 @@ function cliArgs(config,{work='/tmp',server='/trusted/copilot-data.cjs',data='/d
 }
 function agentError(error) {
  const name=['APIError','ProviderInitError','ProviderModelNotFoundError','ContextOverflowError','MessageAbortedError','UnknownError'].includes(error?.name)?error.name:'unknown'
- const status=error?.data?.statusCode
- return Error(`Agent error (${name}${Number.isInteger(status) && status>=400 && status<=599?`; HTTP ${status}`:''})`)
+ const category=['authentication','authorization','policy','quota','rate_limit','context_limit','query'].includes(error?.errorType)?error.errorType:name
+ const status=error?.statusCode ?? error?.data?.statusCode
+ return Error(`Agent error (${category}${Number.isInteger(status) && status>=400 && status<=599?`; HTTP ${status}`:''})`)
 }
 function observe(child,kind,timeoutMs) {
  return new Promise((resolve,reject)=>{
   const decoder=new StringDecoder('utf8')
-  let buffer='',bytes=0,calls=0,output='',completion=null,settled=false
+  let buffer='',bytes=0,calls=0,output='',completion=null,settled=false,group=null,sawMessage=false,callHasTools=false
   const stop=error=>{if(settled)return;settled=true;clearTimeout(timer);child.kill('SIGKILL');reject(error)}
   const timer=setTimeout(()=>stop(Error('Agent timeout')),timeoutMs)
   child.on('error',()=>stop(Error('Copilot process failed')));child.stderr.on('data',()=>{})
@@ -39,18 +40,35 @@ function observe(child,kind,timeoutMs) {
     try {
      const event=JSON.parse(line),data=event.data || {}
      if(completion)throw Error('Output after Copilot completion')
-     if(['error','session.error'].includes(event.type))throw agentError(data.error || event.error)
+     if(event.type==='session.error')throw agentError(data)
+     if(event.type==='error')throw agentError(data.error || event.error)
      if(event.type==='model.call_start') {
+      if(group && group.next!==group.count)throw Error('Incomplete Copilot message chunks')
       if(data.model!==MODEL)throw Error('Untrusted Copilot model')
       if(++calls>(kind==='repair'?24:16))throw Error('Agent step limit')
-      output=''
+      output='';group=null;sawMessage=false;callHasTools=false
      }
      if(event.type==='tool.execution_start' && data.toolName!=='curated-read_data')throw Error('Denied agent tool')
      if(event.type==='assistant.message') {
       if(data.model!==MODEL || (data.toolRequests || []).some(t=>t.name!=='curated-read_data'))throw Error('Untrusted Copilot message')
-      if(!data.toolRequests?.length)output=data.content || ''
+      if(typeof data.content!=='string')throw Error('Invalid Copilot message content')
+      if(data.chunkIndex!==undefined || data.chunkCount!==undefined) {
+       if(!Number.isInteger(data.chunkCount) || data.chunkCount<1 || data.chunkCount>64 || !Number.isInteger(data.chunkIndex) || data.chunkIndex<0)throw Error('Invalid Copilot message chunks')
+       if(!group) {
+        if(sawMessage || data.chunkIndex!==0)throw Error('Missing Copilot message chunk')
+        group={id:data.apiCallId??null,count:data.chunkCount,next:0}
+       }
+       if(group.id!==(data.apiCallId??null) || group.count!==data.chunkCount || group.next!==data.chunkIndex)throw Error('Mixed or repeated Copilot message chunks')
+       group.next++;output+=data.content
+      }else {
+       if(sawMessage)throw Error('Ambiguous Copilot messages')
+       output=data.content
+      }
+      sawMessage=true
+      if(data.toolRequests?.length)callHasTools=true
      }
      if(event.type==='result') {
+      if(callHasTools || (group && group.next!==group.count))throw Error('Incomplete Copilot final response')
       if(event.exitCode!==0 || !/^[0-9a-f-]{36}$/.test(event.sessionId || ''))throw Error('Copilot session failed')
       completion=event
      }
