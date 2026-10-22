@@ -134,7 +134,7 @@ test('validator rejects workflow output before container execution',async()=>{
  const task={pr:1,prId:'PR_1',head:next,base:sha,kind:'repair',nonce:'12345678-1234-1234-1234-123456789abc',createdAt:'2026-10-20T12:00:00.000Z'};
  const origin={repositoryId:1,workflowPath:'.github/workflows/dependabot-auto-merge.yml',workflowSha:sha,ref:'refs/heads/main',runId:10,runAttempt:1,jobId:20};
  const filename='.github/workflows/ci.yml',snapshot={existingPaths:[filename],changedFiles:[filename],headFiles:{[filename]:workflow(sha)}};
- const artifact=sealArtifact({version:1,task,origin,agent:{runtimeVersion:'1.0.85',provider:'github-copilot',model:'gpt-6-luna',sessionId:'ses_fixture',configDigest:'c'.repeat(64),inputDigest:'d'.repeat(64)},result:{files:[{path:filename,content:workflow(next)}]}});
+ const artifact=sealArtifact({version:1,task,origin,agent:{runtimeVersion:'1.0.103',provider:'github-copilot',model:'gpt-6-luna',sessionId:'ses_fixture',configDigest:'c'.repeat(64),inputDigest:'d'.repeat(64)},result:{files:[{path:filename,content:workflow(next)}]}});
  await assert.rejects(validateRepair(task,snapshot,artifact,{origin}),/repair.*scope|workflow/i);
 });
 

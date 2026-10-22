@@ -1,8 +1,11 @@
 # Copilot dependency repair
 
 Dependency repair and independent dependency review use GitHub Copilot CLI
-1.0.85 with the fixed `gpt-6-luna` model and the default context tier. There is
+1.0.103 with the fixed `gpt-6-luna` model and the default context tier. There is
 no automatic model/provider fallback. A new session is used for each task.
+The pin must support Luna (introduced in CLI 1.0.89). Session history sync is
+disabled with `--sync-session=off`; the fresh home has no registered incoming
+control environment, and no hosting or connection flags are supplied.
 
 The CLI receives a fine-grained token with only the **Copilot Requests account
 permission**. The token spends the owner's Copilot Pro allowance; it does not

@@ -27,8 +27,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/copilot-bin"
-          curl --fail --location --proto '=https' --silent --show-error https://github.com/github/copilot-cli/releases/download/v1.0.85/copilot-linux-x64.tar.gz -o "$RUNNER_TEMP/copilot-bin/runtime.tar.gz"
-          echo '6f235cea897645eef67e8f480e36a15b5d9c9f7a6165ebc9b6b1c28afc8bcdda  '"$RUNNER_TEMP/copilot-bin/runtime.tar.gz" | sha256sum --check
+          curl --fail --location --proto '=https' --silent --show-error https://github.com/github/copilot-cli/releases/download/v1.0.103/copilot-linux-x64.tar.gz -o "$RUNNER_TEMP/copilot-bin/runtime.tar.gz"
+          echo '9aeb4430e9ac9523546db07b227c7aba179a4710a55f9ac29ad143b0f9e1b325  '"$RUNNER_TEMP/copilot-bin/runtime.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/copilot-bin/runtime.tar.gz" -C "$RUNNER_TEMP/copilot-bin"
       - name: Exercise real CLI and curated tools without network or credentials
         shell: bash

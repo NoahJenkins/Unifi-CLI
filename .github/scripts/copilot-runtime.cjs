@@ -3,8 +3,8 @@
 const fs=require('node:fs'),path=require('node:path'),{StringDecoder}=require('node:string_decoder')
 const {spawn,execFileSync}=require('node:child_process'),{randomUUID}=require('node:crypto')
 const IMAGE='node:24-bookworm-slim@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd'
-const VERSION='1.0.85',MODEL='gpt-6-luna'
-const BINARY_SHA='6f235cea897645eef67e8f480e36a15b5d9c9f7a6165ebc9b6b1c28afc8bcdda'
+const VERSION='1.0.103',MODEL='gpt-6-luna'
+const BINARY_SHA='9aeb4430e9ac9523546db07b227c7aba179a4710a55f9ac29ad143b0f9e1b325'
 function policy(kind,prompt) {
  if(!['repair','review'].includes(kind))throw Error('Invalid agent kind')
  return {runtimeVersion:VERSION,provider:'github-copilot',model:MODEL,kind,maxAiCredits:30,maxCalls:kind==='repair'?24:16,timeoutMs:kind==='repair'?1200000:600000,tools:['curated-read_data'],prompt}
@@ -15,7 +15,7 @@ function cleanEnv(home='/home/agent') {
 function cliArgs(config,{work='/tmp',server='/trusted/copilot-data.cjs',data='/data',usage='/output/usage.json',session=randomUUID()}={}) {
  const mcp={mcpServers:{curated:{type:'local',command:'node',args:[server,data],tools:['read_data']}}}
  return ['-C',work,'--prompt',config.prompt,'--model',MODEL,'--context','default','--max-ai-credits','30','--max-autopilot-continues','0',
-  '--no-auto-update','--no-custom-instructions','--disable-builtin-mcps','--no-ask-user','--no-remote','--no-remote-export','--no-bash-env','--no-experimental',
+  '--no-auto-update','--no-custom-instructions','--disable-builtin-mcps','--no-ask-user','--sync-session=off','--no-bash-env','--no-experimental',
   '--disallow-temp-dir','--log-level','none','--output-format','json','--session-id',session,'--usage-output-file',usage,
   '--secret-env-vars=COPILOT_GITHUB_TOKEN','--additional-mcp-config',JSON.stringify(mcp),'--available-tools=curated-read_data','--allow-tool=curated(read_data)']
 }

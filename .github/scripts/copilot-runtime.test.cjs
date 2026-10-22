@@ -30,7 +30,7 @@ test('data tool has finite output and invocation budgets',()=>{
 test('Copilot only sees the curated tool and does not inherit workspace extensions',()=>{
  const args=cliArgs(policy('repair','fixture'))
  assert(args.includes('--available-tools=curated-read_data'))
- for(const flag of ['--no-custom-instructions','--disable-builtin-mcps','--no-auto-update','--no-remote','--no-remote-export','--no-bash-env'])assert(args.includes(flag))
+ for(const flag of ['--no-custom-instructions','--disable-builtin-mcps','--no-auto-update','--sync-session=off','--no-bash-env'])assert(args.includes(flag))
  assert(!args.includes('--allow-all'))
 })
 test('usage evidence rejects model fallback and invalid counters',()=>{

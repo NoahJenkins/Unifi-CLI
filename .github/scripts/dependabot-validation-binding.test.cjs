@@ -63,7 +63,7 @@ function fixture(){
  fs.writeFileSync(path.join(root,'go.mod'),'module example.com/cli\n\ngo 1.26.9\n');
  const snapshot={changedFiles:[SOURCE],existingPaths:[SOURCE,LOCK],headFiles:{[SOURCE]:before,[LOCK]:'old lock'}};
  fs.writeFileSync(path.join(root,SOURCE),before);fs.writeFileSync(path.join(root,LOCK),'old lock');
- const artifact=sealArtifact({version:1,task,origin,agent:{runtimeVersion:'1.0.85',provider:'github-copilot',model:'gpt-6-luna',sessionId:'ses_fixture',configDigest:'c'.repeat(64),inputDigest:'d'.repeat(64)},result:{files:[{path:SOURCE,content:after}]}});
+ const artifact=sealArtifact({version:1,task,origin,agent:{runtimeVersion:'1.0.103',provider:'github-copilot',model:'gpt-6-luna',sessionId:'ses_fixture',configDigest:'c'.repeat(64),inputDigest:'d'.repeat(64)},result:{files:[{path:SOURCE,content:after}]}});
  return {root,snapshot,artifact,after};
 }
 runTest('validator publishes the bytes checked after dependency generation',async()=>{

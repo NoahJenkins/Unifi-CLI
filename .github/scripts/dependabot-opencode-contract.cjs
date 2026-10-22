@@ -321,7 +321,7 @@ function validateArtifact(raw, expected) {
   if (raw.origin.workflowPath !== '.github/workflows/dependabot-auto-merge.yml' || raw.origin.workflowSha !== raw.task.base || raw.origin.ref !== 'refs/heads/main' || raw.origin.runAttempt !== 1) throw new Error('Untrusted workflow origin')
   same(raw.task,expected.task); same(raw.origin,expected.origin)
   object(raw.agent,['runtimeVersion','provider','model','sessionId','configDigest','inputDigest'])
-  if (raw.agent.runtimeVersion !== '1.0.85' || raw.agent.provider !== 'github-copilot' || raw.agent.model !== 'gpt-6-luna' || !/^ses_[a-zA-Z0-9_-]{1,120}$/.test(raw.agent.sessionId)) throw new Error('Untrusted runtime or session')
+  if (raw.agent.runtimeVersion !== '1.0.103' || raw.agent.provider !== 'github-copilot' || raw.agent.model !== 'gpt-6-luna' || !/^ses_[a-zA-Z0-9_-]{1,120}$/.test(raw.agent.sessionId)) throw new Error('Untrusted runtime or session')
   for (const key of ['configDigest','inputDigest']) {
     if (!/^[0-9a-f]{64}$/.test(raw.agent[key])) throw new Error('Invalid agent digest')
     if (expected[key]) same(raw.agent[key],expected[key])
