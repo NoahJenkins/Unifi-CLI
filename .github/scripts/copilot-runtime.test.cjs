@@ -24,7 +24,7 @@ test('data tool cannot read credentials, traverse paths, write, or execute instr
 })
 test('data tool has finite output and invocation budgets',()=>{
  const call=service(new Map([['input.json','safe']]))
- for(let i=0;i<96;i++)call({operation:'list'})
+ for(let i=0;i<128;i++)call({operation:'list'})
  assert.throws(()=>call({operation:'list'}),/limit/)
 })
 test('Copilot only sees the curated tool and does not inherit workspace extensions',()=>{
@@ -86,16 +86,16 @@ test('assistant payloads can omit model while model-call events still enforce th
 })
 
 test('review inputs must fit two complete passes within the existing tool budgets',()=>{
- const {assertReviewCapacity}=require('./copilot-data.cjs')
+ const {assertInputCapacity}=require('./copilot-data.cjs')
  const small=new Map([['input.json','{}'],['base/lock','a'.repeat(100000)],['head/lock','b'.repeat(100000)]])
- assert.doesNotThrow(()=>assertReviewCapacity(small,[...small.keys()]))
+ assert.doesNotThrow(()=>assertInputCapacity(small,[...small.keys()]))
  const large=new Map([['base/lock','a'.repeat(400000)],['head/lock','b'.repeat(400000)]])
- assert.throws(()=>assertReviewCapacity(large,[...large.keys()]),/review.*budget/i)
- const escaped=new Map([['input.json','\\'.repeat(400000)]])
- assert.throws(()=>assertReviewCapacity(escaped,[...escaped.keys()]),/review.*budget/i)
- const many=new Map(Array.from({length:49},(_,i)=>['file-'+i,'small']))
- assert.throws(()=>assertReviewCapacity(many,[...many.keys()]),/review.*budget/i)
- assert.throws(()=>assertReviewCapacity(small,['missing']),/review.*budget/i)
+ assert.throws(()=>assertInputCapacity(large,[...large.keys()]),/input.*budget/i)
+ const escaped=new Map([['input.json','\\'.repeat(900000)]])
+ assert.throws(()=>assertInputCapacity(escaped,[...escaped.keys()]),/input.*budget/i)
+ const many=new Map(Array.from({length:65},(_,i)=>['file-'+i,'small']))
+ assert.throws(()=>assertInputCapacity(many,[...many.keys()]),/input.*budget/i)
+ assert.throws(()=>assertInputCapacity(small,['missing']),/input.*budget/i)
 })
 
 test('oversized changed-file review evidence is rejected before the model launcher',async()=>{
@@ -105,7 +105,7 @@ test('oversized changed-file review evidence is rejected before the model launch
  const task={kind:'review'},snapshot={task,existingPaths:['pnpm-lock.yaml'],changedFiles:['pnpm-lock.yaml'],baseFiles:{'pnpm-lock.yaml':'a'.repeat(400000)},headFiles:{'pnpm-lock.yaml':'b'.repeat(400000)}}
  let launched=false
  try {
-  await assert.rejects(runAgent(task,{snapshot,root},{launcher:()=>{launched=true;throw Error('Unexpected model launch')}}),/review.*budget/i)
+  await assert.rejects(runAgent(task,{snapshot,root},{launcher:()=>{launched=true;throw Error('Unexpected model launch')}}),/input.*budget/i)
   assert.equal(launched,false)
  }finally{fs.rmSync(root,{recursive:true,force:true})}
 })
@@ -120,4 +120,39 @@ test('oversized repair diagnostics are rejected before the model launcher',async
   await assert.rejects(runAgent(task,{snapshot,root},{launcher:()=>{launched=true;throw Error('Unexpected model launch')}}),/curated input limit/i)
   assert.equal(launched,false)
  }finally{fs.rmSync(root,{recursive:true,force:true})}
+})
+
+test('the current repository lockfile fits complete review coverage',()=>{
+ const fs=require('node:fs'),path=require('node:path'),{assertInputCapacity}=require('./copilot-data.cjs')
+ const root=path.resolve(__dirname,'../..'),lock=fs.readFileSync(path.join(root,'go.sum'),'utf8')
+ const {execFileSync}=require('node:child_process')
+ const inventory=execFileSync('git',['ls-files','-z'],{cwd:root,encoding:'utf8'}).split('\0').filter(Boolean)
+ const files=new Map([['input.json',JSON.stringify({existingPaths:inventory})],['base/go.sum',lock],['head/go.sum',lock]])
+ for(const name of ['package.json','apps/app/package.json','packages/contracts/package.json','apps/api/package.json','apps/web/package.json','packages/shared/package.json','go.mod']) {
+  const file=path.join(root,name);if(!fs.existsSync(file))continue
+  const content=fs.readFileSync(file,'utf8');files.set('base/'+name,content);files.set('head/'+name,content)
+ }
+ assert.doesNotThrow(()=>assertInputCapacity(files,[...files.keys()]))
+})
+
+test('repair diagnostics must fit the tool output budget before model launch',async()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{runAgent}=require('./dependabot-opencode-worker.cjs')
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'copilot-repair-budget-'))
+ const task={kind:'repair'},snapshot={task,existingPaths:['package.json'],changedFiles:['package.json'],baseFiles:{'package.json':'{}'},headFiles:{'package.json':'{}'},diagnostics:['a'.repeat(1024*1024)]}
+ let launched=false
+ try {
+  await assert.rejects(runAgent(task,{snapshot,root},{launcher:()=>{launched=true;throw Error('Unexpected model launch')}}),/input.*budget/i)
+  assert.equal(launched,false)
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
+})
+
+test('the curated service enforces the cumulative byte budget before its call cap',()=>{
+ const {service}=require('./copilot-data.cjs'),call=service(new Map([['unicode.txt','é'.repeat(16000)]]))
+ for(let i=0;i<64;i++)call({operation:'read',file:'unicode.txt',length:16000})
+ let exhausted=false
+ for(let i=0;i<8;i++) {
+  try {call({operation:'read',file:'unicode.txt',length:16000})}
+  catch(error) {assert.match(error.message,/output limit/i);exhausted=true;break}
+ }
+ assert.equal(exhausted,true)
 })

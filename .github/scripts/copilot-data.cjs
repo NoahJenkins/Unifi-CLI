@@ -1,7 +1,7 @@
 'use strict'
 // A read-only MCP service. No shell, network, writes, arbitrary paths, or credential reads.
 const fs=require('node:fs'),path=require('node:path'),readline=require('node:readline')
-const LIMIT=64*1024
+const LIMIT=64*1024,MAX_CALLS=128,MAX_OUTPUT=2*1024*1024
 function load(root) {
  const files=new Map();let bytes=0
  function visit(dir,prefix='') {
@@ -17,7 +17,7 @@ function load(root) {
 function service(files) {
  let calls=0,total=0
  return args=>{
-  if(++calls>96)throw Error('Data tool call limit')
+  if(++calls>MAX_CALLS)throw Error('Data tool call limit')
   if(!args || typeof args!=='object' || Object.keys(args).some(k=>!['operation','file','offset','length','query'].includes(k)))throw Error('Invalid data request')
   let result
   if(args.operation==='list')result=[...files.keys()]
@@ -37,13 +37,13 @@ function service(files) {
    }
   }else throw Error('Invalid data operation')
   const encoded=JSON.stringify(result);total+=Buffer.byteLength(encoded)
-  if(Buffer.byteLength(encoded)>LIMIT || total>768*1024)throw Error('Data output limit')
+  if(Buffer.byteLength(encoded)>LIMIT || total>MAX_OUTPUT)throw Error('Data output limit')
   return encoded
  }
 }
 // Admission must fit complete mandatory reads, including JSON escaping and response
 // metadata, with one additional full pass left for searches or repeated reads.
-function assertReviewCapacity(files,required) {
+function assertInputCapacity(files,required) {
  try {
   if(!Array.isArray(required) || !required.length)throw Error('Missing review inputs')
   const call=service(files)
@@ -55,7 +55,7 @@ function assertReviewCapacity(files,required) {
     for(let offset=0;offset<Math.max(1,value.length);offset+=12000)call({operation:'read',file,offset,length:12000})
    }
   }
- }catch {throw Error('Review input exceeds the curated tool coverage budget')}
+ }catch {throw Error('Agent input exceeds the curated tool coverage budget')}
 }
 function main(root) {
  const call=service(load(root));let received=0
@@ -76,4 +76,4 @@ function main(root) {
  })
 }
 if(require.main===module){try{main(process.argv[2])}catch{process.exitCode=1}}
-module.exports={load,service,assertReviewCapacity}
+module.exports={load,service,assertInputCapacity}

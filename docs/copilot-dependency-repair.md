@@ -73,14 +73,16 @@ Both repair and review validate the complete generated data directory, including
 `input.json`, against the curated service file-size, total-size and file-count
 limits before model launch. Invalid data cannot start a paid session.
 
-Before starting a paid review, the trusted adapter checks that a file listing
-and all mandatory input reads fit within the curated tool call and output
-budgets, including JSON escaping and response metadata. It reserves capacity
-for a second complete pass. The four snapshot controllers include every changed
+Before starting a paid repair or review, the trusted adapter checks that a file
+listing and all mandatory input reads fit within the curated tool call and output
+budgets of 128 tool calls and 2 MiB of cumulative encoded output, including
+JSON escaping and response metadata. Each response remains limited to 64 KiB.
+The preflight leaves capacity for a second complete pass. The four snapshot controllers include every changed
 base/head file; Metriks includes the complete diff and required diagnostic files.
-Optional source context is read as needed. Oversized reviews stop before model
+Optional source context is read as needed. Oversized tasks stop before model
 launch and cannot publish an approval. Existing durable reservations remain
-consumed; the input check does not increase spending or attempt limits.
+consumed; the input check does not increase the 30-credit session or attempt
+limits.
 
 The CLI direct-output threshold is explicitly set to 65,536 UTF-8 bytes,
 matching the curated service response limit. This prevents valid tool results

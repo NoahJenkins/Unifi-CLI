@@ -2,7 +2,7 @@
 const fs=require('node:fs');const path=require('node:path')
 const {MAX_FILE,MAX_TOTAL,digest,text,scopeChanges,validateFiles,validateReview,sealArtifact,validateArtifact,path:validatePath}=require('./dependabot-opencode-contract.cjs')
 const runtime=require('./copilot-runtime.cjs')
-const {load,assertReviewCapacity}=require('./copilot-data.cjs')
+const {load,assertInputCapacity}=require('./copilot-data.cjs')
 const {IMAGE,BINARY_SHA,cleanEnv,agentError,observe,launchIsolated}=runtime
 const excluded=p=>p.split('/').some(x=>['AGENTS.md','CLAUDE.md','CONTEXT.md','.git','.opencode','.claude','.copilot','.agents','opencode.json','opencode.jsonc','mcp.json','tools','tool','node_modules'].includes(x))
 function agentConfig(kind,_url,_token,prompt=fs.readFileSync(path.join(__dirname,'../opencode',`${kind}.md`),'utf8')) {
@@ -22,7 +22,7 @@ function prepareWorkspace(snapshot,root,kind) {
  const info={task:snapshot.task,changedFiles:snapshot.changedFiles,existingPaths:snapshot.existingPaths,diagnostics:snapshot.diagnostics || []};text(JSON.stringify(info),MAX_TOTAL)
  fs.writeFileSync(path.join(dataRoot,'input.json'),JSON.stringify(info))
  const curated=load(dataRoot)
- if(kind==='review')assertReviewCapacity(curated,['input.json',...snapshot.changedFiles.flatMap(name=>['base/'+name,'head/'+name])])
+ assertInputCapacity(curated,['input.json',...snapshot.changedFiles.flatMap(name=>['base/'+name,'head/'+name])])
  const inputDigest=digest(snapshot);return {dataRoot,configPath:path.join(root,'config.json'),inputDigest}
 }
 async function runAgent(task,input,options={}) {
