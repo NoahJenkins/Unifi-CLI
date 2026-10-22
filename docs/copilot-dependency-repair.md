@@ -67,7 +67,11 @@ activation, verify the secret, model entitlement, paid-overage setting and a
 controlled exact-head repair/review canary. Enable one repository first. Existing
 paused flags and consumed reservations must not be reset to manufacture a pass.
 
-## Review input admission
+## Input admission
+
+Both repair and review validate the complete generated data directory, including
+`input.json`, against the curated service file-size, total-size and file-count
+limits before model launch. Invalid data cannot start a paid session.
 
 Before starting a paid review, the trusted adapter checks that a file listing
 and all mandatory input reads fit within the curated tool call and output

@@ -21,7 +21,8 @@ function prepareWorkspace(snapshot,root,kind) {
  }
  const info={task:snapshot.task,changedFiles:snapshot.changedFiles,existingPaths:snapshot.existingPaths,diagnostics:snapshot.diagnostics || []};text(JSON.stringify(info),MAX_TOTAL)
  fs.writeFileSync(path.join(dataRoot,'input.json'),JSON.stringify(info))
- if(kind==='review')assertReviewCapacity(load(dataRoot),['input.json',...snapshot.changedFiles.flatMap(name=>['base/'+name,'head/'+name])])
+ const curated=load(dataRoot)
+ if(kind==='review')assertReviewCapacity(curated,['input.json',...snapshot.changedFiles.flatMap(name=>['base/'+name,'head/'+name])])
  const inputDigest=digest(snapshot);return {dataRoot,configPath:path.join(root,'config.json'),inputDigest}
 }
 async function runAgent(task,input,options={}) {

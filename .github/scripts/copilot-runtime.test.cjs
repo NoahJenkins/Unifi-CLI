@@ -109,3 +109,15 @@ test('oversized changed-file review evidence is rejected before the model launch
   assert.equal(launched,false)
  }finally{fs.rmSync(root,{recursive:true,force:true})}
 })
+
+test('oversized repair diagnostics are rejected before the model launcher',async()=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path')
+ const {runAgent}=require('./dependabot-opencode-worker.cjs')
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'copilot-repair-input-'))
+ const task={kind:'repair'},snapshot={task,existingPaths:['package.json'],changedFiles:['package.json'],baseFiles:{'package.json':'{}'},headFiles:{'package.json':'{}'},diagnostics:['a'.repeat(1024*1024),'b'.repeat(1024*1024)]}
+ let launched=false
+ try {
+  await assert.rejects(runAgent(task,{snapshot,root},{launcher:()=>{launched=true;throw Error('Unexpected model launch')}}),/curated input limit/i)
+  assert.equal(launched,false)
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
+})
