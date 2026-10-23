@@ -27,7 +27,7 @@ function verifyRun(run,origin,config) {
  if(!defaultBranchEvent(run.event) || (config.eventName && run.event!==config.eventName) || run.id!==origin.runId || run.repository?.id!==config.repositoryId || run.run_attempt!==1 || run.head_branch!=='main' || run.head_sha!==origin.workflowSha || run.path.split('@')[0]!==origin.workflowPath || origin.workflowSha!==config.workflowSha || origin.ref!=='refs/heads/main' || config.ref!=='refs/heads/main' || config.runAttempt!==1 || config.runId!==origin.runId)throw Error('Untrusted workflow run')
 }
 function verifyJobs(jobs,task,origin) {
- for(const [name,id] of [[`OpenCode worker (${task.nonce})`,origin.jobId],[`OpenCode validation (${task.nonce})`,null]]) {
+ for(const [name,id] of [[`Copilot worker (${task.nonce})`,origin.jobId],[`Copilot validation (${task.nonce})`,null]]) {
   const matched=jobs.filter(j=>j.name===name)
   if(matched.length!==1 || (id && matched[0].id!==id) || matched[0].status!=='completed' || matched[0].conclusion!=='success')throw Error('Worker/validator job provenance failed')
  }

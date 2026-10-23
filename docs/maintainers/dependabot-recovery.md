@@ -22,12 +22,9 @@ per recovery kind and eight independent reviews. Reservations are saved before
 side effects; failed, expired and ambiguous operations remain charged. Exhausted
 attempts appear in the merge gate and workflow summary. No automatic close occurs.
 
-OpenCode Go uses `kimi-k2.7-code` for repair and a fresh `glm-5.3` session for review.
-The pinned OpenCode runtime runs in a container with no provider/GitHub/App key,
-external network, shell, subagent or plugin access. A separate broker owns the
-provider key and permits only the fixed model/endpoint, 24 repair or 16 review
-calls, and bounded request time/size. The canonical endpoint follows the
-[OpenCode Go API documentation](https://dev.opencode.ai/v2/docs/console/go).
+Repair and review use GitHub Copilot with bounded read-only data tools. See
+[Copilot dependency repair](../copilot-dependency-repair.md) for authentication,
+cost controls and the credential-isolation boundary.
 
 Repair can change Go dependency versions, a patch-level Go toolchain and exact
 release action SHA literals in `release_pipeline_test.go`. It cannot change
@@ -71,7 +68,7 @@ before release. Keep the gate and strict main ruleset enabled.
 2. Create `dependabot-controller` and `dependabot-dispatch` environments, restrict
    both to `main`, and disable administrator bypass. Store
    `DEPENDABOT_CONTROLLER_PRIVATE_KEY` only in the controller environment and
-   `OPENCODE_GO_API_KEY` only in the dispatch environment. Do not put keys in PRs,
+   `COPILOT_GITHUB_TOKEN` only in the dispatch environment. Do not put keys in PRs,
    issues, logs or chat.
 3. Create an issue for App-authored state. Set repository variables
    `DEPENDABOT_CONTROLLER_APP_ID` and `DEPENDABOT_STATE_ISSUE_NUMBER`. The token
@@ -189,8 +186,7 @@ ledger or authorize a merge without current-head validation and independent revi
 
 GitHub can report an older PR base SHA while the target branch has advanced. When the authenticated comparison proves that main is absent from the PR and GitHub marks the PR mergeable and behind, the controller can use its bounded branch-refresh budget. It checks that the observed PR head/base and current main remain unchanged before the write. This exception permits only branch refresh; merge, review, repair dispatch, and CI retry retain exact-current-base requirements.
 
-### Offline search runtime
+### Restricted Copilot runtime
 
-The isolated worker has no direct internet access. The trusted preparation step downloads ripgrep 15.1.0, verifies its pinned archive SHA-256, and mounts only its executable read-only. A credential-free, network-disabled preflight checks the executable before the Go broker starts. A fake-provider smoke test then verifies the pinned OpenCode runtime can execute its real search tool inside the isolated worker, without Go usage. This lets OpenCode use `grep` and `glob` without attempting an in-session download. Runtime errors report only an allowlisted category and HTTP status; provider bodies, headers, prompts, and credentials are not logged.
-
-A failed worker leaves its reservation consumed. Keep automation paused until the runtime passes verification; do not replay the claim or erase the attempt history.
+The credential-free offline smoke verifies the real CLI and curated search tool.
+See [Copilot dependency repair](../copilot-dependency-repair.md) for current limits and activation requirements. A failed session keeps its reservation consumed.

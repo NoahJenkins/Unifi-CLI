@@ -63,7 +63,7 @@ function fixture(){
  fs.writeFileSync(path.join(root,'go.mod'),'module example.com/cli\n\ngo 1.26.9\n');
  const snapshot={changedFiles:[SOURCE],existingPaths:[SOURCE,LOCK],headFiles:{[SOURCE]:before,[LOCK]:'old lock'}};
  fs.writeFileSync(path.join(root,SOURCE),before);fs.writeFileSync(path.join(root,LOCK),'old lock');
- const artifact=sealArtifact({version:1,task,origin,agent:{runtimeVersion:'1.19.0',provider:'opencode-go',model:'kimi-k2.7-code',sessionId:'ses_fixture',configDigest:'c'.repeat(64),inputDigest:'d'.repeat(64)},result:{files:[{path:SOURCE,content:after}]}});
+ const artifact=sealArtifact({version:1,task,origin,agent:{runtimeVersion:'1.0.103',provider:'github-copilot',model:'gpt-6-luna',sessionId:'ses_fixture',configDigest:'c'.repeat(64),inputDigest:'d'.repeat(64)},result:{files:[{path:SOURCE,content:after}]}});
  return {root,snapshot,artifact,after};
 }
 runTest('validator publishes the bytes checked after dependency generation',async()=>{
@@ -137,7 +137,7 @@ runTest('publisher independently authorizes main-side adoption and rejects polic
   let writes=0;
   const client={getClaims:async()=>[claim],getPr:async()=>pr,getMain:async()=>base,
    getRun:async()=>({id:10,event:'schedule',repository:{id:1},run_attempt:1,head_branch:'main',head_sha:base,path:origin.workflowPath}),
-   getJobs:async()=>[{id:20,name:`OpenCode worker (${task.nonce})`,status:'completed',conclusion:'success'},{id:21,name:`OpenCode validation (${task.nonce})`,status:'completed',conclusion:'success'}],
+   getJobs:async()=>[{id:20,name:`Copilot worker (${task.nonce})`,status:'completed',conclusion:'success'},{id:21,name:`Copilot validation (${task.nonce})`,status:'completed',conclusion:'success'}],
    prepareSnapshot:async()=>f.snapshot,getArtifact:async()=>({artifact,checks:{inputDigest:artifact.digest,outputDigest:artifact.digest,success:true}}),getWorkerArtifact:async()=>artifact,
    verifyActionPins:async()=>{},verifyRepairPins:async()=>{},markClaim:async()=>{},commitFiles:async(_pr,files)=>{writes++;assert.equal(files[0].content,f.after);return {id:'commit'};}};
   assert.deepEqual(await publishResult(client,config,task,1,origin),{kind:'repair',id:'commit'});
