@@ -39,6 +39,13 @@ async function runAgent(task,input,options={}) {
   if(task.kind==='review')validateReview(result,input.snapshot.changedFiles);else {validateFiles(result.files);if(Object.keys(result).join()!=='files')throw Error('Unexpected repair schema')}
   const a=sealArtifact({version:1,task,origin:input.origin,agent:{runtimeVersion:runtime.VERSION,provider:'github-copilot',model:runtime.MODEL,sessionId,configDigest,inputDigest:prepared.inputDigest},result:task.kind==='repair'?result:{report:result}})
   return validateArtifact(a,{task,origin:input.origin,changedFiles:input.snapshot.changedFiles})
- }finally{cleanup()}
+ }finally {
+  cleanup()
+  // Preserve available spend evidence even when parsing or validation fails.
+  // A missing or invalid report is not zero usage and cannot replace the error.
+  if(usagePath && fs.existsSync(usagePath)) {
+   try {fs.writeFileSync(path.join(input.root,'usage.json'),JSON.stringify(runtime.summarizeUsage(JSON.parse(fs.readFileSync(usagePath,'utf8')))))}catch{}
+  }
+ }
 }
 module.exports={IMAGE,BINARY_SHA,excluded,cleanEnv,agentConfig,prepareWorkspace,agentError,observe,runAgent,launchIsolated}

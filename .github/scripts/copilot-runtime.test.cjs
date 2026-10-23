@@ -156,3 +156,8 @@ test('the curated service enforces the cumulative byte budget before its call ca
  }
  assert.equal(exhausted,true)
 })
+
+test('worker retains sanitized usage after parse, provider, and timeout failures',()=>{
+ const {execFileSync}=require('node:child_process'),path=require('node:path')
+ execFileSync(process.execPath,[path.resolve(__dirname,'./copilot-worker-usage.fixture.cjs')],{stdio:'pipe',timeout:10000})
+})
