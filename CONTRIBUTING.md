@@ -131,11 +131,15 @@ requirements, the exact opt-in policy, live acceptance, and rollback. Release
 and dependency auto-merge workflows remain hosted.
 
 CI caches Go modules and build outputs through the existing pinned setup-go
-configuration and go.sum key. Node/Go setup stops after 3 minutes. Each Go job
-resolves project modules in a separate 5-minute step before compilation and
-tests; Linux Secret Service installation also stops after 5 minutes. A cache
-miss remains supported. Test, race, coverage, fuzz, native-keyring and release
-smoke coverage remain unchanged, including the 40-minute platform test ceiling.
+configuration and go.sum key. Node/Go setup stops after 3 minutes. CI Go jobs
+and the six release jobs that use setup-go resolve project modules in a
+separate 5-minute step. The write-capable publisher keeps its single-shell
+security boundary and runs a 5-minute module-download command before its Go
+verification commands, without GH_TOKEN. The publisher still has its existing
+10-minute job limit. Linux Secret Service installation also stops after
+5 minutes. A cache miss remains supported. Test, race, coverage, fuzz, native
+keyring and release smoke coverage remain unchanged, including the 40-minute
+platform test ceiling.
 Do not retry timed-out setup automatically or increase its deadline for a green
 result. Validate Actions locally in a full clone before one hosted batch.
 

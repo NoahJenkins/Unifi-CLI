@@ -650,6 +650,8 @@ jobs:
           test "$DOWNLOAD_OK" = true
           test "$(shasum -a 256 "$DOWNLOAD_DIR/publication-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
           cd "$RUNNER_TEMP/source"
+          # Preserve the single-shell publisher boundary and bound cold module fetches.
+          timeout --kill-after=10s 5m env -u GH_TOKEN go mod download
           env -u GH_TOKEN go run ./cmd/release-smoke --extract-bundle "$DOWNLOAD_DIR/publication-release.tar" --bundle-kind publication --destination "$RUNNER_TEMP/publication"
           RELEASE_VERSION="${RELEASE_TAG#v}"
           RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$RELEASE_COMMIT")"
