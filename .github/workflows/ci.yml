@@ -23,6 +23,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 3
         with:
           node-version: '24'
       - run: node --test .github/scripts/*.test.cjs
@@ -72,9 +73,14 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: smoke (build + vet + unit tests)
         shell: bash
@@ -110,9 +116,14 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: scan reachable Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
@@ -145,9 +156,14 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: fuzz for 30 seconds
         run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime=30s
@@ -171,11 +187,17 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
+
       - name: install Linux Secret Service
+        timeout-minutes: 5
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring
 

@@ -84,6 +84,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -152,6 +153,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -172,9 +174,11 @@ jobs:
           test -n "$VERSION"
           [[ "$PRERELEASE" == true || "$PRERELEASE" == false ]]
           [[ "$NOTES" == docs/releases/*.md ]]
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "notes=$NOTES"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build release artifacts without publishing
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -224,6 +228,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -320,6 +325,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -401,6 +407,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -529,6 +536,7 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum

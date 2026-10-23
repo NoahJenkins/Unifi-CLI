@@ -130,6 +130,15 @@ fork PR execution and existing required check names. See the
 requirements, the exact opt-in policy, live acceptance, and rollback. Release
 and dependency auto-merge workflows remain hosted.
 
+CI caches Go modules and build outputs through the existing pinned setup-go
+configuration and go.sum key. Node/Go setup stops after 3 minutes. Each Go job
+resolves project modules in a separate 5-minute step before compilation and
+tests; Linux Secret Service installation also stops after 5 minutes. A cache
+miss remains supported. Test, race, coverage, fuzz, native-keyring and release
+smoke coverage remain unchanged, including the 40-minute platform test ceiling.
+Do not retry timed-out setup automatically or increase its deadline for a green
+result. Validate Actions locally in a full clone before one hosted batch.
+
 ## Security reports
 
 Do not disclose vulnerabilities publicly. Follow [SECURITY.md](SECURITY.md).
