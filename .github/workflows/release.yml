@@ -84,9 +84,14 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: Build trusted all-target binaries and source manifest
         shell: bash
@@ -152,9 +157,14 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: Install pinned Syft for archive SBOMs
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -172,9 +182,11 @@ jobs:
           test -n "$VERSION"
           [[ "$PRERELEASE" == true || "$PRERELEASE" == false ]]
           [[ "$NOTES" == docs/releases/*.md ]]
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "notes=$NOTES"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build release artifacts without publishing
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -224,9 +236,14 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: Download trusted input bundle
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -320,9 +337,14 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: Download sealed verified release bundle
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -401,9 +423,14 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: Download sealed verified release bundle
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -529,9 +556,14 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: download Go modules
+        timeout-minutes: 5
+        run: go mod download
 
       - name: Download sealed verified release bundle
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -618,6 +650,8 @@ jobs:
           test "$DOWNLOAD_OK" = true
           test "$(shasum -a 256 "$DOWNLOAD_DIR/publication-release.tar" | awk '{print $1}')" = "$EXPECTED_BUNDLE_DIGEST"
           cd "$RUNNER_TEMP/source"
+          # Preserve the single-shell publisher boundary and bound cold module fetches.
+          timeout --kill-after=10s 5m env -u GH_TOKEN go mod download
           env -u GH_TOKEN go run ./cmd/release-smoke --extract-bundle "$DOWNLOAD_DIR/publication-release.tar" --bundle-kind publication --destination "$RUNNER_TEMP/publication"
           RELEASE_VERSION="${RELEASE_TAG#v}"
           RELEASE_COMMIT_TIMESTAMP="$(git show -s --format=%ct "$RELEASE_COMMIT")"
