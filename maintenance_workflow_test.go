@@ -56,10 +56,28 @@ func TestDependabotAutoMergeWorkflow(t *testing.T) {
 		"version-update:semver-minor",
 		"version-update:semver-major",
 		"github_actions",
-		"GHSA-",
+		"alert-lookup:",
+		"steps.metadata.outputs.alert-state",
+		"steps.metadata.outputs.ghsa-id",
+		"DEPENDABOT_METADATA_TOKEN",
+		"ALERT_STATE",
+		"GHSA_ID",
+		"DISMISSED",
+		"Dependabot secret",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("auto-merge workflow missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"PR_BODY",
+		"DEPS_JSON",
+		"updated-dependencies-json",
+		"This update includes a security fix",
+		"This is a security update",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("auto-merge workflow still treats release-note text as an advisory via %q", forbidden)
 		}
 	}
 	if strings.Contains(text, "--approve") || strings.Contains(text, "pr review") {
@@ -114,10 +132,19 @@ func TestGoToolchainPatchWorkflow(t *testing.T) {
 		"go run ./scripts/gotoolchain",
 		"gh pr merge --auto --squash",
 		"automated/go-",
+		`--head "$branch"`,
+		"GO_TOOLCHAIN_PR_TOKEN",
+		"TOKEN_TRIGGERS_CI",
+		"Allow GitHub Actions to create and approve pull requests",
+		"approval-required",
+		"not permitted to create or approve pull requests",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("toolchain workflow missing %q", want)
 		}
+	}
+	if strings.Contains(text, "GITHUB_REPOSITORY%%") {
+		t.Error(`toolchain workflow must pass an unqualified head to gh pr list --head`)
 	}
 	if strings.Contains(text, "go-version:") || strings.Contains(text, "--approve") || strings.Contains(text, "pr review") {
 		t.Error("toolchain workflow must follow go.mod and must not approve pull requests")

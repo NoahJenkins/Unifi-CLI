@@ -2,7 +2,9 @@
 
 > **Retired as the merge path.** `.github/workflows/dependabot-auto-merge.yml`
 > is a small workflow that enables squash auto-merge for Dependabot patch,
-> minor, security, and GitHub Actions updates. It does not approve pull
+> minor, and GitHub Actions updates. A semver-major update auto-merges only
+> when fetch-metadata reports an associated advisory, which requires the
+> Dependabot secret `DEPENDABOT_METADATA_TOKEN`. It does not approve pull
 > requests and it does not post `Dependabot Merge Gate`. The scripts in
 > `.github/scripts/` are still unit-tested, and no workflow runs them. Go
 > toolchain patches are opened by `.github/workflows/go-toolchain-patch.yml`.

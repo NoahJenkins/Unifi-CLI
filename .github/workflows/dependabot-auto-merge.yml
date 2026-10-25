@@ -1,8 +1,16 @@
 name: Dependabot auto-merge
 
-# Squash auto-merge for Dependabot patch, minor, and security updates, and for
-# GitHub Actions updates. Major module updates stay open. Auto-merge waits for
-# required checks; this workflow does not approve pull requests.
+# Squash auto-merge for Dependabot patch and minor updates, and for every
+# GitHub Actions update. A semver-major update auto-merges only when
+# fetch-metadata reports an associated Dependabot alert (alert-state OPEN or
+# FIXED, or a ghsa-id that is not DISMISSED). Release notes and the pull
+# request body are not consulted. alert-lookup stays false unless the
+# Dependabot secret DEPENDABOT_METADATA_TOKEN is set to a personal access
+# token or GitHub App installation token that can read Dependabot alerts.
+# Store that secret under Settings → Secrets and variables → Dependabot.
+# Dependabot-triggered pull_request workflows cannot read Actions secrets.
+# Without it, security majors stay for review. This workflow does not approve
+# pull requests.
 
 on:
   pull_request:
@@ -27,7 +35,8 @@ jobs:
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.DEPENDABOT_METADATA_TOKEN != '' && secrets.DEPENDABOT_METADATA_TOKEN || secrets.GITHUB_TOKEN }}
+          alert-lookup: ${{ secrets.DEPENDABOT_METADATA_TOKEN != '' }}
 
       - name: Enable auto-merge for safe dependency updates
         env:
@@ -36,8 +45,7 @@ jobs:
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
           ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           ALERT_STATE: ${{ steps.metadata.outputs.alert-state }}
-          DEPS_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GHSA_ID: ${{ steps.metadata.outputs.ghsa-id }}
         run: |
           set -euo pipefail
 
@@ -45,7 +53,7 @@ jobs:
           case "$ALERT_STATE" in
             OPEN|FIXED) security=true ;;
           esac
-          if printf '%s\n%s\n' "$PR_BODY" "$DEPS_JSON" | grep -Eq 'GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}|This update includes a security fix|This update includes security fixes|This is a security update'; then
+          if [[ -n "$GHSA_ID" && "$ALERT_STATE" != "DISMISSED" ]]; then
             security=true
           fi
 

@@ -67,6 +67,22 @@ func TestApplyRewritesDirectiveAndMatchingToolchain(t *testing.T) {
 	}
 }
 
+func TestApplyPreservesCRLF(t *testing.T) {
+	input := "module example.com/cli\r\n\r\ngo 1.26.10\r\n"
+	directive, err := GoDirective(input)
+	if err != nil || directive != "1.26.10" {
+		t.Fatalf("directive = %q, %v", directive, err)
+	}
+	got, err := Apply(input, "1.26.10", "1.26.11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "module example.com/cli\r\n\r\ngo 1.26.11\r\n"
+	if got != want {
+		t.Fatalf("Apply = %q", got)
+	}
+}
+
 func TestApplyLeavesAMissingToolchainUnset(t *testing.T) {
 	input := "module example.com/cli\n\ngo 1.26.10\n"
 	got, err := Apply(input, "1.26.10", "1.26.11")

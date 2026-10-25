@@ -61,7 +61,7 @@ func parseParts(major, minor, patch string) (goVersion, error) {
 
 // GoDirective returns the patch version from the single go directive.
 func GoDirective(content string) (string, error) {
-	lines, err := moduleLines(content)
+	lines, _, _, err := splitModule(content)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +130,7 @@ func Apply(content, current, next string) (string, error) {
 	if current == next {
 		return "", fmt.Errorf("next Go version %s is not a bump", next)
 	}
-	lines, err := moduleLines(content)
+	lines, newline, trailing, err := splitModule(content)
 	if err != nil {
 		return "", err
 	}
@@ -159,24 +159,33 @@ func Apply(content, current, next string) (string, error) {
 	if toolHits > 1 {
 		return "", fmt.Errorf("found %d toolchain lines", toolHits)
 	}
-	return joinLines(content, lines), nil
+	return joinModule(lines, newline, trailing), nil
 }
 
-func moduleLines(content string) ([]string, error) {
-	if strings.Contains(content, "\r") {
-		return nil, fmt.Errorf("go.mod must use LF line endings")
+// splitModule accepts LF and CRLF. Windows checkouts rewrite LF to CRLF, and
+// the toolchain pull request must still read that go.mod.
+func splitModule(content string) (lines []string, newline string, trailing bool, err error) {
+	switch {
+	case strings.Contains(content, "\r\n"):
+		newline = "\r\n"
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+	case strings.Contains(content, "\r"):
+		return nil, "", false, fmt.Errorf("go.mod line endings must be LF or CRLF")
+	default:
+		newline = "\n"
 	}
-	lines := strings.Split(content, "\n")
-	if strings.HasSuffix(content, "\n") {
+	trailing = strings.HasSuffix(content, "\n")
+	lines = strings.Split(content, "\n")
+	if trailing {
 		lines = lines[:len(lines)-1]
 	}
-	return lines, nil
+	return lines, newline, trailing, nil
 }
 
-func joinLines(content string, lines []string) string {
-	out := strings.Join(lines, "\n")
-	if strings.HasSuffix(content, "\n") {
-		out += "\n"
+func joinModule(lines []string, newline string, trailing bool) string {
+	out := strings.Join(lines, newline)
+	if trailing {
+		out += newline
 	}
 	return out
 }
