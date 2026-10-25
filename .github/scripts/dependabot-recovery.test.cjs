@@ -103,8 +103,14 @@ test('refresh/retry budgets do not consume the two repair reservations',()=>{
  assert.ok(reserve(ledger,{pr:1,prId:'PR_1',head:next,base:sha,kind:'repair'},'2026-10-21T12:00:00.000Z').reservation);
 });
 
-test('real release test pin inventory matches tagged and untagged workflow actions',()=>{
- const fs=require('node:fs');assert.equal(policy.releasePinsMatch(fs.readFileSync('release_pipeline_test.go','utf8'),fs.readFileSync('.github/workflows/release.yml','utf8')),true);
+test('release workflow actions are full SHA pins and the release test does not hard-code them',()=>{
+ const fs=require('node:fs');
+ const workflow=fs.readFileSync('.github/workflows/release.yml','utf8');
+ const releaseTest=fs.readFileSync('release_pipeline_test.go','utf8');
+ const uses=[...workflow.matchAll(/^[ \t]*uses:[ \t]*(\S+)/gm)].map(match=>match[1]);
+ assert.ok(uses.length>=5);
+ for(const use of uses)assert.match(use,/^[^@\s]+@[0-9a-f]{40}$/);
+ assert.equal([...releaseTest.matchAll(/"[^"\n]*@[0-9a-f]{40}"/g)].length,0);
 });
 test('repair outputs refuse workflow pins while original Dependabot updates remain eligible',()=>{
  const changes=[file('.github/workflows/ci.yml',workflow(sha),workflow(next))];

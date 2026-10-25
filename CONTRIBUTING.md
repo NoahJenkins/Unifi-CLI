@@ -111,16 +111,24 @@ development. Keep reports private, redacted, and uncommitted.
 - Treat `docs/superpowers/` as dated decision records. Current root and
   compatibility documentation takes precedence.
 
-Dependabot patch and minor updates are grouped by ecosystem. Major updates and
-changes that affect controller wire behavior require manual review.
+Dependabot patch and minor updates are grouped by ecosystem. Go module
+security updates are grouped separately. Major updates and changes that affect
+controller wire behavior require manual review. Dependabot patch, minor, and
+security updates, and GitHub Actions updates, enable squash auto-merge and
+wait for the required checks. The auto-merge workflow does not approve pull
+requests.
 
-Release action updates must also update the approved immutable pins in
-`release_pipeline_test.go` after checking each upstream release tag. Keep
-full-SHA pinning and permission checks. The recovery workflow can repair eligible failures within bounded attempts.
-It requires independent review and new checks on the latest commit. See the
-[recovery setup and limits](docs/maintainers/dependabot-recovery.md). Standard-library vulnerability
-failures require a patched Go toolchain. Check `go.mod` separately when
-module updates leave a standard-library vulnerability failure unresolved.
+Release workflows pin every action to a full 40-character commit SHA.
+`release_pipeline_test.go` checks that pin shape and which release actions
+are present. It does not require one specific SHA, so an Actions update can
+pass without editing the test. Keep the release job permissions and the other
+release-contract assertions.
+
+Dependabot's gomod updates do not bump the `go` directive. A weekly workflow
+opens a pull request for the latest patch of the Go minor version already
+declared in `go.mod`, then enables auto-merge for that pull request. A new
+Go minor or major still needs a manual change. The retired controller is
+described in [Dependabot recovery](docs/maintainers/dependabot-recovery.md).
 
 ## CI runner preparation
 

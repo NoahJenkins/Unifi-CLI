@@ -1,0 +1,96 @@
+name: Go toolchain patch
+
+# Dependabot gomod updates do not bump the go directive. When go.dev publishes
+# a newer patch of the minor version already in go.mod, open a pull request and
+# enable squash auto-merge. A new minor or major stays manual. This workflow
+# does not approve pull requests.
+
+on:
+  schedule:
+    - cron: '30 16 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: go-toolchain-patch
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Open a pull request for the latest Go patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          enable_automerge() {
+            local url="$1"
+            if gh pr merge --auto --squash "$url"; then
+              return 0
+            fi
+            local method
+            method="$(gh pr view "$url" --json autoMergeRequest --jq '.autoMergeRequest.mergeMethod // ""')"
+            if [[ "$method" == "SQUASH" ]]; then
+              return 0
+            fi
+            echo "Could not enable squash auto-merge for ${url}." >&2
+            return 1
+          }
+
+          curl --fail --location --proto '=https' --silent --show-error 'https://go.dev/dl/?mode=json' -o "$RUNNER_TEMP/go-releases.json"
+          version="$(go run ./scripts/gotoolchain -releases "$RUNNER_TEMP/go-releases.json")"
+          if [[ -z "$version" ]]; then
+            echo "Go toolchain is already the latest patch."
+            exit 0
+          fi
+
+          branch="automated/go-${version}"
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "${GITHUB_REPOSITORY%%/*}:${branch}" --state open --json url --jq '.[].url')"
+          if [[ -n "$existing" ]]; then
+            enable_automerge "$existing"
+            echo "Pull request already open for Go ${version}."
+            exit 0
+          fi
+
+          go run ./scripts/gotoolchain -releases "$RUNNER_TEMP/go-releases.json" -write
+          if git diff --quiet -- go.mod; then
+            echo "go.mod was not updated." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -- go.mod
+          git commit -m "Bump Go toolchain to ${version}"
+          gh auth setup-git
+          git push origin --delete "$branch" >/dev/null 2>&1 || true
+          git push origin "HEAD:refs/heads/${branch}"
+
+          body="$(cat <<EOF
+          Updates the \`go\` directive in \`go.mod\` to Go ${version}, the latest patch of the minor version already declared there.
+
+          Dependabot gomod updates do not bump this directive, so a standard-library fix would otherwise stay on the previous toolchain. This pull request does not move to a new Go minor or major. Squash auto-merge waits for CI, including govulncheck.
+          EOF
+          )"
+          url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --title "Bump Go toolchain to ${version}" --body "$body")"
+          enable_automerge "$url"

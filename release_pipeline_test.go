@@ -225,21 +225,24 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	}
 
 	uses := allUses(workflow)
-	pin := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
+	seen := map[string]bool{}
 	for _, use := range uses {
-		if !pin.MatchString(use) {
+		name, _, ok := actionRef(use)
+		if !ok {
 			t.Errorf("action is not pinned to a full immutable SHA: %q", use)
+			continue
 		}
+		seen[name] = true
 	}
-	for _, want := range []string{
-		"goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de",
-		"anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
-		"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
-		"actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
-		"actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+	for _, action := range []string{
+		"goreleaser/goreleaser-action",
+		"anchore/sbom-action/download-syft",
+		"actions/attest-build-provenance",
+		"actions/upload-artifact",
+		"actions/download-artifact",
 	} {
-		if !slices.Contains(uses, want) {
-			t.Errorf("release workflow missing approved action %q", want)
+		if !seen[action] {
+			t.Errorf("release workflow missing SHA-pinned action %s", action)
 		}
 	}
 
@@ -578,6 +581,40 @@ func TestReleaseWorkflowCanResumeAnImmutableTagAndUsesNativeWindowsExtraction(t 
 	releaseDependency := "uri: (\"git+\" + $repository + \"@refs/tags/\" + $release_tag)"
 	if strings.Index(text, workflowDependency) >= strings.Index(text, releaseDependency) {
 		t.Error("workflow configuration must be the first resolved dependency required by GitHub attestation validation")
+	}
+}
+
+// actionRef accepts any full commit SHA. Release tests must not require one
+// specific SHA, or every Dependabot Actions bump fails until the test is edited.
+var fullSHAAction = regexp.MustCompile(`^([^@\s]+)@([0-9a-f]{40})$`)
+
+func actionRef(use string) (name, sha string, ok bool) {
+	match := fullSHAAction.FindStringSubmatch(use)
+	if match == nil {
+		return "", "", false
+	}
+	return match[1], match[2], true
+}
+
+func TestActionPinRequiresFullSHANotASpecificCommit(t *testing.T) {
+	first := strings.Repeat("a", 40)
+	second := strings.Repeat("b", 40)
+	name, sha, ok := actionRef("actions/checkout@" + first)
+	if !ok || name != "actions/checkout" || sha != first {
+		t.Fatalf("actionRef(first) = %q, %q, %v", name, sha, ok)
+	}
+	if _, _, ok := actionRef("actions/checkout@" + second); !ok {
+		t.Fatal("a different full SHA must be accepted")
+	}
+	for _, use := range []string{
+		"actions/checkout@v4",
+		"actions/checkout@" + strings.Repeat("a", 39),
+		"actions/checkout@" + strings.Repeat("a", 40) + "0",
+		"actions/checkout@V" + strings.Repeat("a", 40),
+	} {
+		if _, _, ok := actionRef(use); ok {
+			t.Errorf("actionRef accepted %q", use)
+		}
 	}
 }
 

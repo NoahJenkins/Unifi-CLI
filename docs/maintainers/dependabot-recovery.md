@@ -1,5 +1,15 @@
 # Dependabot recovery
 
+> **Retired as the merge path.** `.github/workflows/dependabot-auto-merge.yml`
+> is a small workflow that enables squash auto-merge for Dependabot patch,
+> minor, security, and GitHub Actions updates. It does not approve pull
+> requests and it does not post `Dependabot Merge Gate`. The scripts in
+> `.github/scripts/` are still unit-tested, and no workflow runs them. Go
+> toolchain patches are opened by `.github/workflows/go-toolchain-patch.yml`.
+> If `Dependabot Merge Gate` is still a required check, remove that
+> requirement from the main ruleset; workflow changes cannot edit rulesets.
+> The notes below describe the retired controller.
+
 The recovery workflow is implemented locally. It is not active until the dedicated
 App, protected environments, state issue, merge gate and provider key are configured
 and a hosted canary passes.
