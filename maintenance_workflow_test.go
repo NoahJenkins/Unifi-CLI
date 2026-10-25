@@ -83,6 +83,7 @@ func TestDependabotAutoMergeWorkflow(t *testing.T) {
 	if strings.Contains(text, "--approve") || strings.Contains(text, "pr review") {
 		t.Error("auto-merge workflow must not approve pull requests")
 	}
+	assertGHRepoForGHCommands(t, job)
 	if strings.Contains(text, "COPILOT") || strings.Contains(text, "DEPENDABOT_CONTROLLER") {
 		t.Error("retired controller is still wired into the auto-merge workflow")
 	}
@@ -148,6 +149,29 @@ func TestGoToolchainPatchWorkflow(t *testing.T) {
 	}
 	if strings.Contains(text, "go-version:") || strings.Contains(text, "--approve") || strings.Contains(text, "pr review") {
 		t.Error("toolchain workflow must follow go.mod and must not approve pull requests")
+	}
+}
+
+func assertGHRepoForGHCommands(t *testing.T, job map[string]any) {
+	t.Helper()
+	saw := false
+	for _, raw := range jobSteps(t, job) {
+		step, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("step = %#v, want mapping", raw)
+		}
+		script, _ := step["run"].(string)
+		if !strings.Contains(script, "gh ") {
+			continue
+		}
+		saw = true
+		env, _ := step["env"].(map[string]any)
+		if fmt.Sprint(env["GH_REPO"]) != "${{ github.repository }}" {
+			t.Errorf("step %q runs gh without GH_REPO ${{ github.repository }}: %#v", step["name"], env)
+		}
+	}
+	if !saw {
+		t.Error("auto-merge job has no gh command to bind to GH_REPO")
 	}
 }
 
