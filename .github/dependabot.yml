@@ -12,6 +12,12 @@ updates:
       - dependencies
       - go
     groups:
+      # Module requirements only. go-toolchain-patch.yml bumps the go directive;
+      # gomod updates do not move it for standard-library fixes.
+      go-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
       go-minor-patch:
         patterns:
           - "*"

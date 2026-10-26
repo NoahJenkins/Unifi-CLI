@@ -111,16 +111,40 @@ development. Keep reports private, redacted, and uncommitted.
 - Treat `docs/superpowers/` as dated decision records. Current root and
   compatibility documentation takes precedence.
 
-Dependabot patch and minor updates are grouped by ecosystem. Major updates and
-changes that affect controller wire behavior require manual review.
+Dependabot patch and minor updates are grouped by ecosystem. Go module
+security updates are grouped separately. Major updates and changes that affect
+controller wire behavior require manual review. Dependabot patch, minor, and
+GitHub Actions updates enable squash auto-merge and wait for the required
+checks. A semver-major update auto-merges only when fetch-metadata reports an
+associated advisory (`alert-state` OPEN or FIXED, or a `ghsa-id` that is not
+DISMISSED). That lookup runs only when the Dependabot secret
+`DEPENDABOT_METADATA_TOKEN` (Settings → Secrets and variables → Dependabot,
+not an Actions secret) is a personal access token or GitHub App installation
+token that can read Dependabot alerts. Dependabot-triggered `pull_request`
+workflows cannot read Actions secrets. A GHSA mention in release notes is not
+enough. Without the secret, security majors stay for review. The auto-merge
+workflow does not approve pull requests.
 
-Release action updates must also update the approved immutable pins in
-`release_pipeline_test.go` after checking each upstream release tag. Keep
-full-SHA pinning and permission checks. The recovery workflow can repair eligible failures within bounded attempts.
-It requires independent review and new checks on the latest commit. See the
-[recovery setup and limits](docs/maintainers/dependabot-recovery.md). Standard-library vulnerability
-failures require a patched Go toolchain. Check `go.mod` separately when
-module updates leave a standard-library vulnerability failure unresolved.
+Release workflows pin every action to a full 40-character commit SHA.
+`release_pipeline_test.go` checks that pin shape and which release actions
+are present. It does not require one specific SHA, so an Actions update can
+pass without editing the test. Keep the release job permissions and the other
+release-contract assertions.
+
+Dependabot's gomod updates do not bump the `go` directive. A weekly workflow
+opens a pull request for the latest patch of the Go minor version already
+declared in `go.mod`, then enables auto-merge for that pull request. A new
+Go minor or major still needs a manual change. Opening that pull request with
+the default `GITHUB_TOKEN` requires the repository workflow permission
+**Allow GitHub Actions to create and approve pull requests** (Settings →
+Actions → General → Workflow permissions). Those pull requests still leave CI
+approval-required until a maintainer approves the workflow runs. Set the
+Actions secret `GO_TOOLCHAIN_PR_TOKEN` to a GitHub App installation token or
+a fine-grained personal access token with Contents and Pull requests write
+so CI starts without that approval. If the permission and the secret are both
+absent, the workflow reports the requirement and exits successfully. The
+retired controller is described in
+[Dependabot recovery](docs/maintainers/dependabot-recovery.md).
 
 ## CI runner preparation
 

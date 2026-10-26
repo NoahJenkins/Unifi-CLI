@@ -1,0 +1,177 @@
+name: Go toolchain patch
+
+# Dependabot gomod updates do not bump the go directive. When go.dev publishes
+# a newer patch of the minor version already in go.mod, open a pull request and
+# enable squash auto-merge. A new minor or major stays manual.
+#
+# Opening the pull request with the default GITHUB_TOKEN needs the repository
+# setting Settings → Actions → General → Workflow permissions →
+# Allow GitHub Actions to create and approve pull requests. That pull request
+# is still approval-required: CI does not start until a maintainer approves
+# the workflow runs. Set the Actions secret GO_TOOLCHAIN_PR_TOKEN to a GitHub
+# App installation token or a fine-grained personal access token with Contents
+# write and Pull requests write so the author is not github-actions[bot] and
+# CI starts without that approval. If neither the setting nor the secret is
+# available, this workflow reports the requirement and exits successfully.
+# This workflow does not approve pull requests.
+
+on:
+  schedule:
+    - cron: '30 16 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: go-toolchain-patch
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        timeout-minutes: 3
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Open a pull request for the latest Go patch
+        env:
+          GH_TOKEN: ${{ secrets.GO_TOOLCHAIN_PR_TOKEN != '' && secrets.GO_TOOLCHAIN_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          TOKEN_TRIGGERS_CI: ${{ secrets.GO_TOOLCHAIN_PR_TOKEN != '' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+
+          permission_denied() {
+            grep -Eq 'not permitted to create or approve pull requests|GitHub Actions is not permitted|Resource not accessible by integration' <<<"$1"
+          }
+
+          report_permission() {
+            local detail="$1"
+            echo "::warning title=Go toolchain pull request was not opened::GitHub Actions cannot create pull requests. Enable Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests, or set the Actions secret GO_TOOLCHAIN_PR_TOKEN to a GitHub App installation token or a fine-grained personal access token with Contents write and Pull requests write. A pull request opened with the default GITHUB_TOKEN stays approval-required until a maintainer approves the workflow runs, so CI does not start unattended."
+            cat >>"$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Go toolchain pull request was not opened
+
+          GitHub Actions is not permitted to create or approve pull requests.
+
+          Repository setting required: **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests**.
+
+          The default `GITHUB_TOKEN` creates the pull request as `github-actions[bot]`. Those `pull_request` workflows stay approval-required until a maintainer approves the workflow runs, so CI does not start unattended.
+
+          To start CI without that approval, set the Actions secret `GO_TOOLCHAIN_PR_TOKEN` to a GitHub App installation token or a fine-grained personal access token with Contents write and Pull requests write.
+          EOF
+            # Octal 140 is a backtick. A literal backtick inside single quotes trips shellcheck SC2016.
+            fence="$(printf '\140\140\140')"
+            printf '\n%s\n%s\n%s\n' "$fence" "$detail" "$fence" >>"$GITHUB_STEP_SUMMARY"
+          }
+
+          enable_automerge() {
+            local url="$1"
+            local err_file detail method
+            err_file="$(mktemp)"
+            if gh pr merge --auto --squash "$url" 2>"$err_file"; then
+              return 0
+            fi
+            detail="$(cat "$err_file")"
+            if permission_denied "$detail"; then
+              printf '%s\n' "$detail" >&2
+              report_permission "$detail"
+              return 2
+            fi
+            method="$(gh pr view "$url" --json autoMergeRequest --jq '.autoMergeRequest.mergeMethod // ""' 2>"$err_file" || true)"
+            if [[ "$method" == "SQUASH" ]]; then
+              return 0
+            fi
+            printf '%s\n' "$detail" >&2
+            echo "Could not enable squash auto-merge for ${url}." >&2
+            return 1
+          }
+
+          finish_existing() {
+            local status=0
+            enable_automerge "$1" || status=$?
+            case "$status" in
+              0|2)
+                echo "Pull request already open for Go ${version}."
+                exit 0
+                ;;
+              *)
+                exit 1
+                ;;
+            esac
+          }
+
+          curl --fail --location --proto '=https' --silent --show-error 'https://go.dev/dl/?mode=json' -o "$RUNNER_TEMP/go-releases.json"
+          version="$(go run ./scripts/gotoolchain -releases "$RUNNER_TEMP/go-releases.json")"
+          if [[ -z "$version" ]]; then
+            echo "Go toolchain is already the latest patch."
+            exit 0
+          fi
+
+          branch="automated/go-${version}"
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json url --jq '.[0].url // empty')"
+          if [[ -n "$existing" ]]; then
+            finish_existing "$existing"
+          fi
+
+          go run ./scripts/gotoolchain -releases "$RUNNER_TEMP/go-releases.json" -write
+          if git diff --quiet -- go.mod; then
+            echo "go.mod was not updated." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -- go.mod
+          git commit -m "Bump Go toolchain to ${version}"
+          gh auth setup-git
+          git push origin --delete "$branch" >/dev/null 2>&1 || true
+          git push origin "HEAD:refs/heads/${branch}"
+
+          approval_note=""
+          if [[ "$TOKEN_TRIGGERS_CI" != "true" ]]; then
+            approval_note="$(cat <<'NOTE'
+
+          This pull request is opened with the default `GITHUB_TOKEN`. Its workflows stay approval-required until a maintainer chooses **Approve workflows to run**. CI does not start until that approval. Set the Actions secret `GO_TOOLCHAIN_PR_TOKEN` to a GitHub App installation token or a fine-grained personal access token with Contents write and Pull requests write to start CI without that approval.
+          NOTE
+          )"
+          fi
+
+          body="$(cat <<EOF
+          Updates the \`go\` directive in \`go.mod\` to Go ${version}, the latest patch of the minor version already declared there.
+
+          Dependabot gomod updates do not bump this directive, so a standard-library fix would otherwise stay on the previous toolchain. This pull request does not move to a new Go minor or major. Squash auto-merge waits for CI, including govulncheck.
+          ${approval_note}
+          EOF
+          )"
+
+          err_file="$(mktemp)"
+          if ! url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --title "Bump Go toolchain to ${version}" --body "$body" 2>"$err_file")"; then
+            detail="$(cat "$err_file")"
+            printf '%s\n' "$detail" >&2
+            if permission_denied "$detail"; then
+              git push origin --delete "$branch" >/dev/null 2>&1 || true
+              report_permission "$detail"
+              exit 0
+            fi
+            exit 1
+          fi
+
+          status=0
+          enable_automerge "$url" || status=$?
+          case "$status" in
+            0|2) exit 0 ;;
+            *) exit 1 ;;
+          esac
