@@ -148,11 +148,8 @@ retired controller is described in
 
 ## CI runner preparation
 
-Linux x64 CI can opt in to disposable Dell workers while preserving hosted
-fork PR execution and existing required check names. See the
-[routing and infrastructure handoff](docs/maintainers/optiplex-ci.md) for image
-requirements, the exact opt-in policy, live acceptance, and rollback. Release
-and dependency auto-merge workflows remain hosted.
+All CI, release, and dependency auto-merge workflows run on GitHub-hosted
+runners. The repository has no self-hosted runner pool.
 
 CI caches Go modules and build outputs through the existing pinned setup-go
 configuration and go.sum key. Node/Go setup stops after 3 minutes. CI Go jobs
