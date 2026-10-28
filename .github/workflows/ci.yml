@@ -28,44 +28,13 @@ jobs:
           node-version: '24'
       - run: node --test .github/scripts/*.test.cjs
 
-  # GitHub expression string equality ignores case. Select on a hosted runner
-  # so only the exact opt-in "true" can schedule a disposable Dell worker.
-  runner-routing:
-    name: select Linux CI runner
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      linux_runner: ${{ steps.select.outputs.linux_runner }}
-    steps:
-      - name: select Linux runner
-        id: select
-        shell: bash
-        env:
-          OPTIPLEX_CI_ENABLED: ${{ vars.OPTIPLEX_CI_ENABLED }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          linux_runner=ubuntu-latest
-          if [[ "$OPTIPLEX_CI_ENABLED" == true ]] &&
-             { [[ "$EVENT_NAME" == push ]] ||
-               { [[ "$EVENT_NAME" == pull_request ]] && [[ "$HEAD_REPOSITORY" == "$REPOSITORY" ]]; }; }; then
-            linux_runner=optiplex-ci-ubuntu24
-          fi
-          printf 'linux_runner=%s\n' "$linux_runner" >> "$GITHUB_OUTPUT"
-
   test:
     name: test (${{ matrix.os }})
-    needs: [runner-routing]
-    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            runner: ${{ needs.runner-routing.outputs.linux_runner }}
-    runs-on: ${{ matrix.runner || matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,10 +57,6 @@ jobs:
           UNIFI_RACE: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: bash ./scripts/smoke.sh
 
-      - name: test disposable guest identity proof
-        if: runner.os == 'Linux'
-        run: python3 scripts/test-dell-ci-canary.py
-
       - name: enforce internal CLI coverage
         if: runner.os == 'Linux'
         shell: bash
@@ -106,9 +71,7 @@ jobs:
 
   vulnerability-scan:
     name: govulncheck
-    needs: [runner-routing]
-    if: ${{ !cancelled() }}
-    runs-on: ${{ needs.runner-routing.outputs.linux_runner || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,9 +93,7 @@ jobs:
 
   fuzz:
     name: fuzz (${{ matrix.target }})
-    needs: [runner-routing]
-    if: ${{ !cancelled() }}
-    runs-on: ${{ needs.runner-routing.outputs.linux_runner || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -170,16 +131,11 @@ jobs:
 
   native-keyring:
     name: native keyring (${{ matrix.os }})
-    needs: [runner-routing]
-    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            runner: ${{ needs.runner-routing.outputs.linux_runner }}
-    runs-on: ${{ matrix.runner || matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
