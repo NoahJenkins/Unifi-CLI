@@ -18,8 +18,10 @@ type fixedIPAPI struct {
 	clients   []map[string]any
 	users     []map[string]any
 	network   map[string]any
+	networks  []map[string]any
 	calls     []mutateCall
 	ignorePUT bool
+	afterPUT  func(*fixedIPAPI)
 }
 
 func newFixedIPAPI() *fixedIPAPI {
@@ -59,6 +61,9 @@ func (f *fixedIPAPI) Do(_ context.Context, method, path string, in, out any) err
 				user[key] = value
 			}
 		}
+		if f.afterPUT != nil {
+			f.afterPUT(f)
+		}
 		return nil
 	}
 
@@ -68,18 +73,27 @@ func (f *fixedIPAPI) Do(_ context.Context, method, path string, in, out any) err
 		value = f.clients
 	case f.SitePath("rest/user"):
 		value = f.users
-	case f.SitePath("rest/networkconf", "network-1"):
-		value = []map[string]any{f.network}
+	case f.SitePath("rest/networkconf"):
+		value = f.allNetworks()
 	case f.SitePath("rest/user", "client-1"):
 		value = []map[string]any{f.users[0]}
 	default:
 		value = []map[string]any{}
+		for _, network := range f.allNetworks() {
+			if path == f.SitePath("rest/networkconf", network["_id"].(string)) {
+				value = []map[string]any{network}
+			}
+		}
 	}
 	b, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(b, out)
+}
+
+func (f *fixedIPAPI) allNetworks() []map[string]any {
+	return append([]map[string]any{f.network}, f.networks...)
 }
 
 func putCount(calls []mutateCall) int {

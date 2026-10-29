@@ -331,6 +331,26 @@ never invents a DHCP range. A management transition is accepted only when all
 required target-mode fields are present. Updates preserve and send the complete
 writable official document.
 
+`network update <id|name> --mdns-forwarding=true|false` sets the official
+`mdnsForwardingEnabled` field of one gateway-managed network. Switch-managed
+and unmanaged networks are rejected. The plan shows the before and after
+`mdns_forwarding_enabled` value. Apply sends one full-document PUT that changes
+only that field, re-reads the network, and fails closed if any writable field
+differs from the request. A request that would not change the field is
+rejected. The CLI never sends this field through a legacy endpoint.
+
+```bash
+# Plan only
+unifi network update IoT --mdns-forwarding=true
+
+# Experimental high-impact apply
+unifi network update IoT --mdns-forwarding=true --experimental --force --yes
+```
+
+`network get` and `network list` show `mdns_forwarding_enabled`. The field is
+omitted from JSON, and empty in human output, when the controller uses the site
+default.
+
 ### Client fixed-IP reservations
 
 Fixed-IP reservations use the legacy local client configuration endpoint
@@ -361,6 +381,25 @@ clear can target a known offline client when its legacy user record has an
 immutable ID, a valid MAC address, and a stored network ID. An official client
 UUID is translated to that legacy identity through its MAC address.
 
+When the user record has no stored network ID, set requires an explicit
+reservation network:
+
+```bash
+# Plan only
+unifi client fixed-ip set Laptop 192.0.2.50 --network LAN
+
+# Experimental high-impact apply
+unifi client fixed-ip set Laptop 192.0.2.50 --network LAN --experimental --force --yes
+```
+
+`--network` accepts a legacy network ID, an official network UUID, or an exact
+network name, and it must resolve to exactly one network. When the user record
+already stores a network ID, `--network` is optional and must match it. When the
+record has no network ID and the client is connected, the client's current
+IPv4 address must be inside the selected subnet, and a reported current network
+must be the selected network. The CLI does not infer the network without
+`--network`. Clear does not accept `--network`.
+
 Set requires DHCP to be enabled and a usable IPv4 address inside the stored
 network's subnet. It rejects the network, broadcast, and gateway addresses,
 another enabled reservation, and an address currently used by another
@@ -369,7 +408,8 @@ DHCP pool. The CLI cannot detect an offline device that uses an unrecorded
 static address; that conflict remains a manual proof gap.
 
 Set and clear verify the stored controller configuration after one write and
-do not retry ambiguous writes. Success does not mean the client renewed its
+do not retry ambiguous writes. Set also re-reads the reservation network and
+fails if its subnet or DHCP state differs from the plan. Success does not mean the client renewed its
 DHCP lease or changed its active address. Use the separate experimental
 `client reconnect` action when an explicit reconnect is appropriate.
 
@@ -438,12 +478,33 @@ unifi firewall create \
   --destination-port 1514
 ```
 
-`--source-ip`, `--destination-ip`, and `--destination-port` are create-only
-and must be present together. The addresses must be canonical literal IPv4
-addresses. CIDR subnets, ranges, hostnames, matching lists, `any`, multiple
-addresses, IPv6, whitespace, and non-canonical forms are rejected. The port
-must be from 1 through 65535. Exact-filter create requires `allow`, return
-traffic, IPv4, and TCP. It does not add update support for traffic filters.
+To allow one IPv4 source subnet instead of one source address, replace
+`--source-ip` with `--source-subnet`:
+
+```bash
+unifi firewall create \
+  --name "Allow one subnet to one TCP service" \
+  --action allow \
+  --allow-return-traffic \
+  --source-zone "$SOURCE_ZONE" \
+  --destination-zone "$DESTINATION_ZONE" \
+  --ip-version ipv4 \
+  --protocol tcp \
+  --source-subnet 192.0.2.0/24 \
+  --destination-ip 198.51.100.20 \
+  --destination-port 1514
+```
+
+The exact filter flags are create-only. One source flag (`--source-ip` or
+`--source-subnet`), `--destination-ip`, and `--destination-port` must be
+present together; the two source flags are mutually exclusive. Addresses must
+be canonical literal IPv4 addresses. `--source-subnet` must be one canonical
+IPv4 CIDR with a prefix from `/8` through `/32` and no host bits set, such as
+`192.0.2.0/24`; it is sent as one official `SUBNET` match item. Destination
+subnets, ranges, hostnames, matching lists, `any`, multiple values, IPv6,
+whitespace, and non-canonical forms are rejected. The port must be from 1
+through 65535. Exact-filter create requires `allow`, return traffic, IPv4, and
+TCP. It does not add update support for traffic filters.
 
 The first invocation emits a plan. Apply the reviewed command with
 `--experimental --force --yes` when default safe mode is active. `--dry-run`
@@ -485,9 +546,9 @@ mutations return verified observed state instead.
 
 ### Bounded detail reads
 
-Unfiltered `port list` and `dns resolvers list` use official overview results
-and at most four concurrent official detail requests. Results remain
-deterministic. If any required detail request fails, the whole command fails
+Unfiltered `port list`, `network list`, and `dns resolvers list` use official
+overview results and at most four concurrent official detail requests. Results
+remain deterministic. If any required detail request fails, the whole command fails
 rather than returning partial data. `port list --device <id|mac|exact-name>`
 and `port get` resolve one device and make one detail request.
 
@@ -522,6 +583,8 @@ surface has no `--raw` flag and never embeds upstream controller payloads.
 Official HTTP 400 responses use the same schema-v1 error object with code
 `validation_failed`; eligible controller validation details are bounded and
 sanitized as described in the firewall contract above.
+Normalized networks can include optional boolean `mdns_forwarding_enabled`;
+it is absent when the controller uses the site default.
 Normalized firewall policies can include optional `source_filter` and
 `destination_filter` objects. These objects expose the official filter type,
 opposite-match state, all typed IP and port items, and matching-list IDs. This

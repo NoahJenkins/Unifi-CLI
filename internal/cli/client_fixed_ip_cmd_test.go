@@ -17,10 +17,17 @@ type fixedIPCommandServer struct {
 
 func newFixedIPCommandServer(t *testing.T, enabled bool, fixedIP string) *fixedIPCommandServer {
 	t.Helper()
-	fixture := &fixedIPCommandServer{}
-	user := map[string]any{
+	return newFixedIPCommandServerForUser(t, map[string]any{
 		"_id": "legacy-client-1", "mac": "aa:bb:cc:dd:ee:02", "name": "Laptop",
 		"network_id": "legacy-network-1", "use_fixedip": enabled,
+	}, fixedIP)
+}
+
+func newFixedIPCommandServerForUser(t *testing.T, user map[string]any, fixedIP string) *fixedIPCommandServer {
+	t.Helper()
+	fixture := &fixedIPCommandServer{}
+	network := map[string]any{
+		"_id": "legacy-network-1", "name": "LAN", "ip_subnet": "192.0.2.1/24", "dhcpd_enabled": true,
 	}
 	if fixedIP != "" {
 		user["fixed_ip"] = fixedIP
@@ -55,9 +62,10 @@ func newFixedIPCommandServer(t *testing.T, enabled bool, fixedIP string) *fixedI
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{user}})
 			return
 		case r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/rest/networkconf/legacy-network-1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{
-				"_id": "legacy-network-1", "name": "LAN", "ip_subnet": "192.0.2.1/24", "dhcpd_enabled": true,
-			}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{network}})
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/proxy/network/api/s/default/rest/networkconf":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{network}})
 			return
 		case r.Method == http.MethodPut && r.URL.Path == "/proxy/network/api/s/default/rest/user/legacy-client-1":
 			fixture.puts.Add(1)
@@ -81,6 +89,14 @@ func newFixedIPCommandServer(t *testing.T, enabled bool, fixedIP string) *fixedI
 
 func TestClientFixedIPCommandsAreExposed(t *testing.T) {
 	clientCmd := newClientCmd()
+	setCmd, _, err := clientCmd.Find([]string{"fixed-ip", "set"})
+	if err != nil || setCmd.Flags().Lookup("network") == nil {
+		t.Fatalf("fixed-ip set is missing --network: %v", err)
+	}
+	clearCmd, _, err := clientCmd.Find([]string{"fixed-ip", "clear"})
+	if err != nil || clearCmd.Flags().Lookup("network") != nil {
+		t.Fatalf("fixed-ip clear unexpectedly exposes --network: %v", err)
+	}
 	for _, path := range [][]string{{"fixed-ip", "list"}, {"fixed-ip", "get"}, {"fixed-ip", "set"}, {"fixed-ip", "clear"}} {
 		cmd, _, err := clientCmd.Find(path)
 		if err != nil {
@@ -147,7 +163,7 @@ func TestClientFixedIPSetRendersExactPlanAndApplyJSON(t *testing.T) {
 	useCommandTestRuntime(t, fixture.server, true)
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("set", commandClientID, "192.0.2.50")
+		return runClientFixedIPMutation("set", commandClientID, "192.0.2.50", "")
 	})
 	if err != nil || stderr != "" {
 		t.Fatalf("plan: err=%v stdout=%q stderr=%q", err, stdout, stderr)
@@ -165,7 +181,7 @@ func TestClientFixedIPSetRendersExactPlanAndApplyJSON(t *testing.T) {
 	flagExperimental = true
 	flagForce = true
 	stdout, stderr, err = captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("set", commandClientID, "192.0.2.50")
+		return runClientFixedIPMutation("set", commandClientID, "192.0.2.50", "")
 	})
 	if err != nil {
 		t.Fatalf("apply: err=%v stdout=%q stderr=%q", err, stdout, stderr)
@@ -190,7 +206,7 @@ func TestClientFixedIPDryRunWinsOverApplyFlags(t *testing.T) {
 	flagForce = true
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50")
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "")
 	})
 	var envelope map[string]any
 	decodeErr := json.Unmarshal([]byte(stdout), &envelope)
@@ -212,7 +228,7 @@ func TestClientFixedIPClearRendersVerifiedApplyJSON(t *testing.T) {
 	flagForce = true
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("clear", "Laptop", "")
+		return runClientFixedIPMutation("clear", "Laptop", "", "")
 	})
 	if err != nil {
 		t.Fatalf("apply: err=%v stdout=%q stderr=%q", err, stdout, stderr)
@@ -232,7 +248,7 @@ func TestClientFixedIPApplyRequiresExperimentalAndForce(t *testing.T) {
 	flagForce = true
 
 	stdout, _, err := captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50")
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "")
 	})
 	if err == nil || !strings.Contains(stdout, "experimental mutation requires") {
 		t.Fatalf("without experimental: err=%v stdout=%q", err, stdout)
@@ -241,7 +257,7 @@ func TestClientFixedIPApplyRequiresExperimentalAndForce(t *testing.T) {
 	flagExperimental = true
 	flagForce = false
 	stdout, _, err = captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50")
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "")
 	})
 	if err == nil || !strings.Contains(stdout, "safe_mode_blocked") {
 		t.Fatalf("without force: err=%v stdout=%q", err, stdout)
@@ -260,7 +276,7 @@ func TestClientFixedIPHumanOutputIsDeterministic(t *testing.T) {
 	flagForce = true
 
 	stdout, _, err := captureProcessOutput(t, func() error {
-		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50")
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "")
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -268,5 +284,54 @@ func TestClientFixedIPHumanOutputIsDeterministic(t *testing.T) {
 	want := "client_id: legacy-client-1\nmac: aabbccddee02\nname: Laptop\nnetwork_id: legacy-network-1\nfixed_ip_enabled: true\nfixed_ip: 192.0.2.50\n"
 	if stdout != want {
 		t.Fatalf("human output = %q, want %q", stdout, want)
+	}
+}
+
+func TestClientFixedIPSetSelectsNetworkWhenUserRecordHasNone(t *testing.T) {
+	fixture := newFixedIPCommandServerForUser(t, map[string]any{
+		"_id": "legacy-client-1", "mac": "aa:bb:cc:dd:ee:02", "name": "Laptop", "use_fixedip": false,
+	}, "")
+	defer fixture.server.Close()
+	useCommandTestRuntime(t, fixture.server, true)
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "")
+	})
+	var failure struct {
+		Error struct {
+			Code string `json:"code"`
+			Hint string `json:"hint"`
+		} `json:"error"`
+	}
+	if decodeErr := json.Unmarshal([]byte(stdout), &failure); err == nil || decodeErr != nil ||
+		failure.Error.Code != "conflict" || !strings.Contains(failure.Error.Hint, "--network") {
+		t.Fatalf("without --network: err=%v stdout=%q", err, stdout)
+	}
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "LAN")
+	})
+	if err != nil || stderr != "" {
+		t.Fatalf("plan: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	wantPlan := `{"schema_version":"1","ok":true,"resource":"client","action":"fixed-ip set","data":null,"meta":{"site":"default","dry_run":true,"experimental":true},"plan":{"summary":"set fixed IP for client Laptop","changes":[{"op":"update","resource":"client","id":"legacy-client-1","name":"Laptop","before":{"client_id":"legacy-client-1","mac":"aabbccddee02","name":"Laptop","network_id":"","fixed_ip_enabled":false,"fixed_ip":""},"after":{"client_id":"legacy-client-1","mac":"aabbccddee02","name":"Laptop","network_id":"legacy-network-1","fixed_ip_enabled":true,"fixed_ip":"192.0.2.50"}}]}}`
+	assertDecodedJSONEqual(t, stdout, wantPlan)
+
+	flagYes = true
+	flagExperimental = true
+	flagForce = true
+	stdout, stderr, err = captureProcessOutput(t, func() error {
+		return runClientFixedIPMutation("set", "Laptop", "192.0.2.50", "LAN")
+	})
+	if err != nil {
+		t.Fatalf("apply: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	wantApply := `{"schema_version":"1","ok":true,"resource":"client","action":"fixed-ip set","data":{"client_id":"legacy-client-1","mac":"aabbccddee02","name":"Laptop","network_id":"legacy-network-1","fixed_ip_enabled":true,"fixed_ip":"192.0.2.50"},"meta":{"site":"default","dry_run":false,"experimental":true}}`
+	assertDecodedJSONEqual(t, stdout, wantApply)
+	if stderr != "audit: applied client fixed-ip set\n" || fixture.puts.Load() != 1 {
+		t.Fatalf("audit=%q PUT count=%d", stderr, fixture.puts.Load())
+	}
+	if strings.Contains(stdout+stderr, commandTestAPIKey) {
+		t.Fatal("output leaked API key")
 	}
 }

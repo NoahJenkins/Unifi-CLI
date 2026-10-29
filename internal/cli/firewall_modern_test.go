@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -172,7 +173,7 @@ func TestModernFirewallCLIFlagsRemoveLegacyRulesetContract(t *testing.T) {
 			t.Errorf("create is missing --%s", flag)
 		}
 	}
-	for _, flag := range []string{"source-ip", "destination-ip", "destination-port"} {
+	for _, flag := range []string{"source-ip", "source-subnet", "destination-ip", "destination-port"} {
 		if create.Flags().Lookup(flag) == nil {
 			t.Errorf("create is missing --%s", flag)
 		}
@@ -273,6 +274,86 @@ func TestFirewallExactCreateUsesExistingPlanApplyAndDryRunGates(t *testing.T) {
 		if err != nil || *writes != 1 {
 			t.Fatalf("exact apply: err=%v writes=%d", err, *writes)
 		}
+	})
+}
+
+func TestFirewallSourceSubnetFlagUsesExistingPlanApplyGates(t *testing.T) {
+	args := func(extra ...string) []string {
+		return append([]string{
+			"--name", "Allow subnet to one TCP service", "--action", "allow", "--allow-return-traffic",
+			"--source-zone", "Internal", "--destination-zone", "External", "--ip-version", "ipv4", "--protocol", "tcp",
+			"--source-subnet", "192.0.2.0/24", "--destination-ip", "198.51.100.20", "--destination-port", "1514",
+		}, extra...)
+	}
+	execute := func(argv []string) func() error {
+		return func() error {
+			cmd := newFirewallCreateCmd()
+			cmd.SilenceErrors, cmd.SilenceUsage = true, true
+			cmd.SetArgs(argv)
+			return cmd.Execute()
+		}
+	}
+
+	t.Run("plan only", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		stdout, _, err := captureProcessOutput(t, execute(args()))
+		if err != nil || *writes != 0 {
+			t.Fatalf("plan: err=%v writes=%d stdout=%q", err, *writes, stdout)
+		}
+		assertSchemaV1(t, stdout)
+		var envelope struct {
+			Plan struct {
+				Changes []struct {
+					After struct {
+						SourceFilter *domain.FirewallTrafficFilter `json:"source_filter"`
+					} `json:"after"`
+				} `json:"changes"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil || len(envelope.Plan.Changes) != 1 {
+			t.Fatalf("plan JSON: err=%v stdout=%q", err, stdout)
+		}
+		source := envelope.Plan.Changes[0].After.SourceFilter
+		if source == nil || source.IPAddressFilter == nil || source.IPAddressFilter.MatchOpposite ||
+			!reflect.DeepEqual(source.IPAddressFilter.Items, []domain.FirewallIPMatch{{Type: "subnet", Value: "192.0.2.0/24"}}) {
+			t.Fatalf("plan source filter = %#v", source)
+		}
+	})
+
+	t.Run("source IP and subnet are mutually exclusive", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes, flagExperimental, flagForce = true, true, true
+		stdout, _, err := captureProcessOutput(t, execute(args("--source-ip", "192.0.2.10")))
+		if err == nil || *writes != 0 || !strings.Contains(stdout, "mutually exclusive") {
+			t.Fatalf("both sources: err=%v writes=%d stdout=%q", err, *writes, stdout)
+		}
+	})
+
+	t.Run("apply requires experimental and force", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes, flagExperimental = true, true
+		stdout, _, err := captureProcessOutput(t, execute(args()))
+		if err == nil || *writes != 0 || !strings.Contains(stdout, "safe_mode_blocked") {
+			t.Fatalf("without force: err=%v writes=%d stdout=%q", err, *writes, stdout)
+		}
+	})
+
+	t.Run("apply uses one write", func(t *testing.T) {
+		srv, writes := newFirewallMutationTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes, flagExperimental, flagForce = true, true, true
+		stdout, _, err := captureProcessOutput(t, execute(args()))
+		if err != nil || *writes != 1 {
+			t.Fatalf("apply: err=%v writes=%d stdout=%q", err, *writes, stdout)
+		}
+		assertSchemaV1(t, stdout)
 	})
 }
 

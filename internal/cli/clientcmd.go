@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/noahjenkins/unifi-cli/internal/apperr"
 	"github.com/noahjenkins/unifi-cli/internal/domain"
 	"github.com/noahjenkins/unifi-cli/internal/plan"
 	"github.com/noahjenkins/unifi-cli/internal/render"
@@ -49,23 +50,33 @@ func newClientFixedIPCmd() *cobra.Command {
 				return runClientFixedIPGet(args[0])
 			},
 		},
-		&cobra.Command{
-			Use:   "set <id> <ipv4>",
-			Short: "Set a fixed-IP reservation for a known client",
-			Args:  cobra.ExactArgs(2),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				return runClientFixedIPMutation("set", args[0], args[1])
-			},
-		},
+		newClientFixedIPSetCmd(),
 		&cobra.Command{
 			Use:   "clear <id>",
 			Short: "Clear a known client's fixed-IP reservation",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return runClientFixedIPMutation("clear", args[0], "")
+				return runClientFixedIPMutation("clear", args[0], "", "")
 			},
 		},
 	)
+	return cmd
+}
+
+func newClientFixedIPSetCmd() *cobra.Command {
+	var network string
+	cmd := &cobra.Command{
+		Use:   "set <id> <ipv4>",
+		Short: "Set a fixed-IP reservation for a known client",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("network") && network == "" {
+				return emitErr("client", "fixed-ip set", apperr.New(apperr.ValidationFailed, "--network requires a network ID or exact name"))
+			}
+			return runClientFixedIPMutation("set", args[0], args[1], network)
+		},
+	}
+	cmd.Flags().StringVar(&network, "network", "", "reservation network id or exact name; required when the client record has no network ID")
 	return cmd
 }
 
@@ -273,7 +284,7 @@ func runClientMutation(action, id string) error {
 	return emittedExit(code)
 }
 
-func runClientFixedIPMutation(action, id, fixedIP string) error {
+func runClientFixedIPMutation(action, id, fixedIP, network string) error {
 	actionName := "fixed-ip " + action
 	rt, err := loadRuntime(true)
 	if err != nil {
@@ -284,7 +295,7 @@ func runClientFixedIPMutation(action, id, fixedIP string) error {
 	build := func(query string) (plan.Plan, domain.ClientFixedIPSnapshot, error) {
 		switch action {
 		case "set":
-			return svc.Set(ctx, query, fixedIP)
+			return svc.SetOnNetwork(ctx, query, fixedIP, network)
 		case "clear":
 			return svc.Clear(ctx, query)
 		default:
@@ -308,7 +319,7 @@ func runClientFixedIPMutation(action, id, fixedIP string) error {
 		func(target plan.Target) (any, error) {
 			switch action {
 			case "set":
-				return svc.ApplySetPrepared(ctx, target, target.ID(), fixedIP)
+				return svc.ApplySetOnNetworkPrepared(ctx, target, target.ID(), fixedIP, network)
 			case "clear":
 				return svc.ApplyClearPrepared(ctx, target, target.ID())
 			default:

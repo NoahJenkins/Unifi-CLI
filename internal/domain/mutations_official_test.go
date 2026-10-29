@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/noahjenkins/unifi-cli/internal/apperr"
@@ -31,6 +32,8 @@ type officialMutationAPI struct {
 	official     []officialMutationCall
 	legacy       []officialMutationCall
 	mutate       func(method, path string, in, out any) error
+	// mu guards official because list reads fan out detail requests.
+	mu sync.Mutex
 }
 
 func (f *officialMutationAPI) SitePath(parts ...string) string {
@@ -50,7 +53,9 @@ func (f *officialMutationAPI) FetchOfficialObjects(_ context.Context, path strin
 }
 
 func (f *officialMutationAPI) DoOfficial(_ context.Context, method, path string, in, out any) error {
+	f.mu.Lock()
 	f.official = append(f.official, officialMutationCall{method: method, path: path, body: cloneMutationTestValue(in)})
+	f.mu.Unlock()
 	if f.mutate != nil && method != http.MethodGet {
 		return f.mutate(method, path, in, out)
 	}

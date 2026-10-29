@@ -130,6 +130,7 @@ func newNetworkUpdateCmd() *cobra.Command {
 		management            string
 		domainName            string
 		clearDomainName       bool
+		mdnsForwarding        bool
 		deviceID              string
 		enabled               bool
 		dhcpMode              string
@@ -173,6 +174,8 @@ func newNetworkUpdateCmd() *cobra.Command {
 				DomainName:                      domainName,
 				SetDomainName:                   cmd.Flags().Changed("domain-name"),
 				ClearDomainName:                 clearDomainName,
+				MDNSForwardingEnabled:           mdnsForwarding,
+				SetMDNSForwardingEnabled:        cmd.Flags().Changed("mdns-forwarding"),
 			}
 			if cmd.Flags().Changed("vlan") {
 				v := vlan
@@ -196,6 +199,7 @@ func newNetworkUpdateCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&dnsServers, "dns-server", nil, "complete DHCP DNS server address replacement")
 	cmd.Flags().StringVar(&domainName, "domain-name", "", "DHCP domain name")
 	cmd.Flags().BoolVar(&clearDomainName, "clear-domain-name", false, "clear the DHCP domain name")
+	cmd.Flags().BoolVar(&mdnsForwarding, "mdns-forwarding", false, "gateway network mDNS forwarding (true|false)")
 	return cmd
 }
 
@@ -231,7 +235,7 @@ func runNetworkList() error {
 		}
 		return nil
 	}
-	headers := []string{"NAME", "PURPOSE", "VLAN", "SUBNET", "DHCP", "WAN"}
+	headers := []string{"NAME", "PURPOSE", "VLAN", "SUBNET", "DHCP", "WAN", "MDNS"}
 	rows := make([][]string, 0, len(items))
 	for _, n := range items {
 		vlan := ""
@@ -245,6 +249,7 @@ func runNetworkList() error {
 			n.Subnet,
 			strconv.FormatBool(n.DHCPEnabled),
 			strconv.FormatBool(n.WAN),
+			networkMDNSText(n),
 		})
 	}
 	return render.WriteTable(rt.Out, headers, rows)
@@ -283,7 +288,16 @@ func runNetworkGet(id string) error {
 	fmt.Fprintf(rt.Out, "dhcp_enabled: %s\n", strconv.FormatBool(n.DHCPEnabled))
 	fmt.Fprintf(rt.Out, "domain_name: %s\n", render.SafeText(n.DomainName))
 	fmt.Fprintf(rt.Out, "wan: %s\n", strconv.FormatBool(n.WAN))
+	fmt.Fprintf(rt.Out, "mdns_forwarding_enabled: %s\n", networkMDNSText(n))
 	return nil
+}
+
+// networkMDNSText is empty when the controller uses the site default.
+func networkMDNSText(n domain.Network) string {
+	if n.MDNSForwardingEnabled == nil {
+		return ""
+	}
+	return strconv.FormatBool(*n.MDNSForwardingEnabled)
 }
 
 func runNetworkCreate(in domain.NetworkInput) error {
