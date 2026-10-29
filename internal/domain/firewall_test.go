@@ -335,7 +335,7 @@ func TestFirewallCompleteFixtureUsesOfficialNestedDiscriminatorShapes(t *testing
 	t.Run("IP protocol variants contain required nested discriminators", func(t *testing.T) {
 		named := policies[0]["ipProtocolScope"].(map[string]any)
 		namedFilter := named["protocolFilter"].(map[string]any)
-		if named["ipVersion"] != "IPV4" || namedFilter["type"] != "NAMED_PROTOCOL" || namedFilter["matchOpposite"] != false || namedFilter["protocol"].(map[string]any)["name"] != "udp" {
+		if named["ipVersion"] != "IPV4" || namedFilter["type"] != "NAMED_PROTOCOL" || namedFilter["matchOpposite"] != false || namedFilter["protocol"].(map[string]any)["name"] != "UDP" {
 			t.Fatalf("NAMED_PROTOCOL scope = %#v", named)
 		}
 		preset := policies[1]["ipProtocolScope"].(map[string]any)
@@ -360,7 +360,7 @@ func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *te
 		"id": createdPolicyID, "name": "Allow HTTPS", "enabled": true, "index": float64(120),
 		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false},
 		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
-		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false}},
 		"loggingEnabled":  false, "metadata": map[string]any{"origin": "USER_DEFINED"},
 	}
 	api.postResponse = cloneFirewallMap(t, created)
@@ -388,7 +388,7 @@ func TestFirewallCreateResolvesZonesAndSendsCompleteOfficialPolicyDocument(t *te
 	wantBody := map[string]any{
 		"name": "Allow HTTPS", "enabled": true, "action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false},
 		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
-		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false}},
 		"loggingEnabled":  false,
 	}
 	post := firewallCalls(api.calls, http.MethodPost)
@@ -437,7 +437,7 @@ func TestFirewallExactCreateSendsOneOfficialIPAddressAndDestinationPort(t *testi
 		"ipProtocolScope": map[string]any{
 			"ipVersion": "IPV4",
 			"protocolFilter": map[string]any{
-				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
+				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false,
 			},
 		},
 		"loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"},
@@ -536,7 +536,7 @@ func TestFirewallExactCreateVerificationFailsClosedForEverySecurityField(t *test
 		{name: "destination zone changed", mutate: func(observed map[string]any) { mapFieldTest(observed, "destination")["zoneId"] = labZoneID }},
 		{name: "IP version changed", mutate: func(observed map[string]any) { mapFieldTest(observed, "ipProtocolScope")["ipVersion"] = "IPV6" }},
 		{name: "protocol changed", mutate: func(observed map[string]any) {
-			mapFieldTest(mapFieldTest(observed, "ipProtocolScope"), "protocolFilter")["protocol"] = map[string]any{"name": "udp"}
+			mapFieldTest(mapFieldTest(observed, "ipProtocolScope"), "protocolFilter")["protocol"] = map[string]any{"name": "UDP"}
 		}},
 		{name: "protocol opposite", mutate: func(observed map[string]any) {
 			mapFieldTest(mapFieldTest(observed, "ipProtocolScope"), "protocolFilter")["matchOpposite"] = true
@@ -824,7 +824,7 @@ func exactFirewallObservedPolicy() map[string]any {
 		"ipProtocolScope": map[string]any{
 			"ipVersion": "IPV4",
 			"protocolFilter": map[string]any{
-				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false,
+				"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false,
 			},
 		},
 		"loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"},
@@ -897,7 +897,7 @@ func TestFirewallCreateVerificationComparesCompleteWritableDocument(t *testing.T
 		"id": createdPolicyID, "name": "Allow HTTPS", "description": "Verified create", "enabled": true, "index": float64(120),
 		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": true},
 		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
-		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false}},
 		"loggingEnabled":  true, "metadata": map[string]any{"origin": "USER_DEFINED"},
 	}
 	in := domain.FirewallInput{
@@ -969,7 +969,7 @@ func TestFirewallCreatePreservesExplicitZeroValueFields(t *testing.T) {
 		"id": createdPolicyID, "name": "Disabled allow", "description": "", "enabled": false, "index": float64(120),
 		"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false},
 		"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
-		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+		"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false}},
 		"loggingEnabled":  false, "metadata": map[string]any{"origin": "USER_DEFINED"},
 	}
 	api.postResponse = map[string]any{"id": createdPolicyID}
@@ -997,7 +997,7 @@ func TestFirewallMutationVerificationRejectsMismatchedObservedIdentity(t *testin
 			"id": wrongID, "name": "Allow HTTPS", "enabled": true,
 			"action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false},
 			"source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID},
-			"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "tcp"}, "matchOpposite": false}},
+			"ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "TCP"}, "matchOpposite": false}},
 			"loggingEnabled":  false,
 		}
 		api.details[client.OfficialPath("sites", firewallSiteID, "firewall", "policies", createdPolicyID)] = observed

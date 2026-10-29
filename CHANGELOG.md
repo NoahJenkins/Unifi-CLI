@@ -63,12 +63,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Firewall create and protocol update now send the official uppercase
+  named-protocol discriminator (`TCP`, `UDP`, `ICMP`, or `ICMPV6`). Earlier
+  builds sent lowercase names, which are not keys in the official 10.4.57 or
+  10.6.109 mapping. A live 10.6.109 exact-filter create rejected that request
+  with `api.request.unknown-type-id` before creation. CLI input and output
+  stay lowercase. Synthetic fixtures now use the official wire casing.
+- For the official `api.request.unknown-type-id` error only, a quoted
+  single-case schema token in the message stays visible, so the rejected
+  discriminator can be diagnosed. All other redaction is unchanged.
 - Official integration HTTP 400 responses now return `validation_failed` and
   can include only bounded, sanitized controller `code` and `message` fields.
   Raw bodies, request metadata, controller IDs, addresses, and credentials
-  remain excluded. The exact-filter firewall request is unchanged because the
-  published 10.4.57 schema matches it and no 10.5.67 schema was available
-  during diagnosis.
+  remain excluded. This change did not alter the exact-filter firewall request.
+  The later named-protocol casing fix above corrects that request.
 
 ## [1.0.0-rc.4] - 2026-08-17
 

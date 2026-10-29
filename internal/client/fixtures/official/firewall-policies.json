@@ -13,7 +13,7 @@
       "action": {"type": "ALLOW", "allowReturnTraffic": false},
       "source": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff1"},
       "destination": {"zoneId": "ffffffff-ffff-4fff-8fff-fffffffffff2"},
-      "ipProtocolScope": {"ipVersion": "IPV4", "protocolFilter": {"type": "NAMED_PROTOCOL", "protocol": {"name": "udp"}, "matchOpposite": false}},
+      "ipProtocolScope": {"ipVersion": "IPV4", "protocolFilter": {"type": "NAMED_PROTOCOL", "protocol": {"name": "UDP"}, "matchOpposite": false}},
       "loggingEnabled": false,
       "metadata": {"origin": "USER"}
     }

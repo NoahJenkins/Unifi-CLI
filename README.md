@@ -520,7 +520,21 @@ If the official integration API rejects a request with HTTP 400, the CLI emits
 `message` fields from the documented official error envelope. Request IDs,
 request paths, status metadata, unknown fields, and raw response bodies are not
 rendered. IP and MAC addresses, UUIDs, URLs, credentials, quoted values, and
-long token-like values in a message are replaced with `[redacted]`.
+long token-like values in a message are replaced with `[redacted]`. One
+exception applies to the official `api.request.unknown-type-id` code: a quoted
+single-case schema token of at most 23 characters, such as `'tcp'` or
+`"NAMED_PROTOCOL"`, stays visible. This value is the discriminator that the
+CLI sent. The controller does not return the allowed values; compare the
+rejected value with the official OpenAPI mapping for the reported path.
+
+Protocol flags are lowercase on the command line and in CLI output. Writes
+send the official uppercase discriminators: `NAMED_PROTOCOL` with `TCP`,
+`UDP`, `ICMP`, or `ICMPV6`, and `PRESET` with `TCP_UDP`. For example,
+`--ip-version ipv4 --protocol tcp` sends this `ipProtocolScope`:
+
+```json
+{"ipVersion":"IPV4","protocolFilter":{"type":"NAMED_PROTOCOL","protocol":{"name":"TCP"},"matchOpposite":false}}
+```
 
 `firewall reorder` requires one source/destination zone pair plus the **complete**
 user-defined order split between `--before-system-ids` and

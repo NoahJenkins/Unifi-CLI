@@ -43,7 +43,7 @@
         "ipVersion": "IPV4",
         "protocolFilter": {
           "type": "NAMED_PROTOCOL",
-          "protocol": {"name": "udp"},
+          "protocol": {"name": "UDP"},
           "matchOpposite": false
         }
       },

@@ -558,7 +558,7 @@ func newFirewallMutationTestServerWithPostError(t *testing.T, postStatus int, po
 	t.Helper()
 	writes := new(int)
 	policies := []map[string]any{
-		{"id": commandFirewallID, "name": "Allow DNS", "enabled": true, "index": float64(100), "action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false}, "source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID}, "ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "udp"}, "matchOpposite": false}}, "loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"}},
+		{"id": commandFirewallID, "name": "Allow DNS", "enabled": true, "index": float64(100), "action": map[string]any{"type": "ALLOW", "allowReturnTraffic": false}, "source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID}, "ipProtocolScope": map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "UDP"}, "matchOpposite": false}}, "loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"}},
 		{"id": blockWebPolicyID, "name": "Block Web", "enabled": true, "index": float64(110), "action": map[string]any{"type": "BLOCK"}, "source": map[string]any{"zoneId": internalZoneID}, "destination": map[string]any{"zoneId": externalZoneID}, "ipProtocolScope": map[string]any{"ipVersion": "IPV4_AND_IPV6"}, "loggingEnabled": false, "metadata": map[string]any{"origin": "USER_DEFINED"}},
 	}
 	ordering := map[string]any{"orderedFirewallPolicyIds": map[string]any{"beforeSystemDefined": []string{commandFirewallID}, "afterSystemDefined": []string{blockWebPolicyID}}}

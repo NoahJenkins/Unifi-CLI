@@ -1616,8 +1616,10 @@ func firewallProtocolBody(ipVersion, protocol string) map[string]any {
 	case "tcp_udp":
 		scope["protocolFilter"] = map[string]any{"type": "PRESET", "preset": map[string]any{"name": "TCP_UDP"}}
 	default:
+		// Official named-protocol discriminators are uppercase mapping keys
+		// (TCP, UDP, ICMP, ICMPV6); reads lowercase them for CLI output.
 		scope["protocolFilter"] = map[string]any{
-			"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": protocol}, "matchOpposite": false,
+			"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": strings.ToUpper(protocol)}, "matchOpposite": false,
 		}
 	}
 	return scope

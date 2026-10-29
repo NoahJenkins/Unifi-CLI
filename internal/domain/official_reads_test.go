@@ -761,7 +761,7 @@ func TestOfficialFirewallProtocolUnionNormalization(t *testing.T) {
 		scope map[string]any
 		want  string
 	}{
-		{name: "named", scope: map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "udp"}, "matchOpposite": false}}, want: "ipv4:udp"},
+		{name: "named", scope: map[string]any{"ipVersion": "IPV4", "protocolFilter": map[string]any{"type": "NAMED_PROTOCOL", "protocol": map[string]any{"name": "UDP"}, "matchOpposite": false}}, want: "ipv4:udp"},
 		{name: "preset", scope: map[string]any{"ipVersion": "IPV4_AND_IPV6", "protocolFilter": map[string]any{"type": "PRESET", "preset": map[string]any{"name": "TCP_UDP"}}}, want: "ipv4_and_ipv6:tcp_udp"},
 		{name: "number", scope: map[string]any{"ipVersion": "IPV6", "protocolFilter": map[string]any{"type": "PROTOCOL_NUMBER", "protocolNumber": float64(17), "matchOpposite": false}}, want: "ipv6:17"},
 		{name: "all protocols", scope: map[string]any{"ipVersion": "IPV4"}, want: "ipv4"},

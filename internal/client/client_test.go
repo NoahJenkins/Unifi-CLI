@@ -2,6 +2,7 @@ package client_test
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -621,6 +622,84 @@ func TestDoSanitizesOfficialBadRequestValidationError(t *testing.T) {
 		if strings.Contains(err.Error(), protected) {
 			t.Fatalf("validation error rendered protected value %q: %v", protected, err)
 		}
+	}
+}
+
+func TestDoKeepsRejectedSchemaTypeIDForOfficialUnknownTypeError(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{
+			name:    "lowercase discriminator",
+			message: "Invalid $.ipProtocolScope.protocolFilter.type value 'tcp'",
+			want:    "api.request.unknown-type-id: Invalid $.ipProtocolScope.protocolFilter.type value 'tcp'",
+		},
+		{
+			name:    "uppercase discriminator",
+			message: `Invalid $.source.trafficFilter.type value "IP_ADDRESS"`,
+			want:    `api.request.unknown-type-id: Invalid $.source.trafficFilter.type value "IP_ADDRESS"`,
+		},
+		{
+			name:    "non-token value stays redacted",
+			message: "Invalid $.name.type value 'private policy name'",
+			want:    "api.request.unknown-type-id: Invalid $.name.type value [redacted]",
+		},
+		{
+			name:    "mixed-case value stays redacted",
+			message: "Invalid $.name.type value 'Laptop'",
+			want:    "api.request.unknown-type-id: Invalid $.name.type value [redacted]",
+		},
+		{
+			name:    "address value stays redacted",
+			message: "Invalid $.items.type value '192.0.2.44'",
+			want:    "api.request.unknown-type-id: Invalid $.items.type value [redacted]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"code": "api.request.unknown-type-id", "message": tt.message})
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+
+			c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			err = c.DoOfficial(context.Background(), http.MethodPost, "/firewall/policies", nil, nil)
+			if !apperr.Is(err, apperr.ValidationFailed) {
+				t.Fatalf("error = %v, want validation_failed", err)
+			}
+			want := "validation_failed: controller returned HTTP status 400: " + tt.want
+			if err.Error() != want {
+				t.Fatalf("error = %q, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestDoRedactsQuotedTokensForOtherOfficialBadRequestCodes(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"code":"api.validation.rejected","message":"value 'tcp' is invalid"}`)
+	}))
+	defer srv.Close()
+
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	err = c.DoOfficial(context.Background(), http.MethodPost, "/firewall/policies", nil, nil)
+	want := "validation_failed: controller returned HTTP status 400: api.validation.rejected: value [redacted] is invalid"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
 	}
 }
 

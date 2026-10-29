@@ -56,7 +56,15 @@ var (
 	controllerIPv6Pattern        = regexp.MustCompile(`(?i)(?:\b[0-9a-f]{1,4})?(?::[0-9a-f]{0,4}){2,7}\b`)
 	controllerQuotedValuePattern = regexp.MustCompile("(?:\\\"[^\\\"\\r\\n]*\\\"|'[^'\\r\\n]*'|`[^`\\r\\n]*`)")
 	controllerLongTokenPattern   = regexp.MustCompile(`\b[A-Za-z0-9_+/=-]{24,}\b`)
+	// controllerSchemaTypeIDPattern matches a single-case schema discriminator
+	// token, such as TCP or NAMED_PROTOCOL. It is shorter than a long token.
+	controllerSchemaTypeIDPattern = regexp.MustCompile(`^(?:[A-Z][A-Z0-9_]{0,22}|[a-z][a-z0-9_]{0,22})$`)
 )
+
+// controllerUnknownTypeIDCode reports a rejected polymorphic discriminator.
+// Its rejected value comes from the request's schema discriminator, so a
+// quoted single-case token is kept for diagnosis.
+const controllerUnknownTypeIDCode = "api.request.unknown-type-id"
 
 func New(cfg config.Config) (*Client, error) {
 	return NewWithStore(cfg, authstore.NewStore(authstore.Options{}))
@@ -338,7 +346,7 @@ func mapBadRequest(body []byte) error {
 	}
 
 	code, codeOK := sanitizeControllerErrorCode(response.Code)
-	detail, detailOK := sanitizeControllerErrorMessage(response.Message)
+	detail, detailOK := sanitizeControllerErrorMessage(response.Message, codeOK && code == controllerUnknownTypeIDCode)
 	switch {
 	case codeOK && detailOK:
 		message = code + ": " + detail
@@ -358,7 +366,7 @@ func sanitizeControllerErrorCode(value string) (string, bool) {
 	return value, true
 }
 
-func sanitizeControllerErrorMessage(value string) (string, bool) {
+func sanitizeControllerErrorMessage(value string, keepSchemaTypeIDs bool) (string, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" || len(value) > maxControllerErrorMessageBytes || !utf8.ValidString(value) ||
 		strings.ContainsAny(value, "{}[]") || containsUnsafeControllerErrorRune(value) {
@@ -375,9 +383,20 @@ func sanitizeControllerErrorMessage(value string) (string, bool) {
 		controllerQuotedValuePattern,
 		controllerLongTokenPattern,
 	} {
+		if pattern == controllerQuotedValuePattern && keepSchemaTypeIDs {
+			value = pattern.ReplaceAllStringFunc(value, redactQuotedNonSchemaTypeID)
+			continue
+		}
 		value = pattern.ReplaceAllString(value, "[redacted]")
 	}
 	return strings.Join(strings.Fields(value), " "), true
+}
+
+func redactQuotedNonSchemaTypeID(quoted string) string {
+	if controllerSchemaTypeIDPattern.MatchString(quoted[1 : len(quoted)-1]) {
+		return quoted
+	}
+	return "[redacted]"
 }
 
 func containsUnsafeControllerErrorRune(value string) bool {
