@@ -130,6 +130,8 @@ type FirewallInput struct {
 	SetProtocol           bool
 	SourceIP              string
 	SetSourceIP           bool
+	SourceSubnet          string
+	SetSourceSubnet       bool
 	DestinationIP         string
 	SetDestinationIP      bool
 	DestinationPort       int
@@ -1557,8 +1559,12 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 	source := map[string]any{"zoneId": sourceZoneID}
 	destination := map[string]any{"zoneId": destinationZoneID}
 	if firewallExactFilterMode(in) {
-		source["trafficFilter"] = firewallExactIPAddressTrafficFilter(in.SourceIP, 0)
-		destination["trafficFilter"] = firewallExactIPAddressTrafficFilter(in.DestinationIP, in.DestinationPort)
+		if inputSetsFirewallSourceSubnet(in) {
+			source["trafficFilter"] = firewallExactIPTrafficFilter("SUBNET", in.SourceSubnet, 0)
+		} else {
+			source["trafficFilter"] = firewallExactIPTrafficFilter("IP_ADDRESS", in.SourceIP, 0)
+		}
+		destination["trafficFilter"] = firewallExactIPTrafficFilter("IP_ADDRESS", in.DestinationIP, in.DestinationPort)
 	}
 	body := map[string]any{
 		"name":            in.Name,
@@ -1575,12 +1581,14 @@ func firewallCreateBody(in FirewallInput, sourceZoneID, destinationZoneID string
 	return body
 }
 
-func firewallExactIPAddressTrafficFilter(address string, destinationPort int) map[string]any {
+// firewallExactIPTrafficFilter builds one official IP matching item.
+// itemType is IP_ADDRESS for one address or SUBNET for one CIDR.
+func firewallExactIPTrafficFilter(itemType, value string, destinationPort int) map[string]any {
 	filter := map[string]any{
 		"type": "IP_ADDRESS",
 		"ipAddressFilter": map[string]any{
 			"type": "IP_ADDRESSES", "matchOpposite": false,
-			"items": []any{map[string]any{"type": "IP_ADDRESS", "value": address}},
+			"items": []any{map[string]any{"type": itemType, "value": value}},
 		},
 	}
 	if destinationPort != 0 {
@@ -1703,8 +1711,12 @@ func validateFirewallExactCreate(in FirewallInput) error {
 	if !firewallExactFilterMode(in) {
 		return nil
 	}
-	if !inputSetsFirewallSourceIP(in) || !inputSetsFirewallDestinationIP(in) || !inputSetsFirewallDestinationPort(in) {
-		return apperr.New(apperr.ValidationFailed, "--source-ip, --destination-ip, and --destination-port must be provided together")
+	if inputSetsFirewallSourceIP(in) && inputSetsFirewallSourceSubnet(in) {
+		return apperr.New(apperr.ValidationFailed, "--source-ip and --source-subnet are mutually exclusive")
+	}
+	hasSource := inputSetsFirewallSourceIP(in) || inputSetsFirewallSourceSubnet(in)
+	if !hasSource || !inputSetsFirewallDestinationIP(in) || !inputSetsFirewallDestinationPort(in) {
+		return apperr.New(apperr.ValidationFailed, "--source-ip or --source-subnet, --destination-ip, and --destination-port must be provided together")
 	}
 	if in.Action != "allow" || !in.AllowReturnTraffic {
 		return apperr.New(apperr.ValidationFailed, "exact IP and destination-port filters require action allow with --allow-return-traffic")
@@ -1715,7 +1727,11 @@ func validateFirewallExactCreate(in FirewallInput) error {
 	if in.Protocol != "tcp" {
 		return apperr.New(apperr.ValidationFailed, "destination-port filters currently require --protocol tcp")
 	}
-	if err := validateCanonicalFirewallIPv4("source", in.SourceIP); err != nil {
+	if inputSetsFirewallSourceSubnet(in) {
+		if err := validateCanonicalFirewallIPv4Subnet("source", in.SourceSubnet); err != nil {
+			return err
+		}
+	} else if err := validateCanonicalFirewallIPv4("source", in.SourceIP); err != nil {
 		return err
 	}
 	if err := validateCanonicalFirewallIPv4("destination", in.DestinationIP); err != nil {
@@ -1731,6 +1747,21 @@ func validateCanonicalFirewallIPv4(label, value string) error {
 	address, err := netip.ParseAddr(value)
 	if err != nil || !address.Is4() || address.String() != value {
 		return apperr.Newf(apperr.ValidationFailed, "firewall %s IP must be one canonical literal IPv4 address", label)
+	}
+	return nil
+}
+
+const firewallMinimumSourceSubnetPrefix = 8
+
+// validateCanonicalFirewallIPv4Subnet accepts exactly one IPv4 CIDR whose
+// textual form is canonical and whose host bits are zero.
+func validateCanonicalFirewallIPv4Subnet(label, value string) error {
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || !prefix.Addr().Is4() || prefix.Masked() != prefix || prefix.String() != value {
+		return apperr.Newf(apperr.ValidationFailed, "firewall %s subnet must be one canonical IPv4 CIDR with host bits clear", label)
+	}
+	if prefix.Bits() < firewallMinimumSourceSubnetPrefix {
+		return apperr.Newf(apperr.ValidationFailed, "firewall %s subnet prefix must be from /%d through /32", label, firewallMinimumSourceSubnetPrefix)
 	}
 	return nil
 }
@@ -1821,6 +1852,9 @@ func inputSetsFirewallDestinationZone(in FirewallInput) bool {
 func inputSetsFirewallIPVersion(in FirewallInput) bool { return in.SetIPVersion || in.IPVersion != "" }
 func inputSetsFirewallProtocol(in FirewallInput) bool  { return in.SetProtocol || in.Protocol != "" }
 func inputSetsFirewallSourceIP(in FirewallInput) bool  { return in.SetSourceIP || in.SourceIP != "" }
+func inputSetsFirewallSourceSubnet(in FirewallInput) bool {
+	return in.SetSourceSubnet || in.SourceSubnet != ""
+}
 func inputSetsFirewallDestinationIP(in FirewallInput) bool {
 	return in.SetDestinationIP || in.DestinationIP != ""
 }
@@ -1828,7 +1862,8 @@ func inputSetsFirewallDestinationPort(in FirewallInput) bool {
 	return in.SetDestinationPort || in.DestinationPort != 0
 }
 func firewallExactFilterMode(in FirewallInput) bool {
-	return inputSetsFirewallSourceIP(in) || inputSetsFirewallDestinationIP(in) || inputSetsFirewallDestinationPort(in)
+	return inputSetsFirewallSourceIP(in) || inputSetsFirewallSourceSubnet(in) || inputSetsFirewallDestinationIP(in) ||
+		inputSetsFirewallDestinationPort(in)
 }
 
 func firewallStringSlice(value any) []string {

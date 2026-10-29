@@ -28,6 +28,9 @@ type Network struct {
 	DHCPEnabled bool   `json:"dhcp_enabled"`
 	DomainName  string `json:"domain_name"`
 	WAN         bool   `json:"wan"`
+	// MDNSForwardingEnabled is the official per-network mDNS forwarding
+	// state. It is nil when the controller uses the site default.
+	MDNSForwardingEnabled *bool `json:"mdns_forwarding_enabled,omitempty"`
 }
 
 func (n Network) GetID() string   { return n.ID }
@@ -66,6 +69,8 @@ type NetworkInput struct {
 	DomainName                      string
 	SetDomainName                   bool
 	ClearDomainName                 bool
+	MDNSForwardingEnabled           bool
+	SetMDNSForwardingEnabled        bool
 }
 
 type NetworkService struct {
@@ -82,25 +87,45 @@ func NewNetworkService(api NetworkAPI) *NetworkService {
 }
 
 func (s *NetworkService) List(ctx context.Context) ([]Network, error) {
-	raw, official, err := fetchOfficialSite(s.api, ctx, "networks")
+	raw, out, official, err := s.listOverviews(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if !official || !supportsOfficialDetails(s.api) {
+		return out, nil
+	}
+	// Subnet, DHCP, and mDNS state exist only on official detail routes.
+	details, err := fetchOfficialSiteDetails(ctx, s.api, raw, "networks")
+	if err != nil {
+		return nil, err
+	}
+	for i, detail := range details {
+		out[i] = mergeOfficialNetworkDetail(out[i], NormalizeNetwork(detail))
+	}
+	return out, nil
+}
+
+// listOverviews reads the network collection without detail requests.
+func (s *NetworkService) listOverviews(ctx context.Context) ([]map[string]any, []Network, bool, error) {
+	raw, official, err := fetchOfficialSite(s.api, ctx, "networks")
+	if err != nil {
+		return nil, nil, false, err
 	}
 	if !official {
 		path := s.api.SitePath(client.PathRestNetwork)
 		if err := s.api.Do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-			return nil, err
+			return nil, nil, false, err
 		}
 	}
 	out := make([]Network, 0, len(raw))
 	for _, m := range raw {
 		out = append(out, NormalizeNetwork(m))
 	}
-	return out, nil
+	return raw, out, official, nil
 }
 
 func (s *NetworkService) Get(ctx context.Context, id string) (Network, error) {
-	items, err := s.List(ctx)
+	_, items, _, err := s.listOverviews(ctx)
 	if err != nil {
 		return Network{}, err
 	}
@@ -217,6 +242,9 @@ func (s *NetworkService) Update(ctx context.Context, id string, in NetworkInput)
 			fmt.Sprintf("update network %s", doc.normalized.Name), officialNetworkSnapshot(doc.wire), officialNetworkSnapshot(networkResponseView(body, doc.wire)))
 		return p, doc.normalized, nil
 	}
+	if in.SetMDNSForwardingEnabled {
+		return plan.Plan{}, Network{}, errNetworkMDNSRequiresOfficialAPI()
+	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
 		return plan.Plan{}, Network{}, err
@@ -245,6 +273,9 @@ func (s *NetworkService) applyUpdate(ctx context.Context, id string, in NetworkI
 	}
 	if supportsOfficialDetails(s.api) {
 		return s.applyOfficialUpdate(ctx, id, in, target)
+	}
+	if in.SetMDNSForwardingEnabled {
+		return Network{}, errNetworkMDNSRequiresOfficialAPI()
 	}
 	n, err := s.getLegacy(ctx, id)
 	if err != nil {
@@ -378,6 +409,9 @@ func NormalizeNetwork(m map[string]any) Network {
 	if v, ok := asInt(m["vlanId"]); ok {
 		n.VLAN = &v
 	}
+	if v, ok := m["mdnsForwardingEnabled"].(bool); ok {
+		n.MDNSForwardingEnabled = &v
+	}
 	return n
 }
 
@@ -475,21 +509,29 @@ func (s *NetworkService) prepareOfficialUpdate(ctx context.Context, query string
 		body["name"] = in.Name
 	}
 	currentManagement := strings.ToUpper(strField(doc.wire, "management"))
+	targetManagement := currentManagement
 	if inputSetsNetworkPurpose(in) {
 		management, err := officialNetworkManagement(in.Purpose)
 		if err != nil {
 			return networkDocument{}, nil, err
 		}
-		if management != currentManagement {
-			body, err = officialNetworkTransitionBody(doc.wire, in, management)
-			if err != nil {
-				return networkDocument{}, nil, err
-			}
-			if wireDocumentsEqual(body, networkWritableDocument(doc.wire)) {
-				return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "network update would not change controller state")
-			}
-			return doc, body, nil
+		targetManagement = management
+	}
+	if in.SetMDNSForwardingEnabled && targetManagement != "GATEWAY" {
+		return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "mDNS forwarding applies only to gateway-managed networks")
+	}
+	if targetManagement != currentManagement {
+		body, err = officialNetworkTransitionBody(doc.wire, in, targetManagement)
+		if err != nil {
+			return networkDocument{}, nil, err
 		}
+		if in.SetMDNSForwardingEnabled {
+			body["mdnsForwardingEnabled"] = in.MDNSForwardingEnabled
+		}
+		if wireDocumentsEqual(body, networkWritableDocument(doc.wire)) {
+			return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "network update would not change controller state")
+		}
+		return doc, body, nil
 	}
 	if currentManagement == "UNMANAGED" && inputSetsOfficialNetworkManagedField(in) {
 		return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "unmanaged networks do not accept device, IPv4, or DHCP fields")
@@ -524,6 +566,9 @@ func (s *NetworkService) prepareOfficialUpdate(ctx context.Context, query string
 		ipv4["hostIpAddress"] = addr
 		ipv4["prefixLength"] = prefix
 		body["ipv4Configuration"] = ipv4
+	}
+	if in.SetMDNSForwardingEnabled {
+		body["mdnsForwardingEnabled"] = in.MDNSForwardingEnabled
 	}
 	if in.SetDHCPEnabled && in.SetDHCPMode {
 		return networkDocument{}, nil, apperr.New(apperr.ValidationFailed, "use DHCP mode instead of DHCP enabled when both are specified")
@@ -998,6 +1043,9 @@ func networkSnapshot(n Network) map[string]any {
 func officialNetworkSnapshot(raw map[string]any) map[string]any {
 	snapshot := networkSnapshot(NormalizeNetwork(raw))
 	snapshot["enabled"] = boolField(raw, "enabled")
+	if mdns, ok := raw["mdnsForwardingEnabled"].(bool); ok {
+		snapshot["mdns_forwarding_enabled"] = mdns
+	}
 	if deviceID := strField(raw, "deviceId"); deviceID != "" {
 		snapshot["device_id"] = deviceID
 	}
@@ -1067,7 +1115,7 @@ func validateNetworkCreate(in NetworkInput) error {
 func validateNetworkUpdate(in NetworkInput) error {
 	if !inputSetsNetworkName(in) && !inputSetsNetworkPurpose(in) && !in.SetEnabled && in.VLAN == nil && !in.SetDeviceID &&
 		!inputSetsNetworkSubnet(in) && !in.SetDHCPEnabled && !in.SetDHCPMode && !inputSetsNetworkDHCPDetails(in) &&
-		!inputSetsNetworkDomain(in) && !in.ClearDomainName {
+		!inputSetsNetworkDomain(in) && !in.ClearDomainName && !in.SetMDNSForwardingEnabled {
 		return apperr.New(apperr.ValidationFailed, "network update requires at least one changed field")
 	}
 	if in.ClearDomainName && inputSetsNetworkDomain(in) {
@@ -1095,6 +1143,10 @@ func validateNetworkFields(in NetworkInput) error {
 		return validateDNSName(in.DomainName)
 	}
 	return nil
+}
+
+func errNetworkMDNSRequiresOfficialAPI() error {
+	return apperr.New(apperr.ValidationFailed, "mDNS forwarding updates require the official network integration API")
 }
 
 func inputSetsNetworkName(in NetworkInput) bool    { return in.SetName || in.Name != "" }

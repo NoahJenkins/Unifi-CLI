@@ -358,10 +358,20 @@ func TestStableReadServicesUseOfficialNetworkAPI(t *testing.T) {
 		if len(items) != 2 || items[0].VLAN == nil || *items[0].VLAN != 1 {
 			t.Fatalf("networks = %+v", items)
 		}
-		if items[0].Subnet != "" || items[0].DHCPEnabled || items[0].DomainName != "" || items[0].Purpose != "gateway" {
-			t.Fatalf("network overview invented legacy/detail fields: %+v", items[0])
+		// Subnet, DHCP, and mDNS state are official detail fields, so list
+		// reads every detail through the bounded fan-out.
+		if items[0].Subnet != "192.0.2.1/24" || !items[0].DHCPEnabled || items[0].DomainName != "example.test" || items[0].Purpose != "gateway" ||
+			items[0].MDNSForwardingEnabled == nil || !*items[0].MDNSForwardingEnabled {
+			t.Fatalf("LAN list item = %+v", items[0])
 		}
-		assertExactCalls(t, api.calls, "OFFICIAL LIST "+sitePath+"/networks")
+		if items[1].Subnet != "198.51.100.1/24" || items[1].DHCPEnabled ||
+			items[1].MDNSForwardingEnabled == nil || *items[1].MDNSForwardingEnabled {
+			t.Fatalf("IoT list item = %+v", items[1])
+		}
+		assertCallCount(t, api.calls, "OFFICIAL LIST "+sitePath+"/networks", 1)
+		assertCallCount(t, api.calls, "OFFICIAL GET "+sitePath+"/networks/"+officialLANID, 1)
+		assertCallCount(t, api.calls, "OFFICIAL GET "+sitePath+"/networks/cccccccc-cccc-4ccc-8ccc-ccccccccccc2", 1)
+		api.calls = nil
 
 		item, err := svc.Get(ctx, officialLANID)
 		if err != nil {

@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Experimental `client fixed-ip set --network <id|exact-name>` selects the
+  reservation network when the legacy user record has no stored network ID.
+  The selection must resolve to one network, must match a stored network ID,
+  and must contain a connected client's current IPv4 address. Apply re-reads
+  the reservation and the network.
+- Experimental `firewall create --source-subnet <cidr>` sends one canonical
+  IPv4 subnet (`/8` through `/32`) as the official `SUBNET` source match. It
+  is mutually exclusive with `--source-ip` and keeps the exact-filter bundle
+  rules, high-impact gates, one non-retried POST, and exact read-back.
+- Experimental `network update --mdns-forwarding=true|false` sets the official
+  `mdnsForwardingEnabled` field on gateway-managed networks and verifies that
+  no other writable field changed.
+
 - Experimental WLAN access-point selection with repeatable `--broadcasting-ap`
   UUIDs and an `--all-aps` reset. Updates retain routine risk classification,
   planning, `--experimental`, `--yes`, target-drift checks, and verification.
@@ -24,6 +37,12 @@ All notable changes to this project are documented here. The format follows
   mode, and credential-source presence.
 
 ### Changed
+
+- `network list` now reads each official network detail with at most four
+  concurrent requests, so list rows include subnet, DHCP, domain, and mDNS
+  state. The human table adds an `MDNS` column, `network get` adds
+  `mdns_forwarding_enabled`, and schema-v1 network data adds the optional
+  `mdns_forwarding_enabled` boolean.
 
 - The minimum Go toolchain is 1.26.10 to include the October 2026 standard-library
   security fixes, including GO-2026-6809 in `crypto/x509`. CI and release builds

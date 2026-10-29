@@ -18,6 +18,7 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 			"SetName", "SetPurpose", "SetEnabled", "SetDeviceID", "SetSubnet", "SetDHCPMode",
 			"SetDHCPRangeStart", "SetDHCPRangeStop", "SetDHCPLeaseTimeSeconds", "SetDHCPConflictDetectionEnabled",
 			"SetDHCPRelayServerIPAddresses", "SetDNSServerIPAddresses", "SetDomainName", "ClearDomainName",
+			"SetMDNSForwardingEnabled",
 		}},
 		{name: "wlan", typeOf: reflect.TypeOf(domain.WlanInput{}), fields: []string{
 			"SetName", "SetSecurity", "SetNetwork", "SetPassword", "SetBand", "SetPMFMode",
@@ -26,7 +27,7 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 			"SetCOAEnabled", "SetWPA3SecurityMode", "SetBroadcastingAPs", "SetAllAPs",
 		}},
 		{name: "port", typeOf: reflect.TypeOf(domain.PortInput{}), fields: []string{"SetName", "ClearName", "SetProfile"}},
-		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled", "SetSourceIP", "SetDestinationIP", "SetDestinationPort"}},
+		{name: "firewall", typeOf: reflect.TypeOf(domain.FirewallInput{}), fields: []string{"SetName", "SetDescription", "ClearDescription", "SetAction", "SetSourceZone", "SetDestinationZone", "SetIPVersion", "SetProtocol", "SetLoggingEnabled", "SetSourceIP", "SetSourceSubnet", "SetDestinationIP", "SetDestinationPort"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,6 +41,9 @@ func TestUpdateInputsExposeExplicitSetAndClearSemantics(t *testing.T) {
 
 	if newNetworkUpdateCmd().Flags().Lookup("clear-domain-name") == nil {
 		t.Error("network update is missing --clear-domain-name")
+	}
+	if newNetworkUpdateCmd().Flags().Lookup("mdns-forwarding") == nil {
+		t.Error("network update is missing --mdns-forwarding")
 	}
 	for _, command := range []*cobra.Command{newNetworkCreateCmd(), newNetworkUpdateCmd()} {
 		for _, flag := range []string{"device", "enabled", "dhcp-mode", "dhcp-range-start", "dhcp-range-end", "dhcp-lease-seconds", "dhcp-conflict-detection", "dhcp-relay-server", "dns-server", "domain-name"} {

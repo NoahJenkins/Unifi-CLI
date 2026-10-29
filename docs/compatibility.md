@@ -82,26 +82,44 @@ fails the entire command when any required detail fails.
   underscore-prefixed SRV labels separately.
 - Firewall uses modern zones/policies and complete atomic ordering; classic
   rulesets and partial order replacement are unsupported.
-- Firewall policy create supports only one exact source IPv4 address, one
-  exact destination IPv4 address, and one exact TCP destination port when
-  address filters are requested. The three filters are an all-or-none bundle
-  with action allow and return traffic enabled. CIDR, ranges, matching lists,
-  MACs, port ranges, source ports, and connection-state controls remain
-  unsupported create surfaces.
+- Firewall policy create supports only one exact source IPv4 address or one
+  canonical source IPv4 subnet (`/8` through `/32`), one exact destination
+  IPv4 address, and one exact TCP destination port when address filters are
+  requested. The source, destination, and port filters are an all-or-none
+  bundle with action allow and return traffic enabled. The source subnet uses
+  the official 10.4.57 `SUBNET` IP-matching item. Destination subnets, ranges,
+  matching lists, MACs, port ranges, source ports, and connection-state
+  controls remain unsupported create surfaces.
 - Exact firewall filter create is derived from the official 10.4.57 OpenAPI
   schema and is covered by reduced synthetic fixtures and repository tests.
   Network 10.5.67 rejected two operator-reported attempts before creation. The
   request difference is unresolved because the earlier executable discarded
   the official validation fields and no 10.5.67 OpenAPI document is published.
-  It remains without sacrificial-controller live qualification.
+  It remains without sacrificial-controller live qualification. The
+  source-subnet variant has the same status: it is derived from the official
+  10.4.57 schema, it has no 10.5.67 schema evidence, and no live write was run.
 - Switching and RADIUS profiles are read-only.
 - Accepted action output does not claim asynchronous completion.
 - Fixed-IP list returns enabled reservations only. Get can report disabled
   known-client state but hides an inactive historical address.
 - Fixed-IP set/clear supports known offline clients only when the legacy user
-  record supplies an immutable ID, valid MAC, and stored network ID. It does
-  not create never-seen clients, select another network, renew DHCP leases, or
-  reconnect a client.
+  record supplies an immutable ID and valid MAC. Clear also requires a stored
+  network ID. When the record has no network ID, set requires an explicit
+  `--network`; the CLI does not infer one. A connected client must currently
+  use the selected network and subnet. A stored network ID cannot be replaced
+  by a different `--network`. Set does not create never-seen clients, renew
+  DHCP leases, or reconnect a client.
+- Fixed-IP writes stay on the legacy `rest/user` endpoint. The official 10.4.57
+  OpenAPI exposes client reads and guest-access actions only; it has no client
+  DHCP reservation write. No live fixed-IP write has been run for the
+  missing-network-ID path.
+- Network mDNS forwarding updates use the official optional
+  `mdnsForwardingEnabled` field. It applies only to gateway-managed networks,
+  because the official switch-managed and unmanaged documents do not define it.
+  An absent value means the site default; the CLI can set it to true or false
+  but cannot reset it to the site default. No live network write has been run.
+- `network list` reads every official network detail to report subnet, DHCP,
+  domain, and mDNS state. It fails as a whole if any detail read fails.
 - Fixed-IP conflict checks cover enabled reservations and current connected
   addresses. They cannot detect an offline device that uses an unrecorded
   static address.

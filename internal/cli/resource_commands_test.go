@@ -152,6 +152,21 @@ func newCommandTestServerWithOptions(t *testing.T, opts commandServerOptions) *h
 			_ = json.NewEncoder(w).Encode(body)
 			return
 		}
+		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, networkPath+"/") {
+			existing, ok := officialDetails[r.URL.Path]
+			var body, current map[string]any
+			if !ok || json.NewDecoder(r.Body).Decode(&body) != nil || json.Unmarshal([]byte(existing), &current) != nil {
+				http.Error(w, `{"message":"bad request"}`, http.StatusBadRequest)
+				return
+			}
+			for _, responseOnly := range []string{"id", "default", "metadata"} {
+				body[responseOnly] = current[responseOnly]
+			}
+			encoded, _ := json.Marshal(body)
+			officialDetails[r.URL.Path] = string(encoded)
+			_, _ = w.Write(encoded)
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == dnsPath {
 			w.Header().Set("Content-Type", "application/json")
 			body, _ := json.Marshal(dnsPolicies)
@@ -499,8 +514,8 @@ func TestOfficialStableReadGoldenOutput(t *testing.T) {
 		},
 		{
 			name: "network", run: func() error { return runNetworkGet(commandNetworkID) },
-			humanWant: "id: " + commandNetworkID + "\nname: LAN\npurpose: gateway\nvlan: 10\nsubnet: 192.0.2.1/24\ndhcp_enabled: true\ndomain_name: example.test\nwan: false\n",
-			jsonWant:  `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","purpose":"gateway","vlan":10,"subnet":"192.0.2.1/24","dhcp_enabled":true,"domain_name":"example.test","wan":false}`,
+			humanWant: "id: " + commandNetworkID + "\nname: LAN\npurpose: gateway\nvlan: 10\nsubnet: 192.0.2.1/24\ndhcp_enabled: true\ndomain_name: example.test\nwan: false\nmdns_forwarding_enabled: true\n",
+			jsonWant:  `{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","purpose":"gateway","vlan":10,"subnet":"192.0.2.1/24","dhcp_enabled":true,"domain_name":"example.test","wan":false,"mdns_forwarding_enabled":true}`,
 		},
 		{
 			name: "wlan", run: func() error { return runWlanGet(commandWlanID) },
@@ -576,7 +591,7 @@ func TestStableReadEmptyOutputExactHumanAndJSONEnvelopes(t *testing.T) {
 		{name: "sites", resource: "site", action: "list", run: runSiteList, humanWant: "NAME  ID  DESC  ROLE\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{"/proxy/network/integration/v1/sites": `[]`}}},
 		{name: "devices", resource: "device", action: "list", run: runDeviceList, humanWant: "NAME  MAC  MODEL  TYPE  STATE  IP\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`}}},
 		{name: "clients", resource: "client", action: "list", run: runClientList, humanWant: "NAME  MAC  IP  NETWORK  ESSID  WIRED  BLOCKED\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/clients": `[]`}}},
-		{name: "networks", resource: "network", action: "list", run: runNetworkList, humanWant: "NAME  PURPOSE  VLAN  SUBNET  DHCP  WAN\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}}},
+		{name: "networks", resource: "network", action: "list", run: runNetworkList, humanWant: "NAME  PURPOSE  VLAN  SUBNET  DHCP  WAN  MDNS\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/networks": `[]`}}},
 		{name: "wlans", resource: "wlan", action: "list", run: runWlanList, humanWant: "NAME  ENABLED  SECURITY  NETWORK  BAND  GUEST\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/wifi/broadcasts": `[]`}}},
 		{name: "ports", resource: "port", action: "list", run: func() error { return runPortList("") }, humanWant: "DEVICE  PORT  NAME  MEDIA  SPEED  POE  ENABLED  PROFILE\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/devices": `[]`}}},
 		{name: "firewall", resource: "firewall", action: "list", run: runFirewallList, humanWant: "INDEX  NAME  ACTION  SOURCE ZONE  DESTINATION ZONE  PROTOCOL  ENABLED  ID\n", jsonData: `[]`, opts: commandServerOptions{officialCollections: map[string]string{sitePath + "/firewall/policies": `[]`}}},
@@ -890,4 +905,113 @@ func TestExpandedOfficialMutationPlansUseSchemaV1(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNetworkListShowsMDNSForwardingFromOfficialDetails(t *testing.T) {
+	srv := newCommandTestServer(t)
+	defer srv.Close()
+
+	useCommandTestRuntime(t, srv, true)
+	stdout, stderr, err := captureProcessOutput(t, runNetworkList)
+	if err != nil || stderr != "" {
+		t.Fatalf("JSON list: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	assertSchemaV1(t, stdout)
+	assertDecodedJSONEqual(t, stdout, `{"schema_version":"1","ok":true,"resource":"network","action":"list","data":[{"id":"cccccccc-cccc-4ccc-8ccc-ccccccccccc1","name":"LAN","purpose":"gateway","vlan":10,"subnet":"192.0.2.1/24","dhcp_enabled":true,"domain_name":"example.test","wan":false,"mdns_forwarding_enabled":true}],"meta":{"site":"default","dry_run":false}}`)
+
+	useCommandTestRuntime(t, srv, false)
+	stdout, stderr, err = captureProcessOutput(t, runNetworkList)
+	want := "NAME  PURPOSE  VLAN  SUBNET        DHCP  WAN    MDNS\nLAN   gateway  10    192.0.2.1/24  true  false  true\n"
+	if err != nil || stderr != "" || stdout != want {
+		t.Fatalf("human list: err=%v stdout=%q want %q stderr=%q", err, stdout, want, stderr)
+	}
+}
+
+func TestNetworkUpdateMDNSForwardingPlansAndAppliesOneField(t *testing.T) {
+	execute := func(argv ...string) func() error {
+		return func() error {
+			cmd := newNetworkUpdateCmd()
+			cmd.SilenceErrors, cmd.SilenceUsage = true, true
+			cmd.SetArgs(argv)
+			return cmd.Execute()
+		}
+	}
+
+	t.Run("plan changes only mDNS", func(t *testing.T) {
+		srv := newCommandTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		stdout, stderr, err := captureProcessOutput(t, execute(commandNetworkID, "--mdns-forwarding=false"))
+		if err != nil || stderr != "" {
+			t.Fatalf("plan: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+		}
+		assertSchemaV1(t, stdout)
+		var envelope struct {
+			Meta struct {
+				DryRun       bool `json:"dry_run"`
+				Experimental bool `json:"experimental"`
+			} `json:"meta"`
+			Plan struct {
+				Changes []struct {
+					ID     string         `json:"id"`
+					Before map[string]any `json:"before"`
+					After  map[string]any `json:"after"`
+				} `json:"changes"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil || len(envelope.Plan.Changes) != 1 {
+			t.Fatalf("plan JSON: err=%v stdout=%q", err, stdout)
+		}
+		change := envelope.Plan.Changes[0]
+		if !envelope.Meta.DryRun || !envelope.Meta.Experimental || change.ID != commandNetworkID ||
+			change.Before["mdns_forwarding_enabled"] != true || change.After["mdns_forwarding_enabled"] != false {
+			t.Fatalf("plan = %s", stdout)
+		}
+		for key, value := range change.Before {
+			if key != "mdns_forwarding_enabled" && !reflect.DeepEqual(change.After[key], value) {
+				t.Fatalf("plan changed %q: %#v -> %#v", key, value, change.After[key])
+			}
+		}
+	})
+
+	t.Run("apply requires experimental and force", func(t *testing.T) {
+		srv := newCommandTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes = true
+		stdout, _, err := captureProcessOutput(t, execute(commandNetworkID, "--mdns-forwarding=false"))
+		if err == nil || !strings.Contains(stdout, "experimental") {
+			t.Fatalf("without experimental: err=%v stdout=%q", err, stdout)
+		}
+		flagExperimental = true
+		stdout, _, err = captureProcessOutput(t, execute(commandNetworkID, "--mdns-forwarding=false"))
+		if err == nil || !strings.Contains(stdout, "safe_mode_blocked") {
+			t.Fatalf("without force: err=%v stdout=%q", err, stdout)
+		}
+	})
+
+	t.Run("apply verifies and get reports the new state", func(t *testing.T) {
+		srv := newCommandTestServer(t)
+		defer srv.Close()
+		useCommandTestRuntime(t, srv, true)
+		flagYes, flagExperimental, flagForce = true, true, true
+		stdout, stderr, err := captureProcessOutput(t, execute(commandNetworkID, "--mdns-forwarding=false"))
+		if err != nil || stderr != "audit: applied network update\n" {
+			t.Fatalf("apply: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+		}
+		assertSchemaV1(t, stdout)
+		var applied struct {
+			Data domain.Network `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &applied); err != nil ||
+			applied.Data.MDNSForwardingEnabled == nil || *applied.Data.MDNSForwardingEnabled {
+			t.Fatalf("apply data: err=%v stdout=%q", err, stdout)
+		}
+
+		useCommandTestRuntime(t, srv, false)
+		stdout, _, err = captureProcessOutput(t, func() error { return runNetworkGet(commandNetworkID) })
+		if err != nil || !strings.Contains(stdout, "mdns_forwarding_enabled: false\n") {
+			t.Fatalf("get after apply: err=%v stdout=%q", err, stdout)
+		}
+	})
 }

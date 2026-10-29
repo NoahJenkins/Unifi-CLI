@@ -97,14 +97,21 @@ func (s *ClientFixedIPService) Get(ctx context.Context, query string) (ClientFix
 }
 
 func (s *ClientFixedIPService) Set(ctx context.Context, query, fixedIP string) (plan.Plan, ClientFixedIPSnapshot, error) {
-	return s.prepare(ctx, query, fixedIP, true)
+	return s.prepare(ctx, query, fixedIP, "", true)
+}
+
+// SetOnNetwork plans a reservation on an explicitly selected legacy network.
+// The selector is required when the user record has no stored network ID and
+// must match the stored network when one exists.
+func (s *ClientFixedIPService) SetOnNetwork(ctx context.Context, query, fixedIP, network string) (plan.Plan, ClientFixedIPSnapshot, error) {
+	return s.prepare(ctx, query, fixedIP, network, true)
 }
 
 func (s *ClientFixedIPService) Clear(ctx context.Context, query string) (plan.Plan, ClientFixedIPSnapshot, error) {
-	return s.prepare(ctx, query, "", false)
+	return s.prepare(ctx, query, "", "", false)
 }
 
-func (s *ClientFixedIPService) prepare(ctx context.Context, query, fixedIP string, enable bool) (plan.Plan, ClientFixedIPSnapshot, error) {
+func (s *ClientFixedIPService) prepare(ctx context.Context, query, fixedIP, networkQuery string, enable bool) (plan.Plan, ClientFixedIPSnapshot, error) {
 	user, err := s.resolveUser(ctx, query)
 	if err != nil {
 		return plan.Plan{}, ClientFixedIPSnapshot{}, err
@@ -112,16 +119,17 @@ func (s *ClientFixedIPService) prepare(ctx context.Context, query, fixedIP strin
 	if err := validateFixedIPUserIdentity(user); err != nil {
 		return plan.Plan{}, ClientFixedIPSnapshot{}, err
 	}
-	if user.NetworkID == "" {
-		return plan.Plan{}, ClientFixedIPSnapshot{}, apperr.New(apperr.Conflict, "client fixed-IP user record has no network ID")
+	networkID, err := s.reservationNetworkID(ctx, user, networkQuery)
+	if err != nil {
+		return plan.Plan{}, ClientFixedIPSnapshot{}, err
 	}
-	network, err := s.getNetwork(ctx, user.NetworkID)
+	network, err := s.getNetwork(ctx, networkID)
 	if err != nil {
 		return plan.Plan{}, ClientFixedIPSnapshot{}, err
 	}
 
 	snapshot := ClientFixedIPSnapshot{
-		ClientID: user.ID, MAC: user.MAC, Name: user.Name, NetworkID: user.NetworkID,
+		ClientID: user.ID, MAC: user.MAC, Name: user.Name, NetworkID: networkID,
 		ReservationNetworkID: user.NetworkID,
 		FixedIPEnabled:       user.FixedIPEnabled, FixedIP: user.FixedIP,
 		Subnet: network.Subnet, DHCPEnabled: network.DHCPEnabled,
@@ -157,6 +165,64 @@ func (s *ClientFixedIPService) prepare(ctx context.Context, query, fixedIP strin
 	p := plan.Update("client", snapshot.ClientID, snapshot.Name,
 		fmt.Sprintf("%s fixed IP for client %s", action, snapshot.Name), before, after)
 	return p, snapshot, nil
+}
+
+// reservationNetworkID returns the legacy network that a set or clear binds
+// to. A stored user network is authoritative. Without one, the caller must
+// select the network, and a connected client must currently use it.
+func (s *ClientFixedIPService) reservationNetworkID(ctx context.Context, user clientFixedIPUser, networkQuery string) (string, error) {
+	if networkQuery == "" {
+		if user.NetworkID == "" {
+			return "", apperr.WithHint(
+				apperr.New(apperr.Conflict, "client fixed-IP user record has no network ID"),
+				"select the reservation network with --network <id|exact-name>",
+			)
+		}
+		return user.NetworkID, nil
+	}
+	selected, err := NewNetworkService(s.api).getLegacy(ctx, networkQuery)
+	if err != nil {
+		return "", err
+	}
+	if selected.ID == "" {
+		return "", apperr.New(apperr.Conflict, "selected client network has no immutable ID")
+	}
+	if user.NetworkID != "" {
+		if user.NetworkID != selected.ID {
+			return "", apperr.New(apperr.Conflict, "client fixed-IP user record belongs to a different network than --network")
+		}
+		return selected.ID, nil
+	}
+	if err := s.requireConnectedClientOnNetwork(ctx, user, selected); err != nil {
+		return "", err
+	}
+	return selected.ID, nil
+}
+
+// requireConnectedClientOnNetwork cross-checks an explicit network selection
+// against the client's current connection. An offline client has no current
+// address to compare, so the explicit selection and later subnet checks apply.
+func (s *ClientFixedIPService) requireConnectedClientOnNetwork(ctx context.Context, user clientFixedIPUser, selected Network) error {
+	clients, err := NewClientService(s.api).listLegacy(ctx)
+	if err != nil {
+		return err
+	}
+	for _, connected := range clients {
+		if resolve.NormalizeMAC(connected.MAC) != user.MAC {
+			continue
+		}
+		if connected.IP != "" {
+			addr, err := netip.ParseAddr(connected.IP)
+			prefix, prefixErr := netip.ParsePrefix(selected.Subnet)
+			if err != nil || !addr.Is4() || prefixErr != nil || !prefix.Addr().Is4() || !prefix.Contains(addr) {
+				return apperr.New(apperr.Conflict, "client's current IPv4 address is not inside the selected network subnet")
+			}
+		}
+		if connected.networkID != "" && connected.networkID != selected.ID {
+			return apperr.New(apperr.Conflict, "client is currently connected to a different network than --network")
+		}
+	}
+	return nil
 }
 
 func (s *ClientFixedIPService) listUsers(ctx context.Context) ([]clientFixedIPUser, error) {
@@ -232,7 +298,11 @@ func reservationFromUser(user clientFixedIPUser) ClientFixedIPReservation {
 }
 
 func (s *ClientFixedIPService) ApplySetPrepared(ctx context.Context, target plan.Target, id, fixedIP string) (ClientFixedIPReservation, error) {
-	_, snapshot, err := s.Set(ctx, id, fixedIP)
+	return s.ApplySetOnNetworkPrepared(ctx, target, id, fixedIP, "")
+}
+
+func (s *ClientFixedIPService) ApplySetOnNetworkPrepared(ctx context.Context, target plan.Target, id, fixedIP, network string) (ClientFixedIPReservation, error) {
+	_, snapshot, err := s.SetOnNetwork(ctx, id, fixedIP, network)
 	if err != nil {
 		return ClientFixedIPReservation{}, err
 	}
@@ -338,6 +408,15 @@ func (s *ClientFixedIPService) verify(ctx context.Context, snapshot ClientFixedI
 	if enabled && (strField(user, "network_id", "networkconf_id") != snapshot.NetworkID || strField(user, "fixed_ip") != fixedIP) {
 		return ClientFixedIPReservation{}, apperr.New(apperr.Conflict, "client fixed-IP verification failed: observed reservation differs from the request")
 	}
+	if enabled {
+		network, err := s.getNetwork(ctx, snapshot.NetworkID)
+		if err != nil {
+			return ClientFixedIPReservation{}, verificationError("client fixed-IP network could not be verified", err)
+		}
+		if network.Subnet != snapshot.Subnet || network.DHCPEnabled != snapshot.DHCPEnabled {
+			return ClientFixedIPReservation{}, apperr.New(apperr.Conflict, "client fixed-IP verification failed: observed network differs from the prepared network")
+		}
+	}
 	return ClientFixedIPReservation{
 		ClientID: snapshot.ClientID, MAC: snapshot.MAC, Name: snapshot.Name, NetworkID: snapshot.NetworkID,
 		FixedIPEnabled: enabled, FixedIP: fixedIP,
@@ -345,13 +424,12 @@ func (s *ClientFixedIPService) verify(ctx context.Context, snapshot ClientFixedI
 }
 
 func reservationFromSnapshot(snapshot ClientFixedIPSnapshot) ClientFixedIPReservation {
-	networkID := snapshot.NetworkID
+	// ReservationNetworkID is the stored user value; it is empty when the
+	// plan selects the network explicitly.
+	networkID := snapshot.ReservationNetworkID
 	fixedIP := ""
 	if snapshot.FixedIPEnabled {
 		fixedIP = snapshot.FixedIP
-		if snapshot.ReservationNetworkID != "" {
-			networkID = snapshot.ReservationNetworkID
-		}
 	}
 	return ClientFixedIPReservation{
 		ClientID: snapshot.ClientID, MAC: snapshot.MAC, Name: snapshot.Name, NetworkID: networkID,
