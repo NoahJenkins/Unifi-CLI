@@ -66,6 +66,12 @@ reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
 also exposes an [OpenAPI document](https://developer.ui.com/network/v10.4.57/openapi.json)
 used to derive synthetic fixtures and validation bounds.
 
+## Client platforms
+
+Release archives target darwin, linux, and windows on amd64 and arm64. The
+CLI is built with the Go version declared in `go.mod`. From Go 1.27, macOS
+binaries require macOS 13 Ventura or later.
+
 ## Surface compatibility
 
 | Surface | API and support |
