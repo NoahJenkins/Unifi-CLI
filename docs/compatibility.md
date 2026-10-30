@@ -77,6 +77,21 @@ reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
 also exposes an [OpenAPI document](https://developer.ui.com/network/v10.4.57/openapi.json)
 used to derive synthetic fixtures and validation bounds.
 
+## Local contract emulator evidence
+
+The test suite includes a stateful TLS emulator for firewall policy lifecycles
+and selected network/WLAN updates under explicit 10.4.57 and 10.6.109 profiles.
+See its [coverage manifest](../internal/testutil/contractapi/README.md). Offline
+Go rules cover the declared subset. The opt-in cached check validates against
+pinned public schemas plus a reviewed correction: their three named-protocol
+components have lowercase enums but uppercase discriminator mappings, so those
+three enums are corrected in memory to the mapping keys. Cached files remain
+unchanged and uncommitted.
+
+These results do not qualify live writes, explain every reported HTTP 400, or
+model undocumented constraints and real device/network effects. Non-DNS writes
+remain experimental; legacy endpoints are outside the emulator.
+
 ## Client platforms
 
 Release archives target darwin, linux, and windows on amd64 and arm64. The

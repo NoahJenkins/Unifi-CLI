@@ -65,6 +65,18 @@ changes must also exercise negative paths for credential leakage, redirect
 handling, target drift, gate ordering, verification mismatch, and no-retry
 behavior where applicable.
 
+## API contract emulator
+
+Changes to request builders, emulator behavior, contract rules, version profiles,
+or synthetic seeds require the explicit cached contract check for both pinned
+versions, in addition to the gates above. See the [coverage manifest and
+commands](internal/testutil/contractapi/README.md). Tests stay offline; the
+separate fetch script downloads only public, digest-pinned schemas into a
+gitignored cache. Never commit or upload those files. Record the tested commit,
+command, digests, and result without payloads. A missing cache is an incomplete
+check, not a pass. Cached results use the documented, reviewed correction for
+contradictory named-protocol enums and do not establish live qualification.
+
 ## Mutation invariants
 
 - No write applies without `--yes`; `--dry-run` always wins.
