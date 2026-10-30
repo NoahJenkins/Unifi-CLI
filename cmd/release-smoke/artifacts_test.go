@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,16 +22,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 func TestVerifyArtifactsAcceptsExactHardenedRelease(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	verifyReleaseFixture(t, fixture)
 }
 
 func TestVerifyArtifactsRejectsNonNativeBinaryThatDiffersFromTrustedBuild(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	var selected target
 	for _, candidate := range targets {
@@ -48,6 +52,7 @@ func TestVerifyArtifactsRejectsNonNativeBinaryThatDiffersFromTrustedBuild(t *tes
 }
 
 func TestVerifyArtifactsRejectsSourceContentNotInTrustedCommitManifest(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	entries := fixture.validSourceEntries()
 	entries[1].body = []byte("backdoored readme")
@@ -57,6 +62,7 @@ func TestVerifyArtifactsRejectsSourceContentNotInTrustedCommitManifest(t *testin
 }
 
 func TestVerifyArtifactsRejectsAlteredPlatformArchiveSupportFiles(t *testing.T) {
+	t.Parallel()
 	for _, selected := range []target{{goos: "linux", goarch: "amd64"}, {goos: "windows", goarch: "amd64"}} {
 		t.Run(selected.String(), func(t *testing.T) {
 			fixture := newReleaseFixture(t)
@@ -275,6 +281,7 @@ func TestNativeArtifactMustMatchTrustedBinaryWithoutExecution(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsNativeArchiveThatDiffersFromTrustedBuild(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	native := target{goos: runtime.GOOS, goarch: runtime.GOARCH}
 	trustedPath := fixture.trustedBinaryPath(native)
@@ -290,6 +297,7 @@ func TestVerifyArtifactsRejectsNativeArchiveThatDiffersFromTrustedBuild(t *testi
 }
 
 func TestVerifyArtifactsAcceptsPinnedToolOutputSnapshot(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	snapshot := materializePinnedOutputSnapshot(t, fixture)
 
@@ -336,6 +344,7 @@ func TestInspectCycloneDXSBOMAcceptsPinnedSyftFileComponent(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsPathsOutsideDist(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	archive := fixture.archiveArtifact(targets[0])
 	absolute := filepath.Join(fixture.dist, archive.Name)
@@ -373,6 +382,7 @@ func TestVerifyArtifactsRejectsPathsOutsideDist(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsWrongArchiveFilename(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	clone := fixture.clone(t)
 	clone.renameArchive(t, targets[0], "different_"+smokeVersion+"_darwin_amd64.tar.gz")
@@ -381,6 +391,7 @@ func TestVerifyArtifactsRejectsWrongArchiveFilename(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsWrongExpectedVersion(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -390,6 +401,7 @@ func TestVerifyArtifactsRejectsWrongExpectedVersion(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsInvalidSourceArchive(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	tests := map[string][]archiveEntry{
 		"empty": nil,
@@ -454,6 +466,7 @@ func TestInspectSourceArchiveAcceptsPinnedGoReleaserPAXHeader(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsSourceArchiveWithoutExactCommitBinding(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	core := fixture.validSourceEntries()
 	tests := map[string][]archiveEntry{
@@ -490,6 +503,7 @@ func TestVerifyArtifactsRejectsSourceArchiveWithoutExactCommitBinding(t *testing
 }
 
 func TestVerifyArtifactsRejectsInvalidArchiveLayout(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	target := nonNativeTarget()
 	root := fixture.archiveRoot(target)
@@ -557,6 +571,7 @@ func TestVerifyArtifactsRejectsInvalidArchiveLayout(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsInvalidWindowsZipLayout(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	target := target{goos: "windows", goarch: "amd64"}
 	root := fixture.archiveRoot(target)
@@ -604,6 +619,7 @@ func TestVerifyArtifactsRejectsInvalidWindowsZipLayout(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	target := targets[0]
 	tests := map[string]any{
@@ -700,6 +716,7 @@ func TestVerifyArtifactsRejectsMalformedOrUnrelatedSBOM(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsSBOMExecutableMismatch(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	currentTarget := target{goos: "windows", goarch: "amd64"}
 	other := target{goos: "linux", goarch: "arm64"}
@@ -759,6 +776,7 @@ func findFixtureFileComponent(t *testing.T, bom map[string]any) map[string]any {
 }
 
 func TestVerifyArtifactsRejectsInvalidMetadataRecord(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 
 	t.Run("duplicate", func(t *testing.T) {
@@ -785,6 +803,7 @@ func TestVerifyArtifactsRejectsInvalidMetadataRecord(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsAmbiguousTargetlessSBOMRecords(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 
 	t.Run("duplicate exact archive SBOM", func(t *testing.T) {
@@ -817,6 +836,7 @@ func TestVerifyArtifactsRejectsAmbiguousTargetlessSBOMRecords(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsInexactChecksumManifest(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	tests := map[string]func(*releaseFixture){
 		"missing": func(clone *releaseFixture) {
@@ -880,6 +900,7 @@ func TestVerifyArtifactsRejectsInexactChecksumManifest(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsUnexpectedArtifactRecord(t *testing.T) {
+	t.Parallel()
 	fixture := newReleaseFixture(t)
 	clone := fixture.clone(t)
 	clone.artifacts = append(clone.artifacts, artifact{Name: "unexpected.bin", Path: "unexpected.bin", Type: "File"})
@@ -978,21 +999,67 @@ func materializePinnedOutputSnapshot(t *testing.T, fixture *releaseFixture) pinn
 	return snapshot
 }
 
+// releaseFixtureBase holds one valid release fixture for the test process.
+// Cross-building all release targets dominates package time, so each test
+// receives a private deep copy instead of rebuilding identical binaries.
+var releaseFixtureBase struct {
+	sync.Mutex
+	root    string
+	fixture *releaseFixture
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if releaseFixtureBase.root != "" {
+		if err := os.RemoveAll(releaseFixtureBase.root); err != nil {
+			fmt.Fprintf(os.Stderr, "remove shared release fixture: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	os.Exit(code)
+}
+
 func newReleaseFixture(t *testing.T) *releaseFixture {
 	t.Helper()
+	releaseFixtureBase.Lock()
+	defer releaseFixtureBase.Unlock()
+	if releaseFixtureBase.fixture == nil {
+		if releaseFixtureBase.root == "" {
+			root, err := os.MkdirTemp("", "unifi-release-smoke-fixture-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			releaseFixtureBase.root = root
+		}
+		// A failed build leaves the base unset, so the next test retries it.
+		releaseFixtureBase.fixture = buildReleaseFixture(t, func() string {
+			dir, err := os.MkdirTemp(releaseFixtureBase.root, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		})
+	}
+	return releaseFixtureBase.fixture.deepCopy(t)
+}
+
+func buildReleaseFixture(t *testing.T, tempDir func() string) *releaseFixture {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	t.Cleanup(cancel)
+	defer cancel()
 	root, err := repositoryRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := &releaseFixture{
-		dist:            t.TempDir(),
+		dist:            tempDir(),
 		checksums:       make(map[string]string),
 		binaries:        make(map[target][]byte),
 		sbomInventories: make(map[target]map[sbomComponentIdentity]struct{}),
 	}
-	buildDir := t.TempDir()
+	buildDir := tempDir()
 	for _, target := range targets {
 		binaryPath := filepath.Join(buildDir, target.goos+"_"+target.goarch, target.executableName())
 		if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
@@ -1024,7 +1091,7 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 			Name: fixture.sbomName(target), Path: fixture.sbomName(target), Type: "SBOM",
 		})
 	}
-	fixture.trustedBinaries = t.TempDir()
+	fixture.trustedBinaries = tempDir()
 	for _, target := range targets {
 		path := fixture.trustedBinaryPath(target)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1036,7 +1103,7 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	}
 	sourceEntries := fixture.validSourceEntries()
 	fixture.replaceSource(t, sourceEntries)
-	fixture.trustedSourceManifest = filepath.Join(t.TempDir(), "source-manifest.json")
+	fixture.trustedSourceManifest = filepath.Join(tempDir(), "source-manifest.json")
 	writeFixtureSourceManifest(t, fixture.trustedSourceManifest, manifestForSourceEntries(t, fixture.sourceRoot(), sourceEntries))
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: fixture.sourceName(), Path: fixture.sourceName(), Type: "Source"})
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: "checksums.txt", Path: "checksums.txt", Type: "Checksum"})
@@ -1047,6 +1114,74 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	fixture.artifacts = append(fixture.artifacts, artifact{Name: "metadata.json", Path: "metadata.json", Type: "Metadata"})
 	fixture.writeMetadata(t)
 	return fixture
+}
+
+// deepCopy gives a test private copies of every file, directory, and map, so
+// a test can change trusted inputs without affecting the shared base.
+func (f *releaseFixture) deepCopy(t *testing.T) *releaseFixture {
+	t.Helper()
+	sbomInventories := make(map[target]map[sbomComponentIdentity]struct{}, len(f.sbomInventories))
+	for target, inventory := range f.sbomInventories {
+		sbomInventories[target] = maps.Clone(inventory)
+	}
+	copied := &releaseFixture{
+		dist:                  t.TempDir(),
+		artifacts:             slices.Clone(f.artifacts),
+		checksums:             maps.Clone(f.checksums),
+		binaries:              cloneFixtureBinaries(f.binaries),
+		trustedBinaries:       t.TempDir(),
+		trustedSourceManifest: filepath.Join(t.TempDir(), filepath.Base(f.trustedSourceManifest)),
+		sbomInventories:       sbomInventories,
+	}
+	copyFixtureTree(t, f.dist, copied.dist)
+	copyFixtureTree(t, f.trustedBinaries, copied.trustedBinaries)
+	copyFixtureFile(t, f.trustedSourceManifest, copied.trustedSourceManifest)
+	return copied
+}
+
+func copyFixtureTree(t *testing.T, source, destination string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		copiedPath := filepath.Join(destination, relative)
+		switch {
+		case entry.IsDir():
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			return os.MkdirAll(copiedPath, info.Mode().Perm())
+		case entry.Type().IsRegular():
+			copyFixtureFile(t, path, copiedPath)
+			return nil
+		default:
+			return fmt.Errorf("shared release fixture has non-regular entry %s", relative)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyFixtureFile(t *testing.T, source, destination string) {
+	t.Helper()
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, data, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *releaseFixture) clone(t *testing.T) *releaseFixture {
