@@ -63,6 +63,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Unit tests no longer inherit operator controller settings such as
+  `UNIFI_HOST`, `UNIFI_INSECURE`, or `UNIFI_IT`. Earlier, the documented
+  `UNIFI_IT=1 ./scripts/smoke.sh` live run failed in its unit-test stage
+  before it reached the controller. Test-only switches such as `UNIFI_RACE`
+  and `UNIFI_NATIVE_KEYRING_IT` are unchanged.
 - Firewall create and protocol update now send the official uppercase
   named-protocol discriminator (`TCP`, `UDP`, `ICMP`, or `ICMPV6`). Earlier
   builds sent lowercase names, which are not keys in the official 10.4.57 or
