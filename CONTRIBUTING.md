@@ -143,8 +143,9 @@ Actions secret `GO_TOOLCHAIN_PR_TOKEN` to a GitHub App installation token or
 a fine-grained personal access token with Contents and Pull requests write
 so CI starts without that approval. If the permission and the secret are both
 absent, the workflow reports the requirement and exits successfully. The
-retired controller is described in
-[Dependabot recovery](docs/maintainers/dependabot-recovery.md).
+retired Dependabot recovery controller was removed. See
+[Dependency updates](docs/maintainers/dependabot-recovery.md) for the current
+path and the leftover GitHub configuration.
 
 ## CI runner preparation
 
@@ -152,7 +153,7 @@ All CI, release, and dependency auto-merge workflows run on GitHub-hosted
 runners. The repository has no self-hosted runner pool.
 
 CI caches Go modules and build outputs through the existing pinned setup-go
-configuration and go.sum key. Node/Go setup stops after 3 minutes. CI Go jobs
+configuration and go.sum key. Go setup stops after 3 minutes. CI Go jobs
 and the six release jobs that use setup-go resolve project modules in a
 separate 5-minute step. The write-capable publisher keeps its single-shell
 security boundary and runs a 5-minute module-download command before its Go

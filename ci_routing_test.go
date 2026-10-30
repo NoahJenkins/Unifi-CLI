@@ -11,7 +11,7 @@ import (
 func TestCIJobsUseHostedRunners(t *testing.T) {
 	jobs := mapValue(t, readYAMLMap(t, ".github/workflows/ci.yml"), "jobs")
 	for id, want := range map[string]string{
-		"dependabot-policy": "ubuntu-latest", "vulnerability-scan": "ubuntu-latest", "fuzz": "ubuntu-latest",
+		"vulnerability-scan": "ubuntu-latest", "fuzz": "ubuntu-latest",
 		"test": "${{ matrix.os }}", "native-keyring": "${{ matrix.os }}",
 	} {
 		job := mapValue(t, jobs, id)
@@ -31,8 +31,8 @@ func TestCIJobsUseHostedRunners(t *testing.T) {
 			}
 		}
 	}
-	if len(jobs) != 5 {
-		t.Errorf("CI jobs = %d, want 5; add hosted-runner coverage for new jobs", len(jobs))
+	if len(jobs) != 4 {
+		t.Errorf("CI jobs = %d, want 4; add hosted-runner coverage for new jobs", len(jobs))
 	}
 }
 

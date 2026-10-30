@@ -11,6 +11,7 @@ Current user and contributor documentation lives at the repository root:
 - [`releases/v1.1.0.md`](releases/v1.1.0.md): current stable release notes
 - [`releases/v1.0.0.md`](releases/v1.0.0.md): first stable v1 release contract
 - [`maintainers/release-checklist.md`](maintainers/release-checklist.md): release and post-merge metadata gates
+- [`maintainers/dependabot-recovery.md`](maintainers/dependabot-recovery.md): dependency update workflows and leftover retired-controller settings
 
 The files under `docs/superpowers/` are dated design and implementation records. They explain how the project evolved, but they are not current setup instructions. In particular, the original username/password and cookie-session designs were superseded by API-key-only authentication.
 
