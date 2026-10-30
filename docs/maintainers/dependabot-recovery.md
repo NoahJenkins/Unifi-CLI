@@ -23,10 +23,9 @@ it, security-major updates stay open for manual review. See
 The custom Dependabot recovery and repair controller was the earlier merge
 path. Its scripts (`.github/scripts/`), agent prompts and validator image
 (`.github/opencode/`), the `Copilot runtime check` workflow, and the
-`Dependabot policy tests` CI job were removed in the pull request that removed
-the retired Dependabot controller. No workflow ran that code after the
-auto-merge workflow replaced it. Its design history stays in git history and
-`docs/superpowers/`.
+`Dependabot policy tests` CI job were removed in #64. No workflow ran that
+code after the auto-merge workflow replaced it in #53. Its design history
+stays in git history and `docs/superpowers/`.
 
 ## Leftover GitHub configuration
 
