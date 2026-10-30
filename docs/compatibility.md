@@ -12,7 +12,7 @@ UniFi cloud or Site Manager.
 | Earlier than 10.4.57 | Unsupported; required official schemas, discriminators, or endpoints can be absent or incompatible |
 | 10.4.57 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates. An earlier candidate passed read-only live checks and one A-record lifecycle |
 | 10.5.67 | Final v1 candidate passed all 19 configured read-only checks, with the empty DNS collection as one allowed `not_configured` result, and completed all seven disabled DNS policy lifecycles with exact baseline restoration. A later exact-filter firewall create request was rejected before creation; see the limitation below |
-| 10.6.109 | An operator-reported exact-filter firewall create returned `api.request.unknown-type-id` before creation. The published 10.6.109 protocol schemas match 10.4.57; the named-protocol casing fix below targets this rejection. Other surfaces have no recorded qualification on this version |
+| 10.6.109 | On 2026-10-29 the read-only live suite passed: 19 checks passed and the empty DNS collection returned the allowed `not_configured` result. An operator-reported exact-filter firewall create returned `api.request.unknown-type-id` before creation. The published 10.6.109 protocol schemas match 10.4.57; the named-protocol casing fix below targets this rejection. No write has been qualified on this version |
 | Later than 10.5.67 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
 
 Final live verification used a release-candidate executable from this branch.
@@ -60,6 +60,17 @@ mapping keys. The CLI now sends the uppercase names. The controller reported
 the parent `type` path, so this cause is supported by the schema but is not yet
 confirmed by a successful live create. For `unknown-type-id` only, the CLI now
 keeps the rejected single-case schema token in the sanitized message.
+
+On 2026-10-29, a read-only inspection of the existing firewall policies on the
+same 10.6.109 controller found every named protocol stored as an uppercase
+`NAMED_PROTOCOL` name (`TCP`, `UDP`, `ICMP`, or `ICMPV6`). Existing policies
+also used the complete exact-filter document shape that the CLI sends: one
+`IP_ADDRESS` or `SUBNET` source item, one `IP_ADDRESS` destination item with
+one `PORT_NUMBER` port filter, a `NAMED_PROTOCOL` `TCP` filter, and action
+`ALLOW`. This read-only evidence supports the casing fix. It does not replace
+a successful create, which still requires a sacrificial controller. The
+inspection recorded only type names and counts; no identifiers, addresses, or
+payloads were kept.
 
 The schema target is Ubiquiti's [UniFi Network 10.4.57 API
 reference](https://developer.ui.com/network/v10.4.57). Upstream documentation
@@ -114,8 +125,9 @@ fails the entire command when any required detail fails.
   schema and is covered by reduced synthetic fixtures and repository tests.
   Network 10.5.67 and 10.6.109 rejected operator-reported attempts before
   creation. Those builds sent lowercase named-protocol discriminators; the
-  current build sends the official uppercase names. A successful live create
-  has not yet confirmed this fix. It remains without sacrificial-controller
+  current build sends the official uppercase names. Read-only inspection of
+  existing 10.6.109 policies found the same document shape. A successful live
+  create has not yet confirmed this fix. It remains without sacrificial-controller
   live qualification. The
   source-subnet variant has the same status: it is derived from the official
   10.4.57 schema, it has no 10.5.67 schema evidence, and no live write was run.
