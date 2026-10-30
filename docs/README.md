@@ -7,8 +7,9 @@ Current user and contributor documentation lives at the repository root:
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md): contribution and verification workflow
 - [`CHANGELOG.md`](../CHANGELOG.md): release-contract history
 - [`compatibility.md`](compatibility.md): controller version and API support status
-- [`releases/v1.0.0-rc.2.md`](releases/v1.0.0-rc.2.md): current RC release notes and user checklist
-- [`releases/v1.0.0.md`](releases/v1.0.0.md): stable v1 release contract
+- [`releases/v1.1.0-rc.1.md`](releases/v1.1.0-rc.1.md): current release candidate notes
+- [`releases/v1.1.0.md`](releases/v1.1.0.md): current stable release notes
+- [`releases/v1.0.0.md`](releases/v1.0.0.md): first stable v1 release contract
 - [`maintainers/release-checklist.md`](maintainers/release-checklist.md): release and post-merge metadata gates
 
 The files under `docs/superpowers/` are dated design and implementation records. They explain how the project evolved, but they are not current setup instructions. In particular, the original username/password and cookie-session designs were superseded by API-key-only authentication.

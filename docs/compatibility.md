@@ -2,7 +2,7 @@
 
 ## Supported target
 
-`v1.0.0` targets the official local UniFi Network integration API in
+The 1.x releases target the official local UniFi Network integration API in
 **UniFi Network 10.4.57 and newer**. It connects directly to
 `https://<host>:<port>/proxy/network/integration/v1`; it does not require the
 UniFi cloud or Site Manager.
