@@ -14,9 +14,11 @@ Two workflows handle dependency updates:
 
 The advisory lookup for security-major module updates needs the Dependabot
 secret `DEPENDABOT_METADATA_TOKEN` (Settings → Secrets and variables →
-Dependabot, not an Actions secret). This secret is currently not set. Without
-it, security-major updates stay open for manual review. See
-[CONTRIBUTING.md](../../CONTRIBUTING.md) for the full policy.
+Dependabot, not an Actions secret). Since 2026-10-30 it holds a fine-grained
+personal access token limited to this repository with read-only Dependabot
+alerts access. When the token expires or is removed, security-major updates
+stay open for manual review. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for
+the full policy.
 
 ## Retired recovery controller
 
@@ -27,18 +29,12 @@ path. Its scripts (`.github/scripts/`), agent prompts and validator image
 code after the auto-merge workflow replaced it in #53. Its design history
 stays in git history and `docs/superpowers/`.
 
-## Leftover GitHub configuration
+## Retired GitHub configuration
 
-The removal does not change repository settings. After the removal merges, the
-owner can remove this configuration, because no workflow reads it:
-
-- Repository variables `DEPENDABOT_AGENT_ENABLED`,
-  `DEPENDABOT_AUTOMATION_ENABLED`, `DEPENDABOT_CONTROLLER_APP_ID`, and
-  `DEPENDABOT_STATE_ISSUE_NUMBER`.
-- Environments `dependabot-controller` and `dependabot-dispatch`. The
-  `dependabot-dispatch` environment still holds the `COPILOT_GITHUB_TOKEN`
-  secret. Revoke the token at its source when you delete it.
-- State issue #47.
-- The dedicated GitHub App installation for the controller.
-- `Dependabot Merge Gate`, if it is still a required check in the main ruleset.
-  Workflow changes cannot edit rulesets.
+On 2026-10-30, after #64 merged, the owner removed the controller's repository
+configuration: the four `DEPENDABOT_*` repository variables, the
+`dependabot-controller` and `dependabot-dispatch` environments and their
+secrets, state issue #47, and the dedicated GitHub App installation on this
+repository. `Dependabot Merge Gate` was not a required check. The App
+registration itself is not installed anywhere and can be deleted in the
+owner's GitHub developer settings.
