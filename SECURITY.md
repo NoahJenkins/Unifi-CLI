@@ -8,8 +8,7 @@
 | Latest release candidate | Supported until superseded by stable or a newer candidate |
 | Older RCs, older 1.x minors, and development commits | Not supported after a newer supported release is available |
 
-Before `v1.0.0` is published, only the active release candidate under review
-receives fixes. Security fixes can be released without advance public
+Security fixes can be released without advance public
 disclosure when disclosure would put users at risk.
 
 ## Report a vulnerability privately

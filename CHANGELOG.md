@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0-rc.1] - 2026-10-30
+
+See [`v1.1.0-rc.1` release notes](docs/releases/v1.1.0-rc.1.md).
+
 ### Added
 
 - Experimental `client fixed-ip set --network <id|exact-name>` selects the

@@ -26,7 +26,7 @@ and limits.
 After the stable tag is published:
 
 ```bash
-go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0
+go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.1.0
 unifi --version
 unifi version --json
 ```
@@ -648,7 +648,7 @@ Windows Credential Manager, and Linux Secret Service.
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 See [CHANGELOG.md](CHANGELOG.md), [Compatibility](docs/compatibility.md), and
-the [`v1.0.0` release notes](docs/releases/v1.0.0.md).
+the [`v1.1.0` release notes](docs/releases/v1.1.0.md).
 
 ## License
 
