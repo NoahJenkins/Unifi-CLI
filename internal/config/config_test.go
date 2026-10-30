@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/noahjenkins/unifi-cli/internal/config"
 )
@@ -318,6 +320,176 @@ func TestLoadRejectsConflictingTLSSettings(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "ca_cert") || !strings.Contains(err.Error(), "insecure") {
 				t.Fatalf("conflict error = %q, want ca_cert and insecure", err)
+			}
+		})
+	}
+}
+
+func TestDefaultPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	t.Setenv("UNIFI_CONFIG", "")
+	if got, want := config.DefaultPath(), filepath.Join(home, ".config", "unifi-cli", "config.yaml"); got != want {
+		t.Fatalf("DefaultPath() = %q, want %q", got, want)
+	}
+	override := filepath.Join(home, "override.yaml")
+	t.Setenv("UNIFI_CONFIG", override)
+	if got := config.DefaultPath(); got != override {
+		t.Fatalf("DefaultPath() = %q, want UNIFI_CONFIG %q", got, override)
+	}
+}
+
+func TestLoadEmptyPathUsesDefaultPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("host: controller.example\nsite: lab\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UNIFI_CONFIG", path)
+	t.Setenv("UNIFI_HOST", "")
+	t.Setenv("UNIFI_SITE", "")
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Host != "controller.example" || cfg.Site != "lab" {
+		t.Fatalf("Load(\"\") did not read UNIFI_CONFIG: %+v", cfg)
+	}
+}
+
+func clearConfigEnvironment(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"UNIFI_HOST", "UNIFI_CA_CERT", "UNIFI_SITE", "UNIFI_PORT", "UNIFI_INSECURE", "UNIFI_SAFE_MODE", "UNIFI_TIMEOUT", "UNIFI_USERNAME", "UNIFI_PASSWORD"} {
+		t.Setenv(name, "")
+	}
+}
+
+func TestLoadMissingFileUsesSafeDefaults(t *testing.T) {
+	clearConfigEnvironment(t)
+	t.Setenv("UNIFI_HOST", "controller.example")
+
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := config.Config{Host: "controller.example", Port: 443, Site: "default", SafeMode: true, Timeout: 30 * time.Second}
+	if cfg != want {
+		t.Fatalf("Load defaults = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestLoadRequiresHost(t *testing.T) {
+	clearConfigEnvironment(t)
+	_, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "host is required") {
+		t.Fatalf("Load error = %v, want host-required failure", err)
+	}
+}
+
+func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
+	clearConfigEnvironment(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := "host: controller.example\nport: 443\nsafe_mode: true\ntimeout: 30s\nca_cert: /tmp/file-ca.pem\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UNIFI_PORT", "8443")
+	t.Setenv("UNIFI_SAFE_MODE", "false")
+	t.Setenv("UNIFI_TIMEOUT", "5s")
+	t.Setenv("UNIFI_CA_CERT", "/tmp/env-ca.pem")
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Port != 8443 || cfg.SafeMode || cfg.Timeout != 5*time.Second || cfg.CACert != "/tmp/env-ca.pem" {
+		t.Fatalf("environment overrides were not applied: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidNumericEnvironmentOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("host: controller.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct{ env, value string }{
+		{env: "UNIFI_PORT", value: "https"},
+		{env: "UNIFI_TIMEOUT", value: "thirty"},
+	} {
+		t.Run(tt.env, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			t.Setenv(tt.env, tt.value)
+			_, err := config.Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.env) {
+				t.Fatalf("Load error = %v, want failure naming %s", err, tt.env)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsMalformedYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+	}{
+		{name: "syntax", contents: "host: [\n"},
+		{name: "wrong field type", contents: "host: controller.example\nport: https\n"},
+		{name: "malformed trailing document", contents: "host: controller.example\n---\nhost: [\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.Load(path)
+			if err == nil || !strings.Contains(err.Error(), "parse config") {
+				t.Fatalf("Load error = %v, want parse failure", err)
+			}
+		})
+	}
+}
+
+func TestLoadReportsUnreadableConfigPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reports a file path component as not found")
+	}
+	clearConfigEnvironment(t)
+	t.Setenv("UNIFI_HOST", "controller.example")
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, []byte("host: controller.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := config.Load(filepath.Join(parent, "config.yaml")); err == nil {
+		t.Fatal("Load treated an unreadable config path as a missing file")
+	}
+}
+
+func TestValidateHost(t *testing.T) {
+	longLabel := strings.Repeat("a", 64)
+	longName := strings.Repeat("a.", 127) + "aa"
+	valid := []string{"controller", "controller.example", "controller.example.", "unifi-1.example", "192.0.2.10", "2001:db8::10", strings.Repeat("a", 63) + ".example"}
+	for _, host := range valid {
+		t.Run("valid "+host, func(t *testing.T) {
+			cfg := config.Config{Host: host, Port: 443, Timeout: time.Second}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate(%q): %v", host, err)
+			}
+		})
+	}
+
+	invalid := []string{"", ".", "controller..example", "-controller.example", "controller-.example", "controller_1.example", "contröller.example", longLabel + ".example", longName}
+	for _, host := range invalid {
+		t.Run("invalid "+host, func(t *testing.T) {
+			cfg := config.Config{Host: host, Port: 443, Timeout: time.Second}
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "host") {
+				t.Fatalf("Validate(%q) error = %v, want host failure", host, err)
 			}
 		})
 	}

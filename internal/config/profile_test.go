@@ -204,3 +204,177 @@ func TestResolveSelectionUsesDefaultWithoutMarker(t *testing.T) {
 		t.Fatalf("ResolveSelection = %+v, want path=%q", got, want)
 	}
 }
+
+func TestNewProfileStoreDefaultsToHomeConfigDirectory(t *testing.T) {
+	explicitHome := t.TempDir()
+	store := config.NewProfileStore(config.ProfileOptions{HomeDir: explicitHome})
+	if got, want := store.DefaultConfigPath(), filepath.Join(explicitHome, ".config", "unifi-cli", "config.yaml"); got != want {
+		t.Fatalf("DefaultConfigPath() = %q, want %q", got, want)
+	}
+
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	store = config.NewProfileStore(config.ProfileOptions{})
+	if got, want := store.MarkerPath(), filepath.Join(userHome, ".config", "unifi-cli", "current-profile"); got != want {
+		t.Fatalf("MarkerPath() = %q, want %q", got, want)
+	}
+}
+
+func TestProfileStoreRejectsInvalidProfileNames(t *testing.T) {
+	configHome := t.TempDir()
+	store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+	for _, name := range []string{"", "../escape", "home/lab"} {
+		if _, err := store.ProfilePath(name); err == nil {
+			t.Errorf("ProfilePath(%q) unexpectedly succeeded", name)
+		}
+		if _, _, err := store.Show(name); err == nil {
+			t.Errorf("Show(%q) unexpectedly succeeded", name)
+		}
+		if err := store.Select(name); err == nil {
+			t.Errorf("Select(%q) unexpectedly succeeded", name)
+		}
+	}
+	if _, err := os.Stat(store.MarkerPath()); !os.IsNotExist(err) {
+		t.Fatalf("invalid selection wrote a marker or stat failed: %v", err)
+	}
+}
+
+func TestProfileStoreRejectsMissingAndNonRegularProfiles(t *testing.T) {
+	configHome := t.TempDir()
+	profilesDir := filepath.Join(configHome, "profiles")
+	if err := os.MkdirAll(filepath.Join(profilesDir, "folder.yaml"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+
+	if _, _, err := store.Show("missing"); err == nil || !strings.Contains(err.Error(), "inspect profile") {
+		t.Fatalf("Show(missing) error = %v, want inspect failure", err)
+	}
+	if err := store.Select("missing"); err == nil {
+		t.Fatal("Select(missing) unexpectedly succeeded")
+	}
+	if _, _, err := store.Show("folder"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("Show(folder) error = %v, want regular-file failure", err)
+	}
+	if err := store.Select("folder"); err == nil {
+		t.Fatal("Select(folder) unexpectedly succeeded")
+	}
+	if _, err := os.Stat(store.MarkerPath()); !os.IsNotExist(err) {
+		t.Fatalf("failed selection wrote a marker or stat failed: %v", err)
+	}
+}
+
+func TestProfileStoreListHandlesMissingDirectoryAndOtherFiles(t *testing.T) {
+	configHome := t.TempDir()
+	store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+	profiles, err := store.List()
+	if err != nil || profiles == nil || len(profiles) != 0 {
+		t.Fatalf("List without profiles directory = %#v, %v; want empty list", profiles, err)
+	}
+
+	profilesDir := filepath.Join(configHome, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"home.yaml":    "host: 192.0.2.10\n",
+		"notes.txt":    "not a profile\n",
+		"backup.yml":   "host: 192.0.2.11\n",
+		"invalid.yaml": "host: 192.0.2.12\nport: 0\n",
+	} {
+		if err := os.WriteFile(filepath.Join(profilesDir, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profiles, err = store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(profiles) != 2 || profiles[0].Name != "home" || !profiles[0].Valid || profiles[1].Name != "invalid" || profiles[1].Valid || profiles[1].Error == "" {
+		t.Fatalf("unexpected profiles: %+v", profiles)
+	}
+}
+
+func TestProfileStoreListReportsMarkerAndDirectoryErrors(t *testing.T) {
+	t.Run("malformed marker", func(t *testing.T) {
+		configHome := t.TempDir()
+		if err := os.WriteFile(filepath.Join(configHome, "current-profile"), []byte("home"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+		if _, err := store.List(); err == nil || !strings.Contains(err.Error(), "trailing newline") {
+			t.Fatalf("List error = %v, want marker failure", err)
+		}
+	})
+
+	t.Run("profiles path is a file", func(t *testing.T) {
+		configHome := t.TempDir()
+		if err := os.WriteFile(filepath.Join(configHome, "profiles"), []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+		if _, err := store.List(); err == nil || !strings.Contains(err.Error(), "list profiles") {
+			t.Fatalf("List error = %v, want directory failure", err)
+		}
+	})
+}
+
+func TestProfileStoreSelectedRejectsUnsafeMarkers(t *testing.T) {
+	t.Run("directory", func(t *testing.T) {
+		configHome := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(configHome, "current-profile"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+		if _, _, err := store.Selected(); err == nil || !strings.Contains(err.Error(), "read selected profile") {
+			t.Fatalf("Selected error = %v, want read failure", err)
+		}
+	})
+
+	t.Run("symbolic link", func(t *testing.T) {
+		configHome := t.TempDir()
+		target := filepath.Join(configHome, "target")
+		if err := os.WriteFile(target, []byte("home\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(configHome, "current-profile")); err != nil {
+			t.Skipf("symbolic links unavailable: %v", err)
+		}
+		store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+		if _, _, err := store.Selected(); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Fatalf("Selected error = %v, want symbolic-link rejection", err)
+		}
+	})
+
+	for _, contents := range []string{"home", "\n"} {
+		t.Run("contents "+strings.ReplaceAll(contents, "\n", "newline"), func(t *testing.T) {
+			configHome := t.TempDir()
+			if err := os.WriteFile(filepath.Join(configHome, "current-profile"), []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+			if _, _, err := store.Selected(); err == nil {
+				t.Fatalf("Selected unexpectedly accepted %q", contents)
+			}
+		})
+	}
+}
+
+func TestResolveSelectionRejectsInvalidProfileAndMarker(t *testing.T) {
+	t.Setenv("UNIFI_CONFIG", "")
+	t.Setenv("UNIFI_PROFILE", "")
+
+	configHome := t.TempDir()
+	store := config.NewProfileStore(config.ProfileOptions{ConfigHome: configHome})
+	if _, err := config.ResolveSelection("", "../escape", store); err == nil {
+		t.Fatal("ResolveSelection accepted an invalid profile name")
+	}
+
+	if err := os.WriteFile(filepath.Join(configHome, "current-profile"), []byte("../escape\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.ResolveSelection("", "", store); err == nil || !strings.Contains(err.Error(), "marker is invalid") {
+		t.Fatalf("ResolveSelection error = %v, want invalid-marker failure", err)
+	}
+}
