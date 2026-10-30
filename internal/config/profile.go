@@ -153,6 +153,10 @@ func (s *ProfileStore) List() ([]ProfileInfo, error) {
 	}
 	entries, err := os.ReadDir(s.ProfilesDir())
 	if errors.Is(err, os.ErrNotExist) {
+		// Windows reports a non-directory profiles path as not found.
+		if _, statErr := os.Lstat(s.ProfilesDir()); statErr == nil {
+			return nil, fmt.Errorf("list profiles: %s is not a directory", s.ProfilesDir())
+		}
 		return []ProfileInfo{}, nil
 	}
 	if err != nil {
