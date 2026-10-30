@@ -1,8 +1,13 @@
 # Maintainer release checklist
 
-This checklist covers `v1.0.0-rc.4` qualification and unchanged-source
-promotion to `v1.0.0`. Documentation work must
-not mutate GitHub, tag a commit, publish a release, or contact a controller.
+Use this checklist for each release. `vX.Y.Z-rc.N` is a release candidate,
+and `vX.Y.Z` is the stable release that promotes an unchanged candidate
+commit. Copy the checklist into the release pull request or tracking notes
+and record evidence there. Documentation work must not mutate GitHub, tag a
+commit, publish a release, or contact a controller.
+
+Release notes live in `docs/releases/<tag>.md`. Each version moves the
+`[Unreleased]` section of `CHANGELOG.md` to a dated version heading.
 
 ## Pre-merge
 
@@ -10,12 +15,12 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       exports, controller payloads, live identifiers, generated reports, or
       binaries.
 - [ ] Confirm the exact unofficial-project disclaimer appears in README, root
-      CLI help, and RC release notes.
+      CLI help, and the candidate release notes.
 - [ ] Run formatting, vet, full unit, race, coverage, vulnerability, link,
       Markdown link/command, help, version, and schema checks.
 - [ ] Run every fuzz target for 30 seconds and run
       `UNIFI_RELEASE_HOST=1 ./scripts/check-performance.sh` on the designated
-      darwin/arm64 host. Record the three-sample medians in the RC.4 notes.
+      darwin/arm64 host. Record the three-sample medians in the candidate release notes.
 - [ ] Run the native keyring round trip on macOS, Windows, and Linux Secret
       Service. Confirm each unique synthetic entry was deleted.
 - [ ] Run `go test . -run Release -count=1` to lint the GoReleaser and release
@@ -26,8 +31,8 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       `--ruleset`, network-write `--purpose`, or false stable non-DNS mutation
       claim.
 - [ ] Review [Compatibility](../compatibility.md),
-      [SECURITY.md](../../SECURITY.md), and the [RC release
-      notes](../releases/v1.0.0-rc.4.md).
+      [SECURITY.md](../../SECURITY.md), the `CHANGELOG.md` version section, and
+      the candidate release notes in `docs/releases/`.
 
 ## Release gates
 
@@ -97,16 +102,16 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       all reported SHA-1/SHA-256 values, and an exact library/version inventory
       derived from each independently built trusted binary. Reject unrelated
       file claims and setuid, setgid, and sticky archive entries.
-- [x] Run the authenticated read-only live suite with verified TLS, or record
+- [ ] Run the authenticated read-only live suite with verified TLS, or record
       the explicit `insecure: true` compatibility exception when the authorized
       local controller has a self-signed certificate.
-- [x] Record the actual UniFi Network version used. If 10.4.57 is not tested,
+- [ ] Record the actual UniFi Network version used. If 10.4.57 is not tested,
       leave its compatibility status explicitly unverified.
-- [x] After separate explicit approval, run disabled and uniquely named
+- [ ] After separate explicit approval, run disabled and uniquely named
       lifecycles for A, AAAA, CNAME, MX, TXT, SRV, and forwarded-domain DNS
       policies. Capture every created ID, delete only those IDs, and prove the
       exact baseline is restored.
-- [x] Do not run non-DNS mutations unless a separate dedicated sacrificial
+- [ ] Do not run non-DNS mutations unless a separate dedicated sacrificial
       controller with disposable configuration is available and explicitly
       approved. Never use a production-like controller.
 
@@ -121,21 +126,22 @@ not mutate GitHub, tag a commit, publish a release, or contact a controller.
       account.
 - [ ] Verify the protected `release` environment requires the configured
       manual approval and that only the publisher job has write authority.
-- [ ] Create and verify the account-controlled `v1.0.0-rc.4` tag on the unchanged protected
-      main commit. Confirm the workflow publishes that exact verified draft.
+- [ ] Create and verify the account-controlled `vX.Y.Z-rc.N` tag on the
+      unchanged protected main commit. Approve the `release` environment
+      deployment only after the verify, smoke, and attest jobs pass. Confirm
+      the workflow publishes that exact verified draft.
 - [ ] Verify downloaded release artifacts and
-      `go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.0.0-rc.4`.
-- [ ] Confirm the tagged source install reports `v1.0.0-rc.4` while `commit`
+      `go install github.com/noahjenkins/unifi-cli/cmd/unifi@vX.Y.Z-rc.N`.
+- [ ] Confirm the tagged source install reports `vX.Y.Z-rc.N` while `commit`
       and `build_date` remain `unknown`. Confirm verified archives report
       authoritative full metadata and have matching checksums, CycloneDX SBOMs,
       and provenance.
-- [ ] If every RC.4 gate passes, create account-controlled `v1.0.0` on the same unchanged
-      source commit. Verify `prerelease=false`, stable notes, installations,
+- [ ] If every candidate gate passes, create account-controlled `vX.Y.Z` on
+      the same unchanged source commit with stable release notes in
+      `docs/releases/vX.Y.Z.md`. Stable notes must name the exact candidate
+      they promote. Verify `prerelease=false`, stable notes, installations,
       checksums, SBOMs, provenance, and final remote tag/rule state.
 - [ ] Update compatibility/release notes only with evidence actually produced.
-- [ ] Set the GitHub repository description to this exact text:
+- [ ] Confirm the GitHub repository description is still this exact text:
 
   `Unofficial CLI for safely managing local UniFi Network controllers. Not affiliated with or endorsed by Ubiquiti.`
-
-- [ ] Recheck the GitHub description after saving it. This provider mutation
-      must not happen during local candidate verification.
