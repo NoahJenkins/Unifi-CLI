@@ -2,3 +2,4 @@
 .superpowers/
 /dist/
 /unifi
+/.cache/unifi-openapi/
