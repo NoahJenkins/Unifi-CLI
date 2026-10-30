@@ -44,10 +44,12 @@ All notable changes to this project are documented here. The format follows
   `mdns_forwarding_enabled`, and schema-v1 network data adds the optional
   `mdns_forwarding_enabled` boolean.
 
-- The minimum Go toolchain is 1.26.10 to include the October 2026 standard-library
-  security fixes, including GO-2026-6809 in `crypto/x509`. CI and release builds
-  use the version declared in `go.mod`. The isolated repair validator uses the
-  same patched toolchain in its immutable container image.
+- The minimum Go toolchain is 1.27.3. It includes the October 2026
+  standard-library security fixes, including GO-2026-6809 in `crypto/x509`. CI
+  and release builds use the version declared in `go.mod`. The isolated repair
+  validator uses the same patched toolchain in its immutable container image.
+  Go 1.27 requires macOS 13 Ventura or later, so macOS release binaries no
+  longer run on macOS 12 Monterey.
 
 - Firewall create now verifies the returned immutable policy ID by reading
   that exact policy and comparing the complete security scope. Schema-v1
