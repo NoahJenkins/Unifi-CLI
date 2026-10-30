@@ -45,6 +45,12 @@ func union(key string, branches map[string]*rule) *rule {
 	return &rule{kind: "object", key: key, branches: branches}
 }
 
+// singleBranch declares a partial discriminator union. Other branches are
+// outside coverage, not invalid instances of the one branch modeled here.
+func singleBranch(key, value string, r *rule) *rule {
+	return union(key, map[string]*rule{value: r})
+}
+
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func uuid() *rule { return &rule{kind: "uuid"} }
@@ -66,6 +72,13 @@ func (r *rule) check(v any, path string) error {
 			}
 			branch := r.branches[key]
 			if branch == nil {
+				// A differently cased modeled key is a known contract error.
+				// Do not normalize it into an accepted branch.
+				for modeled := range r.branches {
+					if strings.EqualFold(key, modeled) {
+						return fail()
+					}
+				}
 				return &CoverageError{path + "/" + r.key}
 			}
 			return branch.check(o, path)
@@ -211,11 +224,11 @@ func firewallRule() *rule {
 		"ALLOW": obj("type allowReturnTraffic", map[string]*rule{"type": str("ALLOW"), "allowReturnTraffic": boolean()}),
 		"BLOCK": obj("type", map[string]*rule{"type": str("BLOCK")}), "REJECT": obj("type", map[string]*rule{"type": str("REJECT")})})
 	address := union("type", map[string]*rule{"IP_ADDRESS": obj("type value", map[string]*rule{"type": str("IP_ADDRESS"), "value": str()}), "SUBNET": obj("type value", map[string]*rule{"type": str("SUBNET"), "value": str()})})
-	ips := obj("type matchOpposite items", map[string]*rule{"type": str("IP_ADDRESSES"), "matchOpposite": boolean(), "items": list(address, 1, math.MaxInt32, true)})
-	port := obj("type value", map[string]*rule{"type": str("PORT_NUMBER"), "value": number(1, 65535)})
-	ports := obj("type matchOpposite items", map[string]*rule{"type": str("PORTS"), "matchOpposite": boolean(), "items": list(port, 1, math.MaxInt32, true)})
+	ips := singleBranch("type", "IP_ADDRESSES", obj("type matchOpposite items", map[string]*rule{"type": str("IP_ADDRESSES"), "matchOpposite": boolean(), "items": list(address, 1, math.MaxInt32, true)}))
+	port := singleBranch("type", "PORT_NUMBER", obj("type value", map[string]*rule{"type": str("PORT_NUMBER"), "value": number(1, 65535)}))
+	ports := singleBranch("type", "PORTS", obj("type matchOpposite items", map[string]*rule{"type": str("PORTS"), "matchOpposite": boolean(), "items": list(port, 1, math.MaxInt32, true)}))
 	endpoint := func() *rule {
-		return obj("zoneId", map[string]*rule{"zoneId": uuid(), "trafficFilter": obj("type ipAddressFilter", map[string]*rule{"type": str("IP_ADDRESS"), "ipAddressFilter": ips, "portFilter": ports})})
+		return obj("zoneId", map[string]*rule{"zoneId": uuid(), "trafficFilter": singleBranch("type", "IP_ADDRESS", obj("type ipAddressFilter", map[string]*rule{"type": str("IP_ADDRESS"), "ipAddressFilter": ips, "portFilter": ports}))})
 	}
 	scopes := map[string]*rule{}
 	for _, ip := range []string{"IPV4", "IPV6", "IPV4_AND_IPV6"} {
@@ -226,8 +239,12 @@ func firewallRule() *rule {
 		if ip == "IPV6" {
 			names = append(names, "ICMPV6")
 		}
+		protocols := map[string]*rule{}
+		for _, name := range names {
+			protocols[name] = obj("name", map[string]*rule{"name": str(name)})
+		}
 		filter := union("type", map[string]*rule{
-			"NAMED_PROTOCOL": obj("type protocol matchOpposite", map[string]*rule{"type": str("NAMED_PROTOCOL"), "matchOpposite": boolean(), "protocol": obj("name", map[string]*rule{"name": str(names...)})}),
+			"NAMED_PROTOCOL": obj("type protocol matchOpposite", map[string]*rule{"type": str("NAMED_PROTOCOL"), "matchOpposite": boolean(), "protocol": union("name", protocols)}),
 			"PRESET":         obj("type preset", map[string]*rule{"type": str("PRESET"), "preset": obj("name", map[string]*rule{"name": str("TCP_UDP")})})})
 		scopes[ip] = obj("ipVersion", map[string]*rule{"ipVersion": str(ip), "protocolFilter": filter})
 	}
@@ -244,7 +261,7 @@ func networkRule() *rule {
 		if mode != "UNMANAGED" {
 			ipv4 := obj("autoScaleEnabled hostIpAddress prefixLength", map[string]*rule{"autoScaleEnabled": boolean(), "hostIpAddress": str(), "prefixLength": number(8, 30)})
 			if mode == "GATEWAY" {
-				ipv4.fields["dhcpConfiguration"] = obj("mode ipAddressRange leaseTimeSeconds pingConflictDetectionEnabled", map[string]*rule{"mode": str("SERVER"), "domainName": str(), "dnsServerIpAddressesOverride": list(str(), 1, 4, false), "ipAddressRange": obj("start stop", map[string]*rule{"start": str(), "stop": str()}), "leaseTimeSeconds": number(0, 31536000), "pingConflictDetectionEnabled": boolean()})
+				ipv4.fields["dhcpConfiguration"] = singleBranch("mode", "SERVER", obj("mode ipAddressRange leaseTimeSeconds pingConflictDetectionEnabled", map[string]*rule{"mode": str("SERVER"), "domainName": str(), "dnsServerIpAddressesOverride": list(str(), 1, 4, false), "ipAddressRange": obj("start stop", map[string]*rule{"start": str(), "stop": str()}), "leaseTimeSeconds": number(0, 31536000), "pingConflictDetectionEnabled": boolean()}))
 			}
 			fields["ipv4Configuration"] = ipv4
 			fields["cellularBackupEnabled"] = boolean()
@@ -273,10 +290,10 @@ func wlanRule() *rule {
 	fields["bandSteeringEnabled"] = boolean()
 	fields["mloEnabled"] = boolean()
 	fields["broadcastingFrequenciesGHz"] = list(&rule{kind: "number", values: []any{2.4, float64(5), float64(6)}}, 1, math.MaxInt32, true)
-	fields["securityConfiguration"] = obj("type", map[string]*rule{"type": str("OPEN"), "encryption": str("ENHANCED_OPEN", "ENHANCED_OPEN_WITH_TRANSITION")})
-	fields["network"] = obj("type networkId", map[string]*rule{"type": str("SPECIFIC"), "networkId": uuid()})
+	fields["securityConfiguration"] = singleBranch("type", "OPEN", obj("type", map[string]*rule{"type": str("OPEN"), "encryption": str("ENHANCED_OPEN", "ENHANCED_OPEN_WITH_TRANSITION")}))
+	fields["network"] = singleBranch("type", "SPECIFIC", obj("type networkId", map[string]*rule{"type": str("SPECIFIC"), "networkId": uuid()}))
 	filter := union("type", map[string]*rule{"DEVICES": obj("type deviceIds", map[string]*rule{"type": str("DEVICES"), "deviceIds": list(uuid(), 1, math.MaxInt32, true)}), "DEVICE_TAGS": obj("type deviceTagIds", map[string]*rule{"type": str("DEVICE_TAGS"), "deviceTagIds": list(uuid(), 1, math.MaxInt32, true)})})
 	filter.nullable = true
 	fields["broadcastingDeviceFilter"] = filter
-	return obj(required, fields)
+	return singleBranch("type", "STANDARD", obj(required, fields))
 }

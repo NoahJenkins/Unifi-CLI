@@ -3,9 +3,12 @@ package contractapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -153,5 +156,67 @@ func TestServerCreatePreservesSeed(t *testing.T) {
 		if !reflect.DeepEqual(seed, s.Snapshot("firewall", PolicyID)) {
 			t.Fatal("create overwrote seed")
 		}
+	}
+}
+
+// Embedding TB preserves the actual test lifecycle while capturing the failure
+// signal under test. The HTTP response alone must never establish coverage.
+type coverageReporter struct {
+	testing.TB
+	failures chan string
+}
+
+func (r *coverageReporter) Errorf(format string, args ...any) {
+	r.failures <- fmt.Sprintf(format, args...)
+}
+func TestServerCoverageGapFailsTest(t *testing.T) {
+	for _, version := range Versions() {
+		t.Run(version, func(t *testing.T) {
+			reporter := &coverageReporter{TB: t, failures: make(chan string, 1)}
+			p, _ := ProfileFor(version)
+			v, err := NewValidator(p, os.Getenv("UNIFI_CONTRACT_CACHE"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := NewServer(reporter, p, v)
+			seed := NetworkSeed("GATEWAY")
+			s.Seed("network", seed)
+			body := Writable("network", seed)
+			body["futureField"] = "synthetic-value-must-not-appear"
+			raw, _ := json.Marshal(body)
+			path := BasePath + "/sites/" + SiteID + "/networks/" + NetworkID
+			res, data := request(t, s, "PUT", path, raw)
+			var response map[string]any
+			if res.StatusCode != 500 || json.Unmarshal(data, &response) != nil || response["code"] != "emulator_coverage_gap" {
+				t.Errorf("coverage gap must have distinct emulator response, status=%d", res.StatusCode)
+			}
+			select {
+			case failure := <-reporter.failures:
+				if !strings.Contains(failure, "outside offline coverage") || strings.Contains(failure, "synthetic-value-must-not-appear") || strings.Contains(failure, "futureField") {
+					t.Errorf("coverage diagnostic must contain rule path only")
+				}
+			default:
+				t.Error("coverage gap did not fail the test")
+			}
+			if !reflect.DeepEqual(seed, s.Snapshot("network", NetworkID)) {
+				t.Fatal("coverage gap changed state")
+			}
+			// An actual modeled violation remains a normal rejection, not a test failure.
+			delete(body, "futureField")
+			body["vlanId"] = 0
+			raw, _ = json.Marshal(body)
+			res, _ = request(t, s, "PUT", path, raw)
+			if res.StatusCode != 400 {
+				t.Fatal("invalid modeled request must return 400")
+			}
+			select {
+			case <-reporter.failures:
+				t.Fatal("modeled rejection marked test failed")
+			default:
+			}
+			if !reflect.DeepEqual(seed, s.Snapshot("network", NetworkID)) {
+				t.Fatal("invalid request changed state")
+			}
+		})
 	}
 }

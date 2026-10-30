@@ -2,6 +2,7 @@ package contractapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -226,6 +227,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.valid(resource, false, body); err != nil {
+		var gap *CoverageError
+		if errors.As(err, &gap) {
+			s.t.Errorf("emulator coverage gap: %v", gap)
+			reply(w, http.StatusInternalServerError, map[string]any{"code": "emulator_coverage_gap", "message": "synthetic request outside emulator coverage"})
+			return
+		}
 		rejected(w, 400)
 		return
 	}

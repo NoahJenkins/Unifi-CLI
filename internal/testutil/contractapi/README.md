@@ -43,7 +43,12 @@ sources in `profile.go`; tests run both even where the rules agree.
 
 `rules.go` defines the exact modeled fields, required fields, bounds, enums,
 array uniqueness, and UUID formats. An unmodeled object field or union branch
-returns `CoverageError`, not evidence of an upstream rejection. The shared
+returns `CoverageError`, not evidence of an upstream rejection. The server marks
+the test as failed and returns HTTP 500 with code `emulator_coverage_gap` for
+these inputs. A negative CLI test cannot pass by mistaking missing emulator
+coverage for a controller rejection. Modeled contract violations still return
+HTTP 400; differently cased modeled discriminator keys remain invalid.
+The shared
 corpus compares acceptance within this subset. Cached validation additionally
 checks all reachable published assertions and mappings. No upstream rule or
 request builder is generated into the offline tables. The discriminator adapter
