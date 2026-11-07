@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-30
+
+Promotes the unchanged `v1.1.0-rc.1` source. See
+[`v1.1.0` release notes](docs/releases/v1.1.0.md).
+
 ## [1.1.0-rc.1] - 2026-10-30
 
 See [`v1.1.0-rc.1` release notes](docs/releases/v1.1.0-rc.1.md).
@@ -88,6 +93,11 @@ See [`v1.1.0-rc.1` release notes](docs/releases/v1.1.0-rc.1.md).
   Raw bodies, request metadata, controller IDs, addresses, and credentials
   remain excluded. This change did not alter the exact-filter firewall request.
   The later named-protocol casing fix above corrects that request.
+
+## [1.0.0] - 2026-08-18
+
+Promotes the unchanged `v1.0.0-rc.4` source. See
+[`v1.0.0` release notes](docs/releases/v1.0.0.md).
 
 ## [1.0.0-rc.4] - 2026-08-17
 

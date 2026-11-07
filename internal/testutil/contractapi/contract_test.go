@@ -72,7 +72,9 @@ func TestContractCorpus(t *testing.T) {
 						}, false},
 						contractCase{"invalid frequency", func(b map[string]any) { b["broadcastingFrequenciesGHz"] = []any{3} }, false},
 						contractCase{"duplicate frequency", func(b map[string]any) { b["broadcastingFrequenciesGHz"] = []any{5, 5} }, false},
-						contractCase{"null AP filter", func(b map[string]any) { b["broadcastingDeviceFilter"] = nil }, true})
+						contractCase{"null AP filter", func(b map[string]any) { b["broadcastingDeviceFilter"] = nil }, true},
+						contractCase{"native network", func(b map[string]any) { b["network"] = map[string]any{"type": "NATIVE"} }, true},
+						contractCase{"specific network without ID", func(b map[string]any) { b["network"] = map[string]any{"type": "SPECIFIC"} }, false})
 				}
 
 				var containers [][]string
@@ -135,7 +137,6 @@ func TestOfflineUnmodeledBranchesReportCoverage(t *testing.T) {
 	}{
 		{"WLAN type", "wlan", WLANSeed, func(b map[string]any) { b["type"] = "IOT_OPTIMIZED" }},
 		{"WLAN security", "wlan", WLANSeed, func(b map[string]any) { b["securityConfiguration"] = map[string]any{"type": "WPA2_PERSONAL"} }},
-		{"WLAN network", "wlan", WLANSeed, func(b map[string]any) { b["network"] = map[string]any{"type": "NATIVE"} }},
 		{"DHCP relay", "network", func() map[string]any { return NetworkSeed("GATEWAY") }, func(b map[string]any) {
 			nested(b, "ipv4Configuration")["dhcpConfiguration"] = map[string]any{"mode": "RELAY", "dhcpServerIpAddresses": []any{"192.0.2.53"}}
 		}},
@@ -167,7 +168,7 @@ func TestOfflineUnmodeledBranchesReportCoverage(t *testing.T) {
 						body = Writable(tc.resource, body)
 					}
 					tc.edit(body)
-					if cache := os.Getenv("UNIFI_CONTRACT_CACHE"); cache != "" && !response && (tc.name == "WLAN type" || tc.name == "DHCP relay" || tc.name == "WLAN network") {
+					if cache := os.Getenv("UNIFI_CONTRACT_CACHE"); cache != "" && !response && (tc.name == "WLAN type" || tc.name == "DHCP relay") {
 						cached, err := NewValidator(p, cache)
 						if err != nil {
 							t.Fatal(err)
