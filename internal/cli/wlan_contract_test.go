@@ -63,3 +63,40 @@ func TestContractRuntimeClearsAmbientSettings(t *testing.T) {
 	seed["name"] = "Allowed"
 	preserved(t, s, "network", contractapi.NetworkID, seed)
 }
+func TestWLANContractLifecycle(t *testing.T) {
+	for _, version := range contractapi.Versions() {
+		for _, network := range []string{"NATIVE", "SPECIFIC"} {
+			t.Run(version+"/"+network, func(t *testing.T) {
+				s := contractRuntime(t, version)
+				args := []string{"wlan", "create", "--name", "Synthetic WLAN", "--security", "open"}
+				want := map[string]any{"id": contractapi.WLANID, "metadata": map[string]any{"origin": "USER_DEFINED"}, "type": "STANDARD", "name": "Synthetic WLAN", "enabled": true, "hideName": false, "clientIsolationEnabled": false, "multicastToUnicastConversionEnabled": false, "uapsdEnabled": true, "advertiseDeviceName": false, "arpProxyEnabled": false, "bssTransitionEnabled": true, "channel2gLockedTo6": false, "dtimPeriod2gLockedTo3": false, "broadcastingFrequenciesGHz": []any{2.4, float64(5)}, "securityConfiguration": map[string]any{"type": "OPEN"}, "network": map[string]any{"type": "NATIVE"}}
+				if network == "SPECIFIC" {
+					args = append(args, "--network", contractapi.NetworkID)
+					want["network"] = map[string]any{"type": "SPECIFIC", "networkId": contractapi.NetworkID}
+				}
+				contractCommand(t, true, args...)
+				contractCommand(t, false, append(args, "--yes")...)
+				if s.Attempts() != 0 || s.Snapshot("wlan", contractapi.WLANID) != nil {
+					t.Fatal("create plan or experimental gate wrote")
+				}
+				contractCommand(t, true, append(args, "--yes", "--experimental")...)
+				preserved(t, s, "wlan", contractapi.WLANID, want)
+				contractCommand(t, true, "wlan", "disable", contractapi.WLANID, "--yes", "--experimental")
+				want["enabled"] = false
+				preserved(t, s, "wlan", contractapi.WLANID, want)
+				contractCommand(t, true, "wlan", "enable", contractapi.WLANID, "--yes", "--experimental")
+				want["enabled"] = true
+				preserved(t, s, "wlan", contractapi.WLANID, want)
+				contractCommand(t, false, "wlan", "delete", contractapi.WLANID, "--yes", "--experimental")
+				if s.Attempts() != 3 {
+					t.Fatal("destructive delete wrote without force")
+				}
+				preserved(t, s, "wlan", contractapi.WLANID, want)
+				contractCommand(t, true, applied("wlan", "delete", contractapi.WLANID)...)
+				if s.Attempts() != 4 || s.Snapshot("wlan", contractapi.WLANID) != nil {
+					t.Fatal("WLAN lifecycle did not restore empty state with four writes")
+				}
+			})
+		}
+	}
+}

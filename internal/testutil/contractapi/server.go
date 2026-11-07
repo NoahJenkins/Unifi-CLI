@@ -198,16 +198,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, response)
 		return
 	}
-	if r.Method == "DELETE" && resource == "firewall" && id != "" {
+	if r.Method == "DELETE" && id != "" {
 		if objects[id] == nil {
 			rejected(w, 404)
+			return
+		}
+		if s.fault.Resource == resource && s.fault.Kind == "retain-after-delete" {
+			reply(w, 200, map[string]any{})
 			return
 		}
 		delete(objects, id)
 		reply(w, 200, map[string]any{})
 		return
 	}
-	if (r.Method != "PUT" || id == "") && (r.Method != "POST" || resource != "firewall" || id != "") {
+	if (r.Method != "PUT" || id == "") && (r.Method != "POST" || id != "") {
 		s.unexpected(w)
 		return
 	}
@@ -240,10 +244,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	status := 200
 	if r.Method == "POST" {
 		status = 201
+		ids := createdIDs[resource]
 		for {
-			id = PolicyID
+			id = ids.first
 			if s.created > 0 {
-				id = fmt.Sprintf("44444444-4444-4444-8444-%012d", s.created)
+				id = fmt.Sprintf(ids.next, s.created)
 			}
 			if objects[id] == nil {
 				break
@@ -252,7 +257,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		result["id"] = id
 		result["metadata"] = metadata()
-		result["index"] = float64(s.created)
+		switch resource {
+		case "firewall":
+			result["index"] = float64(s.created)
+		case "network":
+			result["default"] = false
+			// Gateway responses require this field, but create requests may
+			// omit it. The value is synthetic, not a claimed controller default.
+			if _, ok := result["mdnsForwardingEnabled"]; !ok && result["management"] == "GATEWAY" {
+				result["mdnsForwardingEnabled"] = false
+			}
+		}
 	} else {
 		for _, field := range []string{"id", "metadata", "default", "index"} {
 			if value, ok := objects[id][field]; ok {
@@ -277,6 +292,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	reply(w, status, result)
 }
+
+var createdIDs = map[string]struct{ first, next string }{
+	"firewall": {PolicyID, "44444444-4444-4444-8444-%012d"},
+	"network":  {NetworkID, "22222222-2222-4222-8222-%012d"},
+	"wlan":     {WLANID, "33333333-3333-4333-8333-%012d"},
+}
+
 func (s *Server) unexpected(w http.ResponseWriter) {
 	s.t.Errorf("unexpected emulator method or route")
 	rejected(w, 404)

@@ -7,15 +7,15 @@ The 1.x releases target the official local UniFi Network integration API in
 `https://<host>:<port>/proxy/network/integration/v1`; it does not require the
 UniFi cloud or Site Manager.
 
-| UniFi Network version | RC status |
+| UniFi Network version | Status |
 |---|---|
 | Earlier than 10.4.57 | Unsupported; required official schemas, discriminators, or endpoints can be absent or incompatible |
 | 10.4.57 | Compatibility floor and schema target; covered by official-schema fixtures, typed validation, local HTTP/TLS tests, and unit/smoke/race gates. An earlier candidate passed read-only live checks and one A-record lifecycle |
-| 10.5.67 | Final v1 candidate passed all 19 configured read-only checks, with the empty DNS collection as one allowed `not_configured` result, and completed all seven disabled DNS policy lifecycles with exact baseline restoration. A later exact-filter firewall create request was rejected before creation; see the limitation below |
+| 10.5.67 | The `v1.0.0` candidate passed all 19 configured read-only checks, with the empty DNS collection as one allowed `not_configured` result, and completed all seven disabled DNS policy lifecycles with exact baseline restoration. A later exact-filter firewall create request was rejected before creation; see the limitation below |
 | 10.6.109 | On 2026-10-29 the read-only live suite passed: 19 checks passed and the empty DNS collection returned the allowed `not_configured` result. An operator-reported exact-filter firewall create returned `api.request.unknown-type-id` before creation. The published 10.6.109 protocol schemas match 10.4.57; the named-protocol casing fix below targets this rejection. No write has been qualified on this version |
-| Later than 10.5.67 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
+| Later than 10.6.109 | Intended by the `10.4.57+` contract, subject to upstream API compatibility and release-specific verification |
 
-Final live verification used a release-candidate executable from this branch.
+The `v1.0.0` live verification on 10.5.67 used the release-candidate executable.
 Every configured read-only check passed or returned the allowed
 `not_configured` result. The write gate sequentially created, verified,
 updated, reverified, and deleted uniquely named disabled A, AAAA, CNAME, MX,
@@ -79,8 +79,10 @@ used to derive synthetic fixtures and validation bounds.
 
 ## Local contract emulator evidence
 
-The test suite includes a stateful TLS emulator for firewall policy lifecycles
-and selected network/WLAN updates under explicit 10.4.57 and 10.6.109 profiles.
+The test suite includes a stateful TLS emulator for firewall policy, network,
+and WLAN create/update/delete lifecycles, plus WLAN enable/disable, under
+explicit 10.4.57 and 10.6.109 profiles. It covers a declared subset of
+modes and branches.
 See its [coverage manifest](../internal/testutil/contractapi/README.md). Offline
 Go rules cover the declared subset. The opt-in cached check validates against
 pinned public schemas plus a reviewed correction: their three named-protocol

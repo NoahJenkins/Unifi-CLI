@@ -16,14 +16,15 @@ plans every mutation before it can apply.
 
 The compatibility target is UniFi Network **10.4.57 and newer**. The current
 implementation is schema- and fixture-validated against the official 10.4.57
-API. The final candidate completed the guarded read-only suite and disabled,
-exactly cleaned-up lifecycles for all seven DNS policy types on 10.5.67. See
+API. The `v1.0.0` candidate completed the guarded read-only suite and
+disabled, exactly cleaned-up lifecycles for all seven DNS policy types on
+10.5.67. The `v1.1.0` candidate passed the read-only suite on 10.6.109. See
 [Compatibility](docs/compatibility.md) for the exact status, TLS exception,
 and limits.
 
 ## Install v1
 
-After the stable tag is published:
+Install the current stable release:
 
 ```bash
 go install github.com/noahjenkins/unifi-cli/cmd/unifi@v1.1.0
@@ -31,9 +32,10 @@ unifi --version
 unifi version --json
 ```
 
-Release archives are also attached to each GitHub release. Before publication,
-build the reviewed source checkout with the Go
-version declared in `go.mod`:
+Release archives with checksums, CycloneDX SBOMs, and provenance are attached
+to each [GitHub release](https://github.com/NoahJenkins/Unifi-CLI/releases).
+To build an unreleased source checkout instead, use the Go version declared in
+`go.mod`:
 
 ```bash
 go build -o dist/unifi ./cmd/unifi
@@ -635,7 +637,7 @@ it does not contact a controller. The authenticated live suite is opt-in with
 `UNIFI_IT=1` and is read-only. Non-DNS live mutations require a dedicated
 sacrificial controller and are never run against a production-like network.
 See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[RC release checklist](docs/maintainers/release-checklist.md).
+[release checklist](docs/maintainers/release-checklist.md).
 
 The coverage gate enforces 75% across `./internal/...` plus package floors.
 The performance script records three samples everywhere and enforces the
