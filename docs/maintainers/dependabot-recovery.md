@@ -55,12 +55,9 @@ private files, domain, plan, live-test code, `go.mod`, and `go.sum` stay
 protected, per the decision boundaries in `AGENTS.md`. Candidate checks run
 `go vet ./...` and `go test ./...` in a credential-free container.
 
-It stays inactive until all of these exist:
+Repair uses `openai/gpt-6-luna` and review `deepseek/deepseek-v4-flash` through
+Vercel AI Gateway (`AI_GATEWAY_API_KEY` repository secret), so a different model
+family checks each repair.
 
-- a controller GitHub App: `PR_REPAIR_APP_ID` variable and
-  `PR_REPAIR_APP_PRIVATE_KEY` secret;
-- an explicit inference choice in `.github/pr-repair.json` (`transport`,
-  `model`, `budget`, and `endpoint` for an OpenAI-compatible provider) and its
-  credential as `PR_REPAIR_INFERENCE_KEY`. None is chosen, so repair and review
-  report `missing-configuration` and reserve nothing;
-- `PR_REPAIR_ENABLED=true`.
+It stays inactive until a controller GitHub App exists (`PR_REPAIR_APP_ID`
+variable and `PR_REPAIR_APP_PRIVATE_KEY` secret) and `PR_REPAIR_ENABLED=true`.

@@ -75,8 +75,19 @@
     "timeoutMinutes": 25
   },
   "inference": {
-    "transport": null,
-    "model": null
+    "transport": "openai-compatible",
+    "endpoint": "https://ai-gateway.vercel.sh/v1",
+    "model": {
+      "repair": "openai/gpt-6-luna",
+      "review": "deepseek/deepseek-v4-flash"
+    },
+    "budget": {
+      "maxCalls": {
+        "repair": 24,
+        "review": 16
+      },
+      "maxOutputTokens": 64000
+    }
   },
   "review": {
     "requireCodex": false,

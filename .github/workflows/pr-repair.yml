@@ -3,8 +3,8 @@ name: PR repair
 # Thin caller for the shared controller NoahJenkins/.github/pr-repair (pinned
 # below). Policy: .github/pr-repair.json on main. Inactive until a controller
 # App is configured (PR_REPAIR_APP_ID, PR_REPAIR_APP_PRIVATE_KEY) and
-# PR_REPAIR_ENABLED=true. No inference provider or model is chosen yet, so
-# paid repair and review report missing-configuration and reserve nothing.
+# PR_REPAIR_ENABLED=true. Repair uses openai/gpt-6-luna and review
+# deepseek/deepseek-v4-flash through Vercel AI Gateway (AI_GATEWAY_API_KEY).
 # Original Dependabot PRs keep merging through dependabot-auto-merge.yml.
 # See docs/maintainers/dependabot-recovery.md.
 on:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: NoahJenkins/.github/pr-repair@d8a021b52a335846a5fcbf3342cc32fc2e6f9fde # pr-repair
+      - uses: NoahJenkins/.github/pr-repair@e2441f4bee7dff3a76d46018604ef44e1abac644 # pr-repair
         with:
           mode: selftest
 
@@ -49,7 +49,7 @@ jobs:
     steps:
       - id: check
         env:
-          KEY: ${{ secrets.PR_REPAIR_INFERENCE_KEY }}
+          KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: if [ -n "$KEY" ]; then echo ready=true; else echo ready=false; fi >> "$GITHUB_OUTPUT"
 
   plan:
@@ -79,7 +79,7 @@ jobs:
         run: echo "::warning title=pr-repair::inactive; set the PR_REPAIR_APP_ID variable and PR_REPAIR_APP_PRIVATE_KEY secret (see pr-repair/README.md)"
       - id: engine
         if: vars.PR_REPAIR_APP_ID != ''
-        uses: NoahJenkins/.github/pr-repair@d8a021b52a335846a5fcbf3342cc32fc2e6f9fde # pr-repair
+        uses: NoahJenkins/.github/pr-repair@e2441f4bee7dff3a76d46018604ef44e1abac644 # pr-repair
         with:
           mode: plan
           token: ${{ steps.app.outputs.token }}
@@ -104,7 +104,7 @@ jobs:
         task: ${{ fromJSON(needs.plan.outputs.tasks) }}
     steps:
       - if: matrix.task.kind != 'sync'
-        uses: NoahJenkins/.github/pr-repair@d8a021b52a335846a5fcbf3342cc32fc2e6f9fde # pr-repair
+        uses: NoahJenkins/.github/pr-repair@e2441f4bee7dff3a76d46018604ef44e1abac644 # pr-repair
         with:
           mode: prepare
           token: ${{ github.token }}
@@ -123,11 +123,11 @@ jobs:
         task: ${{ fromJSON(needs.plan.outputs.tasks) }}
     steps:
       - if: matrix.task.kind != 'sync'
-        uses: NoahJenkins/.github/pr-repair@d8a021b52a335846a5fcbf3342cc32fc2e6f9fde # pr-repair
+        uses: NoahJenkins/.github/pr-repair@e2441f4bee7dff3a76d46018604ef44e1abac644 # pr-repair
         with:
           mode: infer
           task: ${{ toJSON(matrix.task) }}
-          api-key: ${{ secrets.PR_REPAIR_INFERENCE_KEY }}
+          api-key: ${{ secrets.AI_GATEWAY_API_KEY }}
 
   validate:
     needs: [plan, infer]
@@ -143,7 +143,7 @@ jobs:
         task: ${{ fromJSON(needs.plan.outputs.tasks) }}
     steps:
       - if: matrix.task.kind != 'review'
-        uses: NoahJenkins/.github/pr-repair@d8a021b52a335846a5fcbf3342cc32fc2e6f9fde # pr-repair
+        uses: NoahJenkins/.github/pr-repair@e2441f4bee7dff3a76d46018604ef44e1abac644 # pr-repair
         with:
           mode: validate
           token: ${{ github.token }}
@@ -173,7 +173,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
           permission-workflows: write
-      - uses: NoahJenkins/.github/pr-repair@d8a021b52a335846a5fcbf3342cc32fc2e6f9fde # pr-repair
+      - uses: NoahJenkins/.github/pr-repair@e2441f4bee7dff3a76d46018604ef44e1abac644 # pr-repair
         with:
           mode: publish
           token: ${{ steps.app.outputs.token }}
