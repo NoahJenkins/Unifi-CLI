@@ -1,0 +1,182 @@
+name: PR repair
+
+# Thin caller for the shared controller NoahJenkins/.github/pr-repair (pinned
+# below). Policy: .github/pr-repair.json on main. Inactive until a controller
+# App is configured (PR_REPAIR_APP_ID, PR_REPAIR_APP_PRIVATE_KEY) and
+# PR_REPAIR_ENABLED=true. Repair uses openai/gpt-6-luna and review
+# deepseek/deepseek-v4-flash through Vercel AI Gateway (AI_GATEWAY_API_KEY).
+# Original Dependabot PRs keep merging through dependabot-auto-merge.yml.
+# See docs/maintainers/dependabot-recovery.md.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  schedule:
+    - cron: "41 */2 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths: [.github/pr-repair.json, .github/workflows/pr-repair.yml]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-repair-contract-{0}', github.event.pull_request.number) || 'pr-repair' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: pr-repair contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: NoahJenkins/.github/pr-repair@cf4eb927d2bfffc74a19621cf2a5f6c2e92392cc # pr-repair
+        with:
+          mode: selftest
+
+  preflight:
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+        run: if [ -n "$KEY" ]; then echo ready=true; else echo ready=false; fi >> "$GITHUB_OUTPUT"
+
+  plan:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    outputs:
+      tasks: ${{ steps.engine.outputs.tasks }}
+      has-tasks: ${{ steps.engine.outputs.has-tasks }}
+    steps:
+      - id: app
+        if: vars.PR_REPAIR_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PR_REPAIR_APP_ID }}
+          private-key: ${{ secrets.PR_REPAIR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+          permission-checks: write
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Report missing controller App
+        if: vars.PR_REPAIR_APP_ID == ''
+        run: echo "::warning title=pr-repair::inactive; set the PR_REPAIR_APP_ID variable and PR_REPAIR_APP_PRIVATE_KEY secret (see pr-repair/README.md)"
+      - id: engine
+        if: vars.PR_REPAIR_APP_ID != ''
+        uses: NoahJenkins/.github/pr-repair@cf4eb927d2bfffc74a19621cf2a5f6c2e92392cc # pr-repair
+        with:
+          mode: plan
+          token: ${{ steps.app.outputs.token }}
+          app-id: ${{ vars.PR_REPAIR_APP_ID }}
+          app-slug: ${{ steps.app.outputs.app-slug }}
+          enabled: ${{ vars.PR_REPAIR_ENABLED }}
+          credential-ready: ${{ needs.preflight.outputs.ready }}
+
+  prepare:
+    needs: plan
+    if: needs.plan.outputs.has-tasks == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    steps:
+      - if: matrix.task.kind != 'sync'
+        uses: NoahJenkins/.github/pr-repair@cf4eb927d2bfffc74a19621cf2a5f6c2e92392cc # pr-repair
+        with:
+          mode: prepare
+          token: ${{ github.token }}
+          app-id: ${{ vars.PR_REPAIR_APP_ID }}
+          task: ${{ toJSON(matrix.task) }}
+
+  infer:
+    needs: [plan, prepare]
+    if: always() && !cancelled() && needs.plan.outputs.has-tasks == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    steps:
+      - if: matrix.task.kind != 'sync'
+        uses: NoahJenkins/.github/pr-repair@cf4eb927d2bfffc74a19621cf2a5f6c2e92392cc # pr-repair
+        with:
+          mode: infer
+          task: ${{ toJSON(matrix.task) }}
+          api-key: ${{ secrets.AI_GATEWAY_API_KEY }}
+
+  validate:
+    needs: [plan, infer]
+    if: always() && !cancelled() && needs.plan.outputs.has-tasks == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    steps:
+      - if: matrix.task.kind != 'review'
+        uses: NoahJenkins/.github/pr-repair@cf4eb927d2bfffc74a19621cf2a5f6c2e92392cc # pr-repair
+        with:
+          mode: validate
+          token: ${{ github.token }}
+          task: ${{ toJSON(matrix.task) }}
+
+  publish:
+    needs: [plan, validate]
+    if: always() && !cancelled() && needs.plan.outputs.has-tasks == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PR_REPAIR_APP_ID }}
+          private-key: ${{ secrets.PR_REPAIR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-checks: write
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - uses: NoahJenkins/.github/pr-repair@cf4eb927d2bfffc74a19621cf2a5f6c2e92392cc # pr-repair
+        with:
+          mode: publish
+          token: ${{ steps.app.outputs.token }}
+          app-id: ${{ vars.PR_REPAIR_APP_ID }}
+          app-slug: ${{ steps.app.outputs.app-slug }}
+          task: ${{ toJSON(matrix.task) }}
