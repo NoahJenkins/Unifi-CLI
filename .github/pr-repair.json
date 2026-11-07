@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "ci": {
+    "requiredChecks": [
+      "test (ubuntu-latest)",
+      "test (macos-latest)",
+      "test (windows-latest)",
+      "govulncheck",
+      "fuzz (FuzzStrictYAMLConfiguration)",
+      "fuzz (FuzzOfficialPaginationJSON)",
+      "fuzz (FuzzOfficialPathAndFilterEscaping)",
+      "fuzz (FuzzReleaseBundleExtraction)",
+      "fuzz (FuzzChecksumManifest)",
+      "fuzz (FuzzSBOMSnapshotParsing)",
+      "native keyring (ubuntu-latest)",
+      "native keyring (macos-latest)",
+      "native keyring (windows-latest)"
+    ]
+  },
+  "eligibility": {
+    "updates": {
+      "go_modules": "non-major",
+      "github_actions": "all"
+    },
+    "securityMajors": true
+  },
+  "repair": {
+    "editable": [
+      "cmd/unifi/**",
+      "internal/cli/**",
+      "internal/render/**",
+      "internal/apperr/**",
+      "internal/fileutil/**"
+    ],
+    "protected": [
+      "internal/client/**",
+      "internal/authstore/**",
+      "internal/privatefile/**",
+      "internal/domain/**",
+      "internal/plan/**",
+      "internal/livetest/**",
+      "schemas/**",
+      "scripts/**",
+      "go.mod",
+      "go.sum"
+    ],
+    "context": [
+      "cmd/unifi/**",
+      "internal/cli/**",
+      "internal/render/**",
+      "internal/apperr/**",
+      "go.mod"
+    ],
+    "limits": {
+      "repairPerPr": 2,
+      "reviewPerPr": 4,
+      "syncPerHead": 1,
+      "dailyModelTasks": 4
+    }
+  },
+  "runtimes": [],
+  "validation": {
+    "image": "golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0",
+    "install": "go mod download",
+    "commands": [
+      "go vet ./...",
+      "go test ./..."
+    ],
+    "env": {
+      "GOMODCACHE": "/workspace/.pr-repair-gomodcache",
+      "GOCACHE": "/workspace/.pr-repair-gocache",
+      "GOFLAGS": "-mod=readonly -modcacherw",
+      "GOTOOLCHAIN": "local"
+    },
+    "timeoutMinutes": 25
+  },
+  "inference": {
+    "transport": null,
+    "model": null
+  },
+  "review": {
+    "requireCodex": false,
+    "agentLogins": []
+  },
+  "merge": {
+    "originals": false,
+    "approve": "none",
+    "production": {
+      "kind": "none"
+    }
+  }
+}
