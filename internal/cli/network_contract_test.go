@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/noahjenkins/unifi-cli/internal/testutil/contractapi"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +121,84 @@ func TestNetworkContractMissingMDNSResponse(t *testing.T) {
 				t.Fatal("wrong mutation count")
 			}
 		})
+	}
+}
+func TestNetworkContractCreateDelete(t *testing.T) {
+	for _, version := range contractapi.Versions() {
+		for _, variant := range []string{"GATEWAY", "GATEWAY-no-dhcp", "SWITCH", "UNMANAGED"} {
+			t.Run(version+"/"+variant, func(t *testing.T) {
+				s := contractRuntime(t, version)
+				args := []string{"network", "create", "--name", "Synthetic network", "--vlan", "20"}
+				mode, _, _ := strings.Cut(variant, "-")
+				want := contractapi.NetworkSeed(mode)
+				switch variant {
+				case "GATEWAY":
+					args = append(args, "--management", "gateway", "--subnet", "192.0.2.1/24", "--dhcp-mode", "server", "--dhcp-range-start", "192.0.2.10", "--dhcp-range-end", "192.0.2.200", "--dhcp-lease-seconds", "86400", "--dhcp-conflict-detection", "--dns-server", "192.0.2.53", "--domain-name", "example.test")
+				case "GATEWAY-no-dhcp":
+					args = append(args, "--management", "gateway", "--subnet", "192.0.2.1/24", "--dhcp-mode", "none")
+					delete(want["ipv4Configuration"].(map[string]any), "dhcpConfiguration")
+				case "SWITCH":
+					args = append(args, "--management", "switch", "--device", contractapi.DeviceID, "--subnet", "192.0.2.1/24")
+				case "UNMANAGED":
+					args = append(args, "--management", "unmanaged")
+				}
+				contractCommand(t, true, args...)
+				contractCommand(t, false, append(args, "--yes")...)
+				if s.Attempts() != 0 || s.Snapshot("network", contractapi.NetworkID) != nil {
+					t.Fatal("create plan or experimental gate wrote")
+				}
+				contractCommand(t, true, applied(args...)...)
+				preserved(t, s, "network", contractapi.NetworkID, want)
+				contractCommand(t, false, "network", "delete", contractapi.NetworkID, "--yes", "--experimental")
+				if s.Attempts() != 1 {
+					t.Fatal("destructive delete wrote without force")
+				}
+				preserved(t, s, "network", contractapi.NetworkID, want)
+				contractCommand(t, true, applied("network", "delete", contractapi.NetworkID)...)
+				if s.Attempts() != 2 || s.Snapshot("network", contractapi.NetworkID) != nil {
+					t.Fatal("network lifecycle did not restore empty state with two writes")
+				}
+			})
+		}
+	}
+}
+func TestContractCreateDeleteFaults(t *testing.T) {
+	creates := map[string][]string{
+		"network":  {"network", "create", "--name", "Synthetic network", "--vlan", "20", "--management", "unmanaged"},
+		"wlan":     {"wlan", "create", "--name", "Synthetic WLAN", "--security", "open"},
+		"firewall": firewallContractArgs("tcp", "ipv4"),
+	}
+	ids := map[string]string{"network": contractapi.NetworkID, "wlan": contractapi.WLANID, "firewall": contractapi.PolicyID}
+	for _, version := range contractapi.Versions() {
+		for _, resource := range []string{"network", "wlan", "firewall"} {
+			for _, kind := range []string{"corrupt-write-response", "mismatch-readback", "retain-after-delete"} {
+				t.Run(version+"/"+resource+"/"+kind, func(t *testing.T) {
+					s := contractRuntime(t, version)
+					id := ids[resource]
+					if kind == "retain-after-delete" {
+						contractCommand(t, true, applied(creates[resource]...)...)
+					}
+					s.SetFault(contractapi.Fault{Resource: resource, Kind: kind})
+					args := applied(creates[resource]...)
+					if kind == "retain-after-delete" {
+						args = applied(resource, "delete", id)
+					}
+					writes := s.Attempts() + 1
+					out := contractCommand(t, false, args...)
+					if s.Attempts() != writes {
+						t.Fatalf("writes=%d want %d; an ambiguous write must not be retried", s.Attempts(), writes)
+					}
+					if out["data"] != nil {
+						t.Fatal("failed operation reported completion data")
+					}
+					if code := out["error"].(map[string]any)["code"]; kind != "corrupt-write-response" && code != "conflict" {
+						t.Fatalf("verification failure code=%v, want conflict", code)
+					}
+					if s.Snapshot(resource, id) == nil {
+						t.Fatal("fault scenario should leave the stored object in place")
+					}
+				})
+			}
+		}
 	}
 }

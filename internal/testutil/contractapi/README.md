@@ -38,8 +38,8 @@ sources in `profile.go`; tests run both even where the rules agree.
 | Resource | Operations under `/sites/{siteId}` | Offline branches and source components |
 | --- | --- | --- |
 | Firewall | GET `/firewall/policies`, GET/PUT/DELETE detail, POST collection | `Create or update firewall policy`, `Firewall policy`; ALLOW/BLOCK/REJECT; IPV4/IPV6/IPV4_AND_IPV6; TCP/UDP and applicable ICMP/ICMPV6, TCP_UDP preset, unrestricted; exact IP_ADDRESS/SUBNET source, IP_ADDRESS destination, PORT_NUMBER |
-| Network | GET `/networks`, GET/PUT detail | `Create or update Network`, `Network details`; GATEWAY with IPv4 DHCP SERVER; SWITCH with DHCP omitted; UNMANAGED; rename, gateway mDNS, preservation of domain, DNS servers, range and lease fields |
-| WLAN | GET `/wifi/broadcasts`, GET/PUT detail | `Wifi broadcast create or update`, `Wifi broadcast details`; STANDARD, OPEN security, SPECIFIC network; absent/null/DEVICES/DEVICE_TAGS AP filter; rename, network change, device selection and reset |
+| Network | GET `/networks`, POST collection, GET/PUT/DELETE detail | `Create or update Network`, `Network details`; GATEWAY with IPv4 DHCP SERVER or DHCP omitted; SWITCH with DHCP omitted; UNMANAGED; create, delete, rename, gateway mDNS, preservation of domain, DNS servers, range and lease fields |
+| WLAN | GET `/wifi/broadcasts`, POST collection, GET/PUT/DELETE detail | `Wifi broadcast create or update`, `Wifi broadcast details`; STANDARD, OPEN security, NATIVE or SPECIFIC network; absent/null/DEVICES/DEVICE_TAGS AP filter; create, delete, enable, disable, rename, network change, device selection and reset |
 
 `rules.go` defines the exact modeled fields, required fields, bounds, enums,
 array uniqueness, and UUID formats. An unmodeled object field or union branch
@@ -57,9 +57,11 @@ null exception is the broadcasting-device filter: both pinned documents
 explicitly describe null as all APs. Invalid scalar containers and allowed null
 have separate regressions.
 
-Excluded: personal/enterprise WLAN preservation and security transitions,
-IOT_OPTIMIZED, other network DHCP/IP modes, management transitions, firewall
-ordering, zone writes, other filter types, DNS, and legacy writes. The CLI can
+Excluded: personal/enterprise WLAN creation, preservation, and security
+transitions, IOT_OPTIMIZED, DHCP relay and other network DHCP/IP modes,
+management transitions, network reference checks before delete, firewall
+ordering, zone and traffic-list writes, other filter types, device actions,
+DNS, and legacy writes. The CLI can
 preserve a seeded DEVICE_TAGS filter but has no tag-selection flag; the test
 covers preservation and conversion to devices/all APs, not a new command.
 
@@ -85,8 +87,12 @@ emulator coverage limit, not a controller-behavior claim.
 
 Gateway responses require `mdnsForwardingEnabled` in both published schemas.
 The absent-response scenario is an explicit fault injected after validation;
-ordinary seeds include the field. Other fault hooks exercise pre-apply drift,
-read-back mismatch, and a stored write followed by malformed response JSON.
+ordinary seeds include the field. Create requests can omit it, so a created
+gateway network stores a synthetic `false`. That value is a placeholder for
+the required response field, not a claimed controller default; CLI create
+verification compares only the requested fields. Other fault hooks exercise pre-apply drift,
+read-back mismatch, a stored write followed by malformed response JSON, and a
+successful delete response that leaves the object in place.
 CLI assertions check exact mutation counts and no completion data on errors.
 
 CLI tests run serially, clear controller environment settings, use temporary

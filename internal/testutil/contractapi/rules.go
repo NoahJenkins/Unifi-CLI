@@ -291,7 +291,7 @@ func wlanRule() *rule {
 	fields["mloEnabled"] = boolean()
 	fields["broadcastingFrequenciesGHz"] = list(&rule{kind: "number", values: []any{2.4, float64(5), float64(6)}}, 1, math.MaxInt32, true)
 	fields["securityConfiguration"] = singleBranch("type", "OPEN", obj("type", map[string]*rule{"type": str("OPEN"), "encryption": str("ENHANCED_OPEN", "ENHANCED_OPEN_WITH_TRANSITION")}))
-	fields["network"] = singleBranch("type", "SPECIFIC", obj("type networkId", map[string]*rule{"type": str("SPECIFIC"), "networkId": uuid()}))
+	fields["network"] = union("type", map[string]*rule{"NATIVE": obj("type", map[string]*rule{"type": str("NATIVE")}), "SPECIFIC": obj("type networkId", map[string]*rule{"type": str("SPECIFIC"), "networkId": uuid()})})
 	filter := union("type", map[string]*rule{"DEVICES": obj("type deviceIds", map[string]*rule{"type": str("DEVICES"), "deviceIds": list(uuid(), 1, math.MaxInt32, true)}), "DEVICE_TAGS": obj("type deviceTagIds", map[string]*rule{"type": str("DEVICE_TAGS"), "deviceTagIds": list(uuid(), 1, math.MaxInt32, true)})})
 	filter.nullable = true
 	fields["broadcastingDeviceFilter"] = filter

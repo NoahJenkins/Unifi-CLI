@@ -105,6 +105,48 @@ func TestServerFirewallLifecycleAndAmbiguousResponse(t *testing.T) {
 		t.Fatal("deleted detail still present")
 	}
 }
+func TestServerNetworkAndWLANCreateDelete(t *testing.T) {
+	for _, tc := range []struct {
+		resource, route, id string
+		seed                map[string]any
+	}{
+		{"network", "networks", NetworkID, NetworkSeed("GATEWAY")},
+		{"wlan", "wifi/broadcasts", WLANID, WLANSeed()},
+	} {
+		t.Run(tc.resource, func(t *testing.T) {
+			s := testServer(t)
+			body := Writable(tc.resource, tc.seed)
+			delete(body, "mdnsForwardingEnabled")
+			raw, _ := json.Marshal(body)
+			path := BasePath + "/sites/" + SiteID + "/" + tc.route
+			res, data := request(t, s, "POST", path, raw)
+			var created map[string]any
+			if res.StatusCode != 201 || json.Unmarshal(data, &created) != nil || created["id"] != tc.id {
+				t.Fatal("create failed")
+			}
+			if !reflect.DeepEqual(created, s.Snapshot(tc.resource, tc.id)) {
+				t.Fatal("create response differs from stored state")
+			}
+			if tc.resource == "network" && (created["default"] != false || created["mdnsForwardingEnabled"] != false) {
+				t.Fatal("gateway create response lacks required server fields")
+			}
+			s.SetFault(Fault{Resource: tc.resource, Kind: "retain-after-delete"})
+			res, _ = request(t, s, "DELETE", path+"/"+tc.id, nil)
+			if res.StatusCode != 200 || s.Snapshot(tc.resource, tc.id) == nil {
+				t.Fatal("retain fault did not keep the acknowledged object")
+			}
+			s.SetFault(Fault{})
+			res, _ = request(t, s, "DELETE", path+"/"+tc.id, nil)
+			if res.StatusCode != 200 || s.Snapshot(tc.resource, tc.id) != nil || s.Attempts() != 3 {
+				t.Fatal("delete failed")
+			}
+			res, _ = request(t, s, "DELETE", path+"/"+tc.id, nil)
+			if res.StatusCode != 404 {
+				t.Fatal("repeated delete of absent object succeeded")
+			}
+		})
+	}
+}
 func TestServerPaginationAndCopies(t *testing.T) {
 	s := testServer(t)
 	seed := NetworkSeed("UNMANAGED")

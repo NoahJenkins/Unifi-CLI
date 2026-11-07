@@ -79,8 +79,10 @@ used to derive synthetic fixtures and validation bounds.
 
 ## Local contract emulator evidence
 
-The test suite includes a stateful TLS emulator for firewall policy lifecycles
-and selected network/WLAN updates under explicit 10.4.57 and 10.6.109 profiles.
+The test suite includes a stateful TLS emulator for firewall policy, network,
+and WLAN create/update/delete lifecycles, plus WLAN enable/disable, under
+explicit 10.4.57 and 10.6.109 profiles. It covers a declared subset of
+modes and branches.
 See its [coverage manifest](../internal/testutil/contractapi/README.md). Offline
 Go rules cover the declared subset. The opt-in cached check validates against
 pinned public schemas plus a reviewed correction: their three named-protocol
