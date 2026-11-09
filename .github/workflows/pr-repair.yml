@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: NoahJenkins/.github/pr-repair@ef29fbf100b3404851bdcf55b7786896940ccdf6 # pr-repair
+      - uses: NoahJenkins/.github/pr-repair@3e2668615bb6ff11e34e8b70357930d357ace8c1 # pr-repair
         with:
           mode: selftest
 
@@ -74,12 +74,13 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
+          permission-workflows: write
       - name: Report missing controller App
         if: vars.PR_REPAIR_APP_ID == ''
         run: echo "::warning title=pr-repair::inactive; set the PR_REPAIR_APP_ID variable and PR_REPAIR_APP_PRIVATE_KEY secret (see pr-repair/README.md)"
       - id: engine
         if: vars.PR_REPAIR_APP_ID != ''
-        uses: NoahJenkins/.github/pr-repair@ef29fbf100b3404851bdcf55b7786896940ccdf6 # pr-repair
+        uses: NoahJenkins/.github/pr-repair@3e2668615bb6ff11e34e8b70357930d357ace8c1 # pr-repair
         with:
           mode: plan
           token: ${{ steps.app.outputs.token }}
@@ -104,7 +105,7 @@ jobs:
         task: ${{ fromJSON(needs.plan.outputs.tasks) }}
     steps:
       - if: matrix.task.kind != 'sync'
-        uses: NoahJenkins/.github/pr-repair@ef29fbf100b3404851bdcf55b7786896940ccdf6 # pr-repair
+        uses: NoahJenkins/.github/pr-repair@3e2668615bb6ff11e34e8b70357930d357ace8c1 # pr-repair
         with:
           mode: prepare
           token: ${{ github.token }}
@@ -123,7 +124,7 @@ jobs:
         task: ${{ fromJSON(needs.plan.outputs.tasks) }}
     steps:
       - if: matrix.task.kind != 'sync'
-        uses: NoahJenkins/.github/pr-repair@ef29fbf100b3404851bdcf55b7786896940ccdf6 # pr-repair
+        uses: NoahJenkins/.github/pr-repair@3e2668615bb6ff11e34e8b70357930d357ace8c1 # pr-repair
         with:
           mode: infer
           task: ${{ toJSON(matrix.task) }}
@@ -143,7 +144,7 @@ jobs:
         task: ${{ fromJSON(needs.plan.outputs.tasks) }}
     steps:
       - if: matrix.task.kind != 'review'
-        uses: NoahJenkins/.github/pr-repair@ef29fbf100b3404851bdcf55b7786896940ccdf6 # pr-repair
+        uses: NoahJenkins/.github/pr-repair@3e2668615bb6ff11e34e8b70357930d357ace8c1 # pr-repair
         with:
           mode: validate
           token: ${{ github.token }}
@@ -173,7 +174,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
           permission-workflows: write
-      - uses: NoahJenkins/.github/pr-repair@ef29fbf100b3404851bdcf55b7786896940ccdf6 # pr-repair
+      - uses: NoahJenkins/.github/pr-repair@3e2668615bb6ff11e34e8b70357930d357ace8c1 # pr-repair
         with:
           mode: publish
           token: ${{ steps.app.outputs.token }}
