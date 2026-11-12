@@ -130,5 +130,18 @@ module. Preserve the worktree; use a disposable clone for these checks.
 - Update `docs/compatibility.md` when controller coverage or limits change.
 - Update release notes or `CHANGELOG.md` when the release contract changes.
 - Keep changes focused and preserve unrelated user work.
-- Do not commit, push, publish, release, or run live controller writes unless
-  the user explicitly requests that boundary.
+- Commit and push only through the `ship` skill (see "Agent pull requests").
+  Do not publish, release, or run live controller writes unless the user
+  explicitly requests that boundary.
+
+## Agent pull requests
+
+Mode: auto-merge
+
+Finished work in this repository is a merged pull request. Use the `ship`
+skill in `.agents/skills/ship/` for every change. This rule replaces any
+general instruction to stop at a local change.
+
+A merge to `main` does not release. Releases start from tags. A ship task never
+runs live controller tests, read-only ones included. See "Live Controller
+Safety".
