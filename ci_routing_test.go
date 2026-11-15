@@ -31,15 +31,35 @@ func TestCIJobsUseHostedRunners(t *testing.T) {
 			}
 		}
 	}
-	if len(jobs) != 4 {
-		t.Errorf("CI jobs = %d, want 4; add hosted-runner coverage for new jobs", len(jobs))
+	if len(jobs) != 5 {
+		t.Errorf("CI jobs = %d, want 5; add hosted-runner coverage for new jobs", len(jobs))
 	}
+}
+
+// The ci job is the single status branch protection can require. It must wait
+// for every other job and run even when they fail.
+func TestCIAggregatorWaitsForEveryJob(t *testing.T) {
+	jobs := mapValue(t, readYAMLMap(t, ".github/workflows/ci.yml"), "jobs")
+	ci := mapValue(t, jobs, "ci")
+	if got := ci["runs-on"]; got != "ubuntu-latest" {
+		t.Errorf("ci runs-on = %v, want ubuntu-latest", got)
+	}
+	if got := fmt.Sprint(ci["if"]); got != "always()" {
+		t.Errorf("ci if = %q, want always()", got)
+	}
+	var others []string
+	for id := range jobs {
+		if id != "ci" {
+			others = append(others, id)
+		}
+	}
+	assertStringSet(t, "ci needs", stringSliceValue(t, ci, "needs"), others)
 }
 
 func TestCICheckContextsRemainStable(t *testing.T) {
 	jobs := mapValue(t, readYAMLMap(t, ".github/workflows/ci.yml"), "jobs")
 	for id, name := range map[string]string{
-		"test": "test (${{ matrix.os }})", "native-keyring": "native keyring (${{ matrix.os }})",
+		"ci": "ci", "test": "test (${{ matrix.os }})", "native-keyring": "native keyring (${{ matrix.os }})",
 		"vulnerability-scan": "govulncheck", "fuzz": "fuzz (${{ matrix.target }})",
 	} {
 		if got := mapValue(t, jobs, id)["name"]; got != name {

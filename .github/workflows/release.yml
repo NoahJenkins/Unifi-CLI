@@ -86,7 +86,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -159,7 +160,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -238,7 +240,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -339,7 +342,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -425,7 +429,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -558,7 +563,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules

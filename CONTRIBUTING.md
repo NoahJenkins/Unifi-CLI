@@ -124,18 +124,13 @@ development. Keep reports private, redacted, and uncommitted.
   compatibility documentation takes precedence.
 
 Dependabot patch and minor updates are grouped by ecosystem. Go module
-security updates are grouped separately. Major updates and changes that affect
-controller wire behavior require manual review. Dependabot patch, minor, and
-GitHub Actions updates enable squash auto-merge and wait for the required
-checks. A semver-major update auto-merges only when fetch-metadata reports an
-associated advisory (`alert-state` OPEN or FIXED, or a `ghsa-id` that is not
-DISMISSED). That lookup runs only when the Dependabot secret
-`DEPENDABOT_METADATA_TOKEN` (Settings → Secrets and variables → Dependabot,
-not an Actions secret) is a personal access token or GitHub App installation
-token that can read Dependabot alerts. Dependabot-triggered `pull_request`
-workflows cannot read Actions secrets. A GHSA mention in release notes is not
-enough. Without the secret, security majors stay for review. The auto-merge
-workflow does not approve pull requests.
+security updates are grouped separately, and all GitHub Actions updates share
+one weekly group. Both ecosystems wait 3 days after a release before proposing
+it. Major Go module updates and changes that affect controller wire behavior
+require manual review; they get the `needs-review` label. Dependabot patch,
+minor, and GitHub Actions updates enable squash auto-merge and wait for the
+required checks. The auto-merge workflow uses only `GITHUB_TOKEN`, so there is
+no token to renew, and it does not approve pull requests.
 
 Release workflows pin every action to a full 40-character commit SHA.
 `release_pipeline_test.go` checks that pin shape and which release actions
@@ -143,19 +138,11 @@ are present. It does not require one specific SHA, so an Actions update can
 pass without editing the test. Keep the release job permissions and the other
 release-contract assertions.
 
-Dependabot's gomod updates do not bump the `go` directive. A weekly workflow
-opens a pull request for the latest patch of the Go minor version already
-declared in `go.mod`, then enables auto-merge for that pull request. A new
-Go minor or major still needs a manual change. Opening that pull request with
-the default `GITHUB_TOKEN` requires the repository workflow permission
-**Allow GitHub Actions to create and approve pull requests** (Settings →
-Actions → General → Workflow permissions). Those pull requests still leave CI
-approval-required until a maintainer approves the workflow runs. Set the
-Actions secret `GO_TOOLCHAIN_PR_TOKEN` to a GitHub App installation token or
-a fine-grained personal access token with Contents and Pull requests write
-so CI starts without that approval. If the permission and the secret are both
-absent, the workflow reports the requirement and exits successfully. The
-retired Dependabot recovery controller was removed. See
+The `go` directive in `go.mod` names the Go minor version (`go 1.27.0`).
+CI, govulncheck, and release builds select the newest patch of that minor with
+`setup-go` (`go-version: 1.27.x`, `check-latest: true`), so patch releases need
+no pull request. Moving to a new Go minor is a manual edit of `go.mod` and the
+`go-version` lines in the workflows. See
 [Dependency updates](docs/maintainers/dependabot-recovery.md) for the current
 path and the leftover GitHub configuration.
 
