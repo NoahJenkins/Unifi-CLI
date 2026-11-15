@@ -12,7 +12,7 @@ func TestDependabotAutoMergeWorkflow(t *testing.T) {
 	const path = ".github/workflows/dependabot-auto-merge.yml"
 	workflow := readYAMLMap(t, path)
 	on := mapValue(t, workflow, "on")
-	pullRequest := mapValue(t, on, "pull_request")
+	pullRequest := mapValue(t, on, "pull_request_target")
 	if !slices.Equal(stringSliceValue(t, pullRequest, "branches"), []string{"main"}) {
 		t.Errorf("pull_request branches = %v", pullRequest["branches"])
 	}
@@ -56,20 +56,14 @@ func TestDependabotAutoMergeWorkflow(t *testing.T) {
 		"version-update:semver-minor",
 		"version-update:semver-major",
 		"github_actions",
-		"alert-lookup:",
-		"steps.metadata.outputs.alert-state",
-		"steps.metadata.outputs.ghsa-id",
-		"DEPENDABOT_METADATA_TOKEN",
-		"ALERT_STATE",
-		"GHSA_ID",
-		"DISMISSED",
-		"Dependabot secret",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("auto-merge workflow missing %q", want)
 		}
 	}
 	for _, forbidden := range []string{
+		"DEPENDABOT_METADATA_TOKEN",
+		"actions/checkout",
 		"PR_BODY",
 		"DEPS_JSON",
 		"updated-dependencies-json",
@@ -86,69 +80,6 @@ func TestDependabotAutoMergeWorkflow(t *testing.T) {
 	assertGHRepoForGHCommands(t, job)
 	if strings.Contains(text, "COPILOT") || strings.Contains(text, "DEPENDABOT_CONTROLLER") {
 		t.Error("retired controller is still wired into the auto-merge workflow")
-	}
-}
-
-func TestGoToolchainPatchWorkflow(t *testing.T) {
-	const path = ".github/workflows/go-toolchain-patch.yml"
-	workflow := readYAMLMap(t, path)
-	on := mapValue(t, workflow, "on")
-	if _, ok := on["workflow_dispatch"]; !ok {
-		t.Error("workflow must allow manual dispatch")
-	}
-	schedule, ok := on["schedule"].([]any)
-	if !ok || len(schedule) != 1 {
-		t.Fatalf("schedule = %#v", on["schedule"])
-	}
-	entry, ok := schedule[0].(map[string]any)
-	if !ok || fmt.Sprint(entry["cron"]) != "30 16 * * 1" {
-		t.Errorf("cron = %#v", schedule[0])
-	}
-	assertWritePermissions(t, workflow)
-	concurrency := mapValue(t, workflow, "concurrency")
-	if cancel, ok := concurrency["cancel-in-progress"].(bool); !ok || cancel {
-		t.Errorf("cancel-in-progress = %#v, want false", concurrency["cancel-in-progress"])
-	}
-
-	job := mapValue(t, mapValue(t, workflow, "jobs"), "bump")
-	if fmt.Sprint(job["if"]) != "github.ref == 'refs/heads/main'" {
-		t.Errorf("job if = %v", job["if"])
-	}
-	if fmt.Sprint(job["runs-on"]) != "ubuntu-latest" {
-		t.Errorf("runs-on = %v", job["runs-on"])
-	}
-	if fmt.Sprint(job["timeout-minutes"]) != "10" {
-		t.Errorf("timeout-minutes = %v, want 10", job["timeout-minutes"])
-	}
-	seen := assertFullSHAActions(t, workflow)
-	for _, action := range []string{"actions/checkout", "actions/setup-go"} {
-		if !seen[action] {
-			t.Errorf("toolchain workflow missing SHA-pinned %s", action)
-		}
-	}
-	text := readWorkflow(t, path)
-	for _, want := range []string{
-		"go-version-file: go.mod",
-		"https://go.dev/dl/?mode=json",
-		"go run ./scripts/gotoolchain",
-		"gh pr merge --auto --squash",
-		"automated/go-",
-		`--head "$branch"`,
-		"GO_TOOLCHAIN_PR_TOKEN",
-		"TOKEN_TRIGGERS_CI",
-		"Allow GitHub Actions to create and approve pull requests",
-		"approval-required",
-		"not permitted to create or approve pull requests",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("toolchain workflow missing %q", want)
-		}
-	}
-	if strings.Contains(text, "GITHUB_REPOSITORY%%") {
-		t.Error(`toolchain workflow must pass an unqualified head to gh pr list --head`)
-	}
-	if strings.Contains(text, "go-version:") || strings.Contains(text, "--approve") || strings.Contains(text, "pr review") {
-		t.Error("toolchain workflow must follow go.mod and must not approve pull requests")
 	}
 }
 

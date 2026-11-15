@@ -12,8 +12,8 @@ updates:
       - dependencies
       - go
     groups:
-      # Module requirements only. go-toolchain-patch.yml bumps the go directive;
-      # gomod updates do not move it for standard-library fixes.
+      # Module requirements only. The go directive stays at the minor and CI
+      # always builds with the newest patch (setup-go 1.27.x), so no PR is needed.
       go-security:
         applies-to: security-updates
         patterns:
@@ -24,6 +24,8 @@ updates:
         update-types:
           - minor
           - patch
+    cooldown:
+      default-days: 3
 
   - package-ecosystem: github-actions
     directory: /
@@ -36,9 +38,9 @@ updates:
     labels:
       - dependencies
     groups:
-      actions-minor-patch:
+      # One weekly PR for every action bump, majors included.
+      actions:
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
+    cooldown:
+      default-days: 3

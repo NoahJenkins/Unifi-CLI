@@ -74,6 +74,7 @@ jobs:
       contents: read
     outputs:
       bundle_digest: ${{ steps.seal.outputs.digest }}
+      go_toolchain: ${{ steps.seal.outputs.go_toolchain }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -86,7 +87,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -123,6 +125,11 @@ jobs:
           DIGEST="$(shasum -a 256 "$RUNNER_TEMP/trusted-release.tar" | awk '{print $1}')"
           [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          # setup-go resolves 1.27.x to the newest patch. The publisher rebuilds
+          # without setup-go and must use this exact toolchain to match bytes.
+          GO_TOOLCHAIN="$(go env GOVERSION)"
+          [[ "$GO_TOOLCHAIN" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "go_toolchain=$GO_TOOLCHAIN" >> "$GITHUB_OUTPUT"
 
       - name: Transfer sealed trusted inputs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -159,7 +166,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -226,6 +234,7 @@ jobs:
       contents: read
     outputs:
       bundle_digest: ${{ steps.seal.outputs.digest }}
+      go_toolchain: ${{ needs.trusted_inputs.outputs.go_toolchain }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -238,7 +247,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -339,7 +349,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -425,7 +436,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -546,6 +558,7 @@ jobs:
       contents: read
     outputs:
       bundle_digest: ${{ steps.seal.outputs.digest }}
+      go_toolchain: ${{ needs.verify.outputs.go_toolchain }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -558,7 +571,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -616,9 +630,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_BUNDLE_DIGEST: ${{ needs.prepare_publication.outputs.bundle_digest }}
+          GO_TOOLCHAIN: ${{ needs.prepare_publication.outputs.go_toolchain }}
           WORKFLOW_COMMIT: ${{ github.sha }}
         run: |
           [[ "$EXPECTED_BUNDLE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GO_TOOLCHAIN" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          # Rebuild with the exact toolchain that built the trusted binaries;
+          # go.mod only names the 1.27.0 floor.
+          export GOTOOLCHAIN="$GO_TOOLCHAIN"
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$WORKFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]]

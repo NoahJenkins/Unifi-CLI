@@ -30,7 +30,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -64,18 +65,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        timeout-minutes: 3
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: download Go modules
-        timeout-minutes: 5
-        run: go mod download
-
+      # The action installs the current govulncheck and the newest Go 1.27 patch,
+      # so neither needs a version bump here.
       - name: scan reachable Go vulnerabilities
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          repo-checkout: false
+          go-version-input: 1.27.x
+          check-latest: true
+          cache-dependency-path: go.sum
 
   fuzz:
     name: fuzz (${{ matrix.target }})
@@ -105,7 +103,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -131,7 +130,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 3
         with:
-          go-version-file: go.mod
+          go-version: 1.27.x
+          check-latest: true
           cache-dependency-path: go.sum
 
       - name: download Go modules
@@ -157,3 +157,28 @@ jobs:
           chmod 700 "$HOME/.local" "$HOME/.local/share/keyrings"
           printf '%s\n' 'unifi-cli-ci' | gnome-keyring-daemon --unlock
           UNIFI_NATIVE_KEYRING_IT=1 go test ./internal/authstore -run TestNativeKeyringRoundTrip -count=1
+
+  # Single status for branch protection. Fuzzing is advisory on pull requests
+  # (a crasher found by chance must not block unrelated changes) and gating on
+  # push to main.
+  ci:
+    name: ci
+    if: always()
+    needs: [test, vulnerability-scan, fuzz, native-keyring]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: require green jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          bad="$(jq -r --arg event "$EVENT" '
+            to_entries[]
+            | select(.value.result != "success")
+            | select(.key != "fuzz" or $event != "pull_request")
+            | "\(.key)=\(.value.result)"' <<<"$NEEDS")"
+          if [[ -n "$bad" ]]; then
+            echo "Not green: $bad" >&2
+            exit 1
+          fi

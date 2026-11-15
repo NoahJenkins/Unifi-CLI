@@ -1,19 +1,15 @@
 name: Dependabot auto-merge
 
-# Squash auto-merge for Dependabot patch and minor updates, and for every
-# GitHub Actions update. A semver-major update auto-merges only when
-# fetch-metadata reports an associated Dependabot alert (alert-state OPEN or
-# FIXED, or a ghsa-id that is not DISMISSED). Release notes and the pull
-# request body are not consulted. alert-lookup stays false unless the
-# Dependabot secret DEPENDABOT_METADATA_TOKEN is set to a personal access
-# token or GitHub App installation token that can read Dependabot alerts.
-# Store that secret under Settings → Secrets and variables → Dependabot.
-# Dependabot-triggered pull_request workflows cannot read Actions secrets.
-# Without it, security majors stay for review. This workflow does not approve
-# pull requests.
+# Squash auto-merge for Dependabot patch and minor updates and for GitHub
+# Actions updates. Majors get the needs-review label and wait for a human.
+# Runs on pull_request_target so Dependabot PRs get a write-capable token
+# without any secret; the job never checks out or runs pull request code. The
+# merge itself is made by GitHub once the required checks pass. Merges made
+# with GITHUB_TOKEN do not start push workflows; nothing here depends on one.
+# This workflow does not approve pull requests.
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, reopened, synchronize, ready_for_review]
 
@@ -35,8 +31,8 @@ jobs:
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
-          github-token: ${{ secrets.DEPENDABOT_METADATA_TOKEN != '' && secrets.DEPENDABOT_METADATA_TOKEN || secrets.GITHUB_TOKEN }}
-          alert-lookup: ${{ secrets.DEPENDABOT_METADATA_TOKEN != '' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          alert-lookup: false
 
       - name: Enable auto-merge for safe dependency updates
         env:
@@ -46,25 +42,13 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
           ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
-          ALERT_STATE: ${{ steps.metadata.outputs.alert-state }}
-          GHSA_ID: ${{ steps.metadata.outputs.ghsa-id }}
         run: |
           set -euo pipefail
-
-          security=false
-          case "$ALERT_STATE" in
-            OPEN|FIXED) security=true ;;
-          esac
-          if [[ -n "$GHSA_ID" && "$ALERT_STATE" != "DISMISSED" ]]; then
-            security=true
-          fi
 
           eligible=false
           if [[ "$ECOSYSTEM" == "github_actions" || "$ECOSYSTEM" == "github-actions" ]]; then
             eligible=true
           elif [[ "$UPDATE_TYPE" == "version-update:semver-patch" || "$UPDATE_TYPE" == "version-update:semver-minor" ]]; then
-            eligible=true
-          elif [[ "$security" == true ]]; then
             eligible=true
           fi
 

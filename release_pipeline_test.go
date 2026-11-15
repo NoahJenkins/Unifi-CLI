@@ -432,6 +432,21 @@ func TestReleaseWorkflowUsesApprovedPinsAndLeastPermissions(t *testing.T) {
 	if fmt.Sprint(env["WORKFLOW_COMMIT"]) != "${{ github.sha }}" {
 		t.Errorf("publisher workflow commit = %q", env["WORKFLOW_COMMIT"])
 	}
+	// The publisher has no setup-go. go.mod names only the minor floor, so it
+	// must pin the exact toolchain that built the trusted binaries or its
+	// byte-for-byte rebuild cannot match.
+	for job, want := range map[string]string{
+		"trusted_inputs":      "${{ steps.seal.outputs.go_toolchain }}",
+		"verify":              "${{ needs.trusted_inputs.outputs.go_toolchain }}",
+		"prepare_publication": "${{ needs.verify.outputs.go_toolchain }}",
+	} {
+		if got := fmt.Sprint(mapValue(t, mapValue(t, jobs, job), "outputs")["go_toolchain"]); got != want {
+			t.Errorf("%s go_toolchain output = %q, want %q", job, got, want)
+		}
+	}
+	if fmt.Sprint(env["GO_TOOLCHAIN"]) != "${{ needs.prepare_publication.outputs.go_toolchain }}" || !strings.Contains(run, `export GOTOOLCHAIN="$GO_TOOLCHAIN"`) {
+		t.Error("publisher must rebuild with the exact Go toolchain that built the trusted binaries")
+	}
 	if strings.Contains(run, "needs.prepare_publication.outputs.bundle_digest") {
 		t.Error("publisher interpolates a preceding-job digest directly into shell source")
 	}
