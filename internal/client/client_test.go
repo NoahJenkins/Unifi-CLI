@@ -914,3 +914,53 @@ func TestIntegrationSitePathResolvesConfiguredInternalReference(t *testing.T) {
 		t.Fatalf("IntegrationSitePath = %q, want %q", got, want)
 	}
 }
+
+func TestDoMapsLegacyMetaErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		out    any
+		want   string
+	}{
+		{"400 keeps controller reason", http.StatusBadRequest, `{"meta":{"rc":"error","msg":"api.err.InvalidPayload"},"data":[]}`, nil,
+			"validation_failed: controller returned HTTP status 400: api.err.InvalidPayload"},
+		{"400 drops unsafe reason", http.StatusBadRequest, `{"meta":{"rc":"error","msg":"bad payload for 192.0.2.1"}}`, nil,
+			"validation_failed: controller returned HTTP status 400: validation failed"},
+		{"200 with rc error and no decode target", http.StatusOK, `{"meta":{"rc":"error","msg":"api.err.UnknownDevice"},"data":[]}`, nil,
+			"validation_failed: controller returned HTTP status 200: api.err.UnknownDevice"},
+		{"200 with rc error and decode target", http.StatusOK, `{"meta":{"rc":"error","msg":"api.err.UnknownDevice"},"data":[]}`, new([]map[string]any),
+			"validation_failed: controller returned HTTP status 200: api.err.UnknownDevice"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer srv.Close()
+			c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+			if err != nil {
+				t.Fatalf("NewWithAPIKey: %v", err)
+			}
+			err = c.Do(context.Background(), http.MethodPost, "/legacy", nil, tt.out)
+			if !apperr.Is(err, apperr.ValidationFailed) || err.Error() != tt.want {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDoAcceptsLegacyOKEnvelope(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"meta":{"rc":"ok"},"data":[]}`)
+	}))
+	defer srv.Close()
+	c, err := client.NewWithAPIKey(testConfig(t, srv), "key", "interactive_api_key")
+	if err != nil {
+		t.Fatalf("NewWithAPIKey: %v", err)
+	}
+	if err := c.Do(context.Background(), http.MethodPost, "/legacy", nil, nil); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+}

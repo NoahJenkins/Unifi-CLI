@@ -305,6 +305,13 @@ func (c *Client) doJSONWithDecoder(
 	if err := mapStatus(resp.StatusCode, respBody, officialErrors); err != nil {
 		return 0, err
 	}
+	if !officialErrors {
+		// Some legacy controllers answer 200 with meta.rc "error". Commands that
+		// decode nothing would otherwise report success.
+		if err := legacyMetaError(resp.StatusCode, respBody); err != nil {
+			return 0, err
+		}
+	}
 	if out == nil || len(respBody) == 0 {
 		return len(respBody), nil
 	}
@@ -320,6 +327,8 @@ func mapStatus(code int, body []byte, officialErrors bool) error {
 		return nil
 	case code == http.StatusBadRequest && officialErrors:
 		return mapBadRequest(body)
+	case code == http.StatusBadRequest && legacyMetaRejected(body):
+		return legacyValidationError(code, body)
 	case code == http.StatusUnauthorized:
 		return apperr.Newf(apperr.AuthFailed, "controller returned HTTP status %d: authentication failed", code)
 	case code == http.StatusForbidden:
@@ -354,6 +363,43 @@ func mapBadRequest(body []byte) error {
 		message = code
 	}
 	return apperr.Newf(apperr.ValidationFailed, "controller returned HTTP status %d: %s", http.StatusBadRequest, message)
+}
+
+type legacyEnvelope struct {
+	Meta *struct {
+		RC  string `json:"rc"`
+		Msg string `json:"msg"`
+	} `json:"meta"`
+}
+
+// legacyMetaRejected reports whether body is a legacy envelope with meta.rc
+// "error". A 400 without that envelope stays opaque.
+func legacyMetaRejected(body []byte) bool {
+	var envelope legacyEnvelope
+	return json.Unmarshal(body, &envelope) == nil && envelope.Meta != nil && envelope.Meta.RC == "error"
+}
+
+// legacyMetaError returns a validation error when a successful legacy response
+// carries meta.rc "error", and nil otherwise.
+func legacyMetaError(code int, body []byte) error {
+	if code < 200 || code >= 300 {
+		return nil
+	}
+	if !legacyMetaRejected(body) {
+		return nil
+	}
+	return legacyValidationError(code, body)
+}
+
+func legacyValidationError(code int, body []byte) error {
+	message := "validation failed"
+	var envelope legacyEnvelope
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Meta != nil {
+		if sanitized, ok := sanitizeControllerErrorCode(envelope.Meta.Msg); ok {
+			message = sanitized
+		}
+	}
+	return apperr.Newf(apperr.ValidationFailed, "controller returned HTTP status %d: %s", code, message)
 }
 
 func sanitizeControllerErrorCode(value string) (string, bool) {
